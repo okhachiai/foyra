@@ -21,11 +21,10 @@ import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/li
 import { parseCents } from "@/lib/money";
 import { itemSignature } from "./budget/signature";
 import type { FormState } from "./form";
+import { itemFlags, ownerField, sharedField, str } from "./form-fields";
 
 const ACCOUNT_KINDS: AccountKind[] = ["CHECKING", "SAVINGS", "CASH", "OTHER"];
 const AMOUNT_ERROR = "Montant invalide : nombre supérieur à 0, 2 décimales au plus (ex. 12,50).";
-
-const str = (fd: FormData, name: string) => String(fd.get(name) ?? "").trim();
 
 /** Erreurs de validation accumulées champ par champ. */
 class Errors {
@@ -214,10 +213,8 @@ export async function changePasswordAction(_: FormState, fd: FormData): Promise<
 function accountFields(fd: FormData, errors: Errors) {
   const kind = str(fd, "kind") as AccountKind;
   if (!ACCOUNT_KINDS.includes(kind)) errors.add("kind", "Type de compte invalide.");
-  // Propriétaire : champ absent ou non modifié (`ownerWas`) = inchangé (création : le créateur) ; vide = compte commun.
-  const changed = fd.has("ownerId") && !(fd.has("ownerWas") && str(fd, "ownerId") === str(fd, "ownerWas"));
-  const ownerId = changed ? str(fd, "ownerId") || null : undefined;
-  return { kind, name: requiredField(fd, "name", errors), notes: str(fd, "notes").slice(0, 1000), ownerId };
+  // Propriétaire inchangé : à la création, le créateur.
+  return { kind, name: requiredField(fd, "name", errors), notes: str(fd, "notes").slice(0, 1000), ownerId: ownerField(fd) };
 }
 
 function sharingField(fd: FormData) {
@@ -303,8 +300,7 @@ function entryFields(fd: FormData, errors: Errors): EntryInput {
   return {
     accountId: str(fd, "accountId"), kind: kind as EntryInput["kind"], amount: amountField(fd, errors), occurredOn: dayField(fd, errors),
     note: noteField(fd), categoryId: str(fd, "categoryId") || null,
-    // Case « Dépense commune » non affichée (compte commun) : valeur laissée au serveur.
-    shared: fd.has("sharedField") ? fd.has("shared") : undefined,
+    shared: sharedField(fd), // case non affichée (compte commun) : valeur laissée au serveur
   };
 }
 
@@ -451,11 +447,8 @@ function itemFields(fd: FormData, prefix: string, errors: Errors): ItemFields {
   if (!label) errors.add(`${prefix}label`, "Libellé obligatoire.");
   const amount = parseForecast(str(fd, `${prefix}amount`));
   if (amount === undefined) errors.add(`${prefix}amount`, BUDGET_AMOUNT);
-  // Cases « Commune » / « Réserve » : `flags` signale qu'elles étaient affichées (absentes = inchangées).
-  const flags = fd.has(`${prefix}flags`);
   return {
-    label, amount: amount ?? 0, included: fd.get(`${prefix}included`) === "on", recurring: fd.get(`${prefix}recurring`) === "on",
-    shared: flags ? fd.get(`${prefix}shared`) === "on" : undefined, reserve: flags ? fd.get(`${prefix}reserve`) === "on" : undefined,
+    label, amount: amount ?? 0, included: fd.get(`${prefix}included`) === "on", recurring: fd.get(`${prefix}recurring`) === "on", ...itemFlags(fd, prefix),
   };
 }
 
@@ -519,7 +512,7 @@ function chargeFields(fd: FormData, errors: Errors): ChargeInput {
   return {
     kind: kind as CategoryKind, active: fd.get("active") === "on",
     name: requiredField(fd, "name", errors), amount: amountField(fd, errors), dueDay, accountId, categoryId,
-    startMonth: startMonth ?? new Date(0), endMonth, shared: fd.has("sharedField") ? fd.has("shared") : true,
+    startMonth: startMonth ?? new Date(0), endMonth, shared: sharedField(fd) ?? true,
   };
 }
 
