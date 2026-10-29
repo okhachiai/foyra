@@ -14,6 +14,7 @@ import {
   parseDay, updateEntry, updateTransfer, type EntryInput, type TransferInput,
 } from "@/lib/ledger";
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, updateCategory, type CategoryFields } from "@/lib/categories";
+import { formatMonth, parseMonth, savePlanned } from "@/lib/budget";
 import { parseCents } from "@/lib/money";
 import type { FormState } from "./form";
 
@@ -281,4 +282,27 @@ export async function addDefaultCategoriesAction(): Promise<FormState> {
   const user = await requireUser();
   await addDefaultCategories(user.householdId);
   done("/categories");
+}
+
+// --- Budget ---
+
+/** Montants prévus du mois : un champ `planned:<categoryId>` par catégorie (vide = à saisir). */
+export async function saveBudgetAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const month = parseMonth(str(fd, "month"));
+  if (!month) return { error: "Mois invalide." };
+  const errors = new Errors();
+  const planned = new Map<string, number | null>();
+  for (const [key, value] of fd) {
+    if (!key.startsWith("planned:")) continue;
+    const raw = String(value).trim();
+    // Champ inchangé depuis l'affichage : ne pas écraser la modification d'un autre membre.
+    if (raw === str(fd, `orig:${key.slice("planned:".length)}`)) continue;
+    const cents = parseForecast(raw);
+    if (cents === undefined) errors.add(key, "Montant invalide : 0 ou plus (ex. 150 ou 12,50).");
+    else planned.set(key.slice("planned:".length), cents);
+  }
+  if (errors.state) return errors.state;
+  await savePlanned(user.householdId, month, planned);
+  done(`/budget?m=${formatMonth(month)}`);
 }

@@ -93,3 +93,10 @@ button:disabled, fieldset:disabled button { opacity: 0.6; cursor: progress; }
 small.error { margin: 0; }
 /* Erreur déjà affichée sous son champ : ne pas la répéter en tête du formulaire. */
 form:has(small.error) > p.error { display: none; }
+
+/* Budget */
+.pager h1 { margin: 0; font-size: 1.25rem; text-align: center; }
+.list li > div.budget-line { flex-direction: column; align-items: stretch; gap: 0.25rem; }
+.totals { display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 1rem; margin: 0.75rem 0 0; }
+.totals dt { color: var(--muted); }
+.totals dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }

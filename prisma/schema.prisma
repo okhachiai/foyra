@@ -56,6 +56,7 @@ model Household {
   accounts     Account[]
   transactions Transaction[]
   categories   Category[]
+  budgetLines  BudgetLine[]
 }
 
 model User {
@@ -143,7 +144,24 @@ model Category {
   parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
   children     Category[]    @relation("CategoryTree")
   transactions Transaction[]
+  budgetLines  BudgetLine[]
 
   @@index([householdId])
   @@index([parentId])
+}
+
+// Montant prévu d'une catégorie pour un mois : créé à la première ouverture du mois (reconduction), jamais réécrit ensuite.
+model BudgetLine {
+  id          String   @id @default(cuid())
+  householdId String
+  categoryId  String
+  month       DateTime @db.Date // 1er du mois (CHECK SQL)
+  planned     Int? // centimes, >= 0 (CHECK SQL) ; null = à saisir
+  createdAt   DateTime @default(now())
+
+  household Household @relation(fields: [householdId], references: [id])
+  category  Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, month])
+  @@index([householdId, month])
 }
