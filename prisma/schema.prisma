@@ -101,6 +101,7 @@ model User {
   sessions      Session[]
   transactions  Transaction[]
   accountAccess AccountAccess[]
+  ownedAccounts Account[]       @relation("AccountOwner")
 }
 
 model Session {
@@ -124,14 +125,17 @@ model Account {
   notes          String         @default("")
   sharing        AccountSharing @default(SELECTED)
   archivedAt     DateTime?
+  ownerId        String? // null = compte commun (joint) ; distinct des droits
   createdAt      DateTime       @default(now())
 
   household    Household       @relation(fields: [householdId], references: [id])
+  owner        User?           @relation("AccountOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   transactions Transaction[]
   fixedCharges FixedCharge[]
   access       AccountAccess[]
 
   @@index([householdId])
+  @@index([ownerId])
 }
 
 model AccountAccess {
@@ -160,6 +164,7 @@ model Transaction {
   categoryId     String?
   // Clé envoyée par le formulaire : une seconde soumission identique ne crée rien (côté OUT pour un virement).
   idempotencyKey String?
+  shared         Boolean         @default(true) // dépense commune ; forcé true sur un compte commun
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -237,6 +242,8 @@ model BudgetItem {
   included    Boolean      @default(true)
   recurring   Boolean      @default(true)
   sortOrder   Int          @default(0)
+  shared      Boolean      @default(true) // ligne commune (partagée au prorata)
+  reserve     Boolean      @default(false) // ligne « Réserve imprévus » ; une seule par budget (index SQL partiel)
   createdAt   DateTime     @default(now())
 
   household Household    @relation(fields: [householdId], references: [id])
@@ -265,6 +272,7 @@ model FixedCharge {
   categoryId  String
   startMonth  DateTime     @db.Date // 1er du mois (CHECK SQL)
   endMonth    DateTime?    @db.Date // 1er du mois, >= startMonth (CHECK SQL)
+  shared      Boolean      @default(true) // charge commune (partagée au prorata) ; forcé true sur un compte commun
   createdAt   DateTime     @default(now())
 
   household Household            @relation(fields: [householdId], references: [id])
