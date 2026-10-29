@@ -11,7 +11,7 @@ import {
   recordLoginFailure, requireAdmin, requireUser, setDisabled, setRole, setupHousehold, startSession, updateDisplayName, updateHousehold,
 } from "@/lib/auth";
 import {
-  archiveAccount, createAccount, createEntry, deleteAccount, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
+  adjustBalance, archiveAccount, createAccount, createEntry, deleteAccount, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
   parseDay, todayIn, unarchiveAccount, updateAccount, updateEntry, updateTransfer, type EntryInput, type TransferInput,
 } from "@/lib/ledger";
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, setCategoryArchived, updateCategory, type CategoryFields } from "@/lib/categories";
@@ -214,7 +214,10 @@ export async function changePasswordAction(_: FormState, fd: FormData): Promise<
 function accountFields(fd: FormData, errors: Errors) {
   const kind = str(fd, "kind") as AccountKind;
   if (!ACCOUNT_KINDS.includes(kind)) errors.add("kind", "Type de compte invalide.");
-  return { kind, name: requiredField(fd, "name", errors), notes: str(fd, "notes").slice(0, 1000) };
+  // Propriétaire : champ absent ou non modifié (`ownerWas`) = inchangé (création : le créateur) ; vide = compte commun.
+  const changed = fd.has("ownerId") && !(fd.has("ownerWas") && str(fd, "ownerId") === str(fd, "ownerWas"));
+  const ownerId = changed ? str(fd, "ownerId") || null : undefined;
+  return { kind, name: requiredField(fd, "name", errors), notes: str(fd, "notes").slice(0, 1000), ownerId };
 }
 
 function sharingField(fd: FormData) {
@@ -229,8 +232,10 @@ export async function createAccountAction(_: FormState, fd: FormData): Promise<F
   const initialBalance = raw === "" ? 0 : parseCents(raw, { allowSigned: true });
   if (initialBalance === null) errors.add("initialBalance", "Montant invalide (ex. 1 234,56 ou -20), 2 décimales au plus.");
   if (errors.state) return errors.state;
-  const account = await createAccount(scope, user.id, { ...data, initialBalance: initialBalance!, sharing: sharingField(fd) });
-  done(`/accounts/${account.id}`);
+  let id = "";
+  const error = await run(async () => (id = (await createAccount(scope, user.id, { ...data, initialBalance: initialBalance!, sharing: sharingField(fd) })).id));
+  if (error) return error;
+  done(`/accounts/${id}`);
 }
 
 const ACCESS_LEVELS: AccessLevel[] = ["READ", "WRITE", "MANAGE"];
@@ -263,6 +268,17 @@ export async function updateAccountAction(_: FormState, fd: FormData): Promise<F
   done(`/accounts/${id}`);
 }
 
+/** Ajuste le solde au montant saisi (opération d'écart datée du jour) ; rien si déjà égal. */
+export async function adjustBalanceAction(_: FormState, fd: FormData): Promise<FormState> {
+  const { user, scope } = await requireScope();
+  const id = str(fd, "id");
+  const target = parseCents(str(fd, "target"), { allowSigned: true });
+  if (target === null) return { fields: { target: "Montant invalide (ex. 1 234,56 ou -20), 2 décimales au plus." } };
+  const error = await run(() => adjustBalance(scope, user.id, id, target, parseDay(todayIn(user.household.timezone))!));
+  if (error) return error;
+  done(`/accounts/${id}`);
+}
+
 export async function archiveAccountAction(_: FormState, fd: FormData): Promise<FormState> {
   const { scope } = await requireScope();
   const id = str(fd, "id");
@@ -287,6 +303,8 @@ function entryFields(fd: FormData, errors: Errors): EntryInput {
   return {
     accountId: str(fd, "accountId"), kind: kind as EntryInput["kind"], amount: amountField(fd, errors), occurredOn: dayField(fd, errors),
     note: noteField(fd), categoryId: str(fd, "categoryId") || null,
+    // Case « Dépense commune » non affichée (compte commun) : valeur laissée au serveur.
+    shared: fd.has("sharedField") ? fd.has("shared") : undefined,
   };
 }
 
@@ -496,7 +514,7 @@ function chargeFields(fd: FormData, errors: Errors): ChargeInput {
   return {
     kind: kind as CategoryKind, active: fd.get("active") === "on",
     name: requiredField(fd, "name", errors), amount: amountField(fd, errors), dueDay, accountId, categoryId,
-    startMonth: startMonth ?? new Date(0), endMonth, shared: true,
+    startMonth: startMonth ?? new Date(0), endMonth, shared: fd.has("sharedField") ? fd.has("shared") : true,
   };
 }
 

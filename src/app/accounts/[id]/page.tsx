@@ -2,20 +2,22 @@ import Link from "next/link";
 import { canManage, canWrite, getScope, readable } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { accountBalance, formatDay } from "@/lib/ledger";
-import { formatCents } from "@/lib/money";
-import { archiveAccountAction, deleteAccountAction } from "../../actions";
-import { ActionForm } from "../../form";
+import { accountBalance, formatDay, todayIn, writableAccounts } from "@/lib/ledger";
+import { centsToInput, formatCents } from "@/lib/money";
+import { adjustBalanceAction, archiveAccountAction, deleteAccountAction } from "../../actions";
+import { ActionForm, Field } from "../../form";
 import { KIND_LABELS } from "../kinds";
 import { loadAccount } from "./load";
+import { TransferForm } from "./tx-forms";
 
 const PAGE_SIZE = 50;
 
-export default async function AccountPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ page?: string }> }) {
+export default async function AccountPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ page?: string; virement?: string; montant?: string }> }) {
   const user = await requireUser();
   const scope = await getScope(user);
   const account = await loadAccount(scope, (await params).id, "READ");
-  const page = Math.max(1, Number.parseInt((await searchParams).page ?? "1", 10) || 1);
+  const query = await searchParams;
+  const page = Math.max(1, Number.parseInt(query.page ?? "1", 10) || 1);
   const currency = user.household.currency;
   const where = { householdId: user.householdId, accountId: account.id };
 
@@ -45,6 +47,11 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
   const active = !account.archivedAt && canWrite(scope, account.id);
   const manager = canManage(scope, account.id);
   const access = manager ? "Gestion" : canWrite(scope, account.id) ? "Écriture" : "Lecture";
+  const today = todayIn(user.household.timezone);
+  // `?virement=<compte>&montant=<centimes>` : virement pré-rempli depuis ce compte (ex. « Reste à virer »).
+  const accounts = active && query.virement ? await writableAccounts(scope) : [];
+  const transferTo = accounts.some((a) => a.id === query.virement && a.id !== account.id) ? query.virement : undefined;
+  const transferAmount = Number.parseInt(query.montant ?? "", 10);
 
   return (
     <>
@@ -58,6 +65,16 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
         <span className="muted">Solde</span>
         <strong className={balance < 0 ? "neg" : undefined}>{formatCents(balance, currency)}</strong>
       </section>
+
+      {transferTo && (
+        <details open>
+          <summary>Virement</summary>
+          <TransferForm
+            accounts={accounts} from={account.id} to={transferTo} returnTo={account.id}
+            v={{ occurredOn: today, amount: transferAmount > 0 ? transferAmount : undefined }}
+          />
+        </details>
+      )}
 
       <div className="actions">
         {active && (
@@ -88,6 +105,19 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
           </ActionForm>
         )}
       </div>
+
+      {active && (
+        <details>
+          <summary>Ajuster le solde</summary>
+          <ActionForm action={adjustBalanceAction}>
+            <input type="hidden" name="id" value={account.id} />
+            <Field name="target" label="Nouveau solde (une opération d’écart est créée à la date du jour)">
+              <input name="target" inputMode="decimal" required autoComplete="off" defaultValue={centsToInput(balance)} />
+            </Field>
+            <button type="submit">Ajuster</button>
+          </ActionForm>
+        </details>
+      )}
 
       <h2>Historique</h2>
       {rows.length === 0 && <p className="muted">Aucune opération.</p>}

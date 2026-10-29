@@ -3,8 +3,13 @@ import { createAccountAction, updateAccountAction } from "../actions";
 import { ActionForm, Field } from "../form";
 import { KIND_LABELS } from "./kinds";
 
-/** Création (solde initial + partage) ou modification (nom, type, notes) d'un compte. */
-export function AccountForm({ account }: { account?: Account }) {
+/**
+ * Création (solde initial + partage) ou modification (nom, type, notes) d'un compte.
+ * Propriétaire (si `canSetOwner`) : « Commun » ou un membre de `members` ; à la création, `userId` par défaut.
+ */
+export function AccountForm({ account, members, canSetOwner, userId }: {
+  account?: Account; members: { id: string; name: string }[]; canSetOwner: boolean; userId: string;
+}) {
   return (
     <ActionForm action={account ? updateAccountAction : createAccountAction}>
       {account && <input type="hidden" name="id" value={account.id} />}
@@ -14,6 +19,15 @@ export function AccountForm({ account }: { account?: Account }) {
           {Object.entries(KIND_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
         </select>
       </Field>
+      {canSetOwner && (
+        <Field name="ownerId" label="Propriétaire">
+          {account && <input type="hidden" name="ownerWas" value={account.ownerId ?? ""} />}
+          <select name="ownerId" defaultValue={account ? (account.ownerId ?? "") : userId}>
+            <option value="">Commun (joint)</option>
+            {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </Field>
+      )}
       {!account && (
         <>
           <Field name="initialBalance" label="Solde initial (peut être négatif, fixé à la création)">

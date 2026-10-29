@@ -3,6 +3,7 @@ import { formatMonth } from "@/lib/budget";
 import type { listCategories } from "@/lib/categories";
 import { centsToInput } from "@/lib/money";
 import { createChargeAction, updateChargeAction } from "../actions";
+import { SharedCheck } from "../accounts/[id]/tx-forms";
 import { ActionForm, Field } from "../form";
 
 /** Création ou modification d'une récurrence (échéance indicative) ; `accounts` = comptes proposés, `categories` = arbre du foyer. */
@@ -27,7 +28,7 @@ export function ChargeForm({ charge, accounts, categories, startMonth }: {
       </Field>
       <Field name="accountId" label="Compte">
         <select name="accountId" defaultValue={charge?.accountId}>
-          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.archivedAt ? " (archivé)" : ""}</option>)}
+          {accounts.map((a) => <option key={a.id} value={a.id} data-common={a.ownerId === null || undefined}>{a.name}{a.archivedAt ? " (archivé)" : ""}</option>)}
         </select>
       </Field>
       <Field name="categoryId" label="Catégorie">
@@ -48,6 +49,7 @@ export function ChargeForm({ charge, accounts, categories, startMonth }: {
       <Field name="endMonth" label="Dernier mois (facultatif)">
         <input name="endMonth" type="month" defaultValue={charge?.endMonth ? formatMonth(charge.endMonth) : ""} />
       </Field>
+      <SharedCheck label="Charge commune" checked={charge?.shared ?? true} />
       <label className="check"><input type="checkbox" name="active" defaultChecked={charge?.active ?? true} />Active</label>
       <p className="muted m-0 text-sm">Échéance indicative : aucun paiement n’est créé automatiquement et aucun solde n’est modifié.</p>
       <button type="submit">{charge ? "Enregistrer" : "Créer la récurrence"}</button>

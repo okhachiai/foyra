@@ -16,7 +16,7 @@ export default async function EditTransactionPage({ params }: { params: Promise<
   const account = await loadAccount(scope, id, "WRITE");
   const t = await prisma.transaction.findFirst({ where: { id: tid, householdId: user.householdId, accountId: account.id } });
   if (!t || account.archivedAt) notFound();
-  const v = { id: t.id, amount: t.amount, occurredOn: formatDay(t.occurredOn), note: t.note, categoryId: t.categoryId };
+  const v = { id: t.id, amount: t.amount, occurredOn: formatDay(t.occurredOn), note: t.note, categoryId: t.categoryId, shared: t.shared };
 
   let form;
   if (t.transferId) {
@@ -34,7 +34,7 @@ export default async function EditTransactionPage({ params }: { params: Promise<
     }
     form = <TransferForm accounts={accounts} from={transfer.out.accountId} to={transfer.in.accountId} returnTo={account.id} v={v} />;
   } else {
-    form = <EntryForm accountId={account.id} kind={t.kind as "INCOME" | "EXPENSE"} categories={await listCategories(user.householdId)} v={v} />;
+    form = <EntryForm accountId={account.id} personal={account.ownerId !== null} kind={t.kind as "INCOME" | "EXPENSE"} categories={await listCategories(user.householdId)} v={v} />;
   }
 
   return (

@@ -13,7 +13,7 @@ export default async function NewEntryPage({ params }: { params: Promise<{ id: s
   return (
     <>
       <h1>Nouvelle opération · {account.name}</h1>
-      <EntryForm accountId={account.id} categories={await listCategories(user.householdId)} v={{ occurredOn: todayIn(user.household.timezone) }} />
+      <EntryForm accountId={account.id} personal={account.ownerId !== null} categories={await listCategories(user.householdId)} v={{ occurredOn: todayIn(user.household.timezone) }} />
     </>
   );
 }

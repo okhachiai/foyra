@@ -10,7 +10,7 @@ import { ActionForm, Field } from "../../form";
  */
 const IdempotencyKey = () => <input type="hidden" name="idempotencyKey" value={crypto.randomUUID()} />;
 
-type Values = { id?: string; amount?: number; occurredOn: string; note?: string | null; categoryId?: string | null };
+type Values = { id?: string; amount?: number; occurredOn: string; note?: string | null; categoryId?: string | null; shared?: boolean };
 export type CategoryTree = Awaited<ReturnType<typeof listCategories>>;
 
 function CommonFields({ v }: { v: Values }) {
@@ -22,6 +22,19 @@ function CommonFields({ v }: { v: Values }) {
       <Field name="occurredOn" label="Date"><input name="occurredOn" type="date" required defaultValue={v.occurredOn} /></Field>
       <Field name="note" label="Note / libellé (facultatif)"><input name="note" maxLength={500} defaultValue={v.note ?? ""} /></Field>
     </>
+  );
+}
+
+/**
+ * Case « commune » ; `sharedField` signale qu'elle était affichée (absente = choix laissé au serveur).
+ * Masquée en CSS quand le compte choisi est commun (`option[data-common]`, cf. globals.css) : le serveur la force alors.
+ */
+export function SharedCheck({ label, checked }: { label: string; checked: boolean }) {
+  return (
+    <label className="check shared-check">
+      <input type="hidden" name="sharedField" value="1" />
+      <input type="checkbox" name="shared" defaultChecked={checked} />{label}
+    </label>
   );
 }
 
@@ -45,9 +58,13 @@ function CategorySelect({ categories, value }: { categories: CategoryTree; value
   );
 }
 
-/** Avec `accounts` (tableau de bord) : choix du compte et retour au tableau de bord ; sinon compte fixe `accountId`. */
-export function EntryForm({ accountId, accounts, kind = "EXPENSE", categories, v }: {
-  accountId?: string; accounts?: { id: string; name: string }[]; kind?: "INCOME" | "EXPENSE"; categories: CategoryTree; v: Values;
+/**
+ * Avec `accounts` (tableau de bord) : choix du compte et retour au tableau de bord ; sinon compte fixe `accountId`
+ * (`personal` : il a un propriétaire, la case « Dépense commune » est proposée).
+ */
+export function EntryForm({ accountId, accounts, personal, kind = "EXPENSE", categories, v }: {
+  accountId?: string; accounts?: { id: string; name: string; ownerId: string | null }[]; personal?: boolean;
+  kind?: "INCOME" | "EXPENSE"; categories: CategoryTree; v: Values;
 }) {
   return (
     <ActionForm action={v.id ? updateTransactionAction : createEntryAction}>
@@ -55,7 +72,9 @@ export function EntryForm({ accountId, accounts, kind = "EXPENSE", categories, v
       {accounts ? (
         <>
           <Field name="accountId" label="Compte">
-            <select name="accountId">{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+            <select name="accountId">
+              {accounts.map((a) => <option key={a.id} value={a.id} data-common={a.ownerId === null || undefined}>{a.name}</option>)}
+            </select>
           </Field>
           <input type="hidden" name="back" value="dashboard" />
         </>
@@ -73,6 +92,7 @@ export function EntryForm({ accountId, accounts, kind = "EXPENSE", categories, v
       </Field>
       <CategorySelect categories={categories} value={v.categoryId} />
       <CommonFields v={v} />
+      {(accounts || personal) && <SharedCheck label="Dépense commune" checked={v.shared ?? false} />}
       <button type="submit">Enregistrer</button>
     </ActionForm>
   );
