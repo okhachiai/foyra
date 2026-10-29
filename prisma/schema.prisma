@@ -36,6 +36,12 @@ enum CategoryKind {
   EXPENSE
 }
 
+// Remboursement anticipé : réduire la durée (mensualité inchangée) ou la mensualité (fin inchangée).
+enum PrepaymentMode {
+  REDUCE_TERM
+  REDUCE_PAYMENT
+}
+
 // Règle de reconduction du prévisionnel d'un mois sur l'autre (appliquée par le cycle budget).
 enum CarryOver {
   PREVIOUS // reprendre le montant du mois précédent
@@ -59,6 +65,8 @@ model Household {
   budgetLines   BudgetLine[]
   fixedCharges  FixedCharge[]
   fixedPayments FixedChargePayment[]
+  loans         Loan[]
+  prepayments   LoanPrepayment[]
 }
 
 model User {
@@ -123,6 +131,7 @@ model Transaction {
   createdBy    User                @relation(fields: [createdById], references: [id])
   category     Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   fixedPayment FixedChargePayment?
+  prepayment   LoanPrepayment?
 
   @@unique([transferId, transferSide])
   @@index([accountId, occurredOn])
@@ -188,6 +197,7 @@ model FixedCharge {
   account   Account              @relation(fields: [accountId], references: [id])
   category  Category             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   payments  FixedChargePayment[]
+  loan      Loan?
 
   @@index([householdId])
 }
@@ -207,4 +217,39 @@ model FixedChargePayment {
 
   @@unique([fixedChargeId, month])
   @@index([householdId, month])
+}
+
+// Crédit amortissable : porté par une charge fixe (nom, compte, catégorie, jour, période) ; échéancier calculé, jamais stocké.
+model Loan {
+  id            String   @id @default(cuid())
+  householdId   String
+  fixedChargeId String   @unique
+  principal     Int // centimes, > 0 (CHECK SQL)
+  annualRate    Int // millièmes de pour cent : 3,450 % → 3450 ; 0–50 000 (CHECK SQL)
+  termMonths    Int // 1–600 échéances mensuelles (CHECK SQL)
+  payment       Int? // mensualité saisie (hors assurance), > 0 (CHECK SQL) ; null = annuité calculée
+  insurance     Int      @default(0) // assurance mensuelle, centimes, >= 0 (CHECK SQL)
+  createdAt     DateTime @default(now())
+
+  household   Household        @relation(fields: [householdId], references: [id])
+  fixedCharge FixedCharge      @relation(fields: [fixedChargeId], references: [id], onDelete: Cascade)
+  prepayments LoanPrepayment[]
+
+  @@index([householdId])
+}
+
+// Remboursement anticipé : montant et date lus sur la dépense liée ; supprimer la dépense l'annule.
+model LoanPrepayment {
+  id            String         @id @default(cuid())
+  householdId   String
+  loanId        String
+  transactionId String         @unique
+  mode          PrepaymentMode
+  createdAt     DateTime       @default(now())
+
+  household   Household   @relation(fields: [householdId], references: [id])
+  loan        Loan        @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([loanId])
 }

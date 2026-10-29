@@ -101,3 +101,11 @@ form:has(small.error) > p.error { display: none; }
 .totals dt { color: var(--muted); }
 .totals dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .budget-line details { margin-top: 0; }
+
+/* Crédits : le tableau défile dans son conteneur, jamais la page. */
+.table-scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem; }
+.table-scroll table { width: 100%; border-collapse: collapse; font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.table-scroll th, .table-scroll td { padding: 0.5rem 0.75rem; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+.table-scroll th { font-weight: 500; color: var(--muted); }
+.table-scroll th:first-child, .table-scroll td:first-child { text-align: left; }
+.table-scroll tr:last-child td { border-bottom: 0; }

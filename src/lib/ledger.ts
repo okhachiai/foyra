@@ -115,6 +115,13 @@ export async function updateEntry(householdId: string, id: string, input: EntryI
         throw new LedgerError("Cette dépense règle une charge fixe : la date doit rester dans le mois de l’échéance.", "occurredOn");
       }
     }
+    // Dépense d'un remboursement anticipé : montant et date contrôlés à la saisie, donc figés.
+    if (await tx.loanPrepayment.count({ where: { transactionId: id } })) {
+      if (input.kind !== "EXPENSE") throw new LedgerError("Cette dépense est un remboursement anticipé : elle doit rester une dépense.", "kind");
+      const redo = "Remboursement anticipé : pour changer son montant ou sa date, supprimez-le et saisissez-le à nouveau.";
+      if (input.amount !== current.amount) throw new LedgerError(redo, "amount");
+      if (input.occurredOn.getTime() !== current.occurredOn.getTime()) throw new LedgerError(redo, "occurredOn");
+    }
     await lockActiveAccounts(tx, householdId, [
       { id: current.accountId, field: "accountId" },
       { id: input.accountId, field: "accountId" },

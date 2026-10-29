@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { listCategories } from "@/lib/categories";
 import { getCharge } from "@/lib/charges";
@@ -15,6 +15,7 @@ export default async function EditChargePage({ params }: { params: Promise<{ id:
     if (e instanceof NotFoundError) notFound();
     throw e;
   });
+  if (charge.loan) redirect(`/credits/${charge.loan.id}`);
   const [accounts, categories] = await Promise.all([
     // Le compte actuel reste affiché même archivé : l'enregistrement demandera d'en choisir un autre.
     prisma.account.findMany({

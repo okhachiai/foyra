@@ -16,6 +16,7 @@ import {
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, updateCategory, type CategoryFields } from "@/lib/categories";
 import { formatMonth, parseMonth, savePlanned } from "@/lib/budget";
 import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
+import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/lib/loans";
 import { parseCents } from "@/lib/money";
 import type { FormState } from "./form";
 
@@ -367,4 +368,81 @@ export async function payChargeAction(_: FormState, fd: FormData): Promise<FormS
   const error = await run(() => payCharge(user.householdId, user.id, str(fd, "id"), month, amount, occurredOn));
   if (error) return error;
   done(`/charges?m=${formatMonth(month)}`);
+}
+
+// --- Crédits ---
+
+/** Champ montant facultatif : vide → `empty` ; `min0` accepte 0. */
+function optionalCents(fd: FormData, name: string, errors: Errors, empty: number | null, min0: boolean) {
+  const raw = str(fd, name);
+  if (!raw) return empty;
+  const cents = parseCents(raw, { allowSigned: min0 });
+  if (cents === null || cents < 0) errors.add(name, min0 ? "Montant invalide : 0 ou plus (ex. 15 ou 12,50)." : AMOUNT_ERROR);
+  return cents ?? 0;
+}
+
+function loanFields(fd: FormData, errors: Errors): LoanInput {
+  const principal = parseCents(str(fd, "principal"));
+  if (principal === null) errors.add("principal", AMOUNT_ERROR);
+  // « 3,45 » → 3450 (millièmes de pour cent)
+  const rate = /^(\d{1,2})(?:[.,](\d{1,3}))?$/.exec(str(fd, "annualRate"));
+  const annualRate = rate ? Number(rate[1]) * 1000 + Number((rate[2] ?? "").padEnd(3, "0")) : -1;
+  if (annualRate < 0 || annualRate > 50_000) errors.add("annualRate", "Taux invalide : entre 0 et 50 %, 3 décimales au plus (ex. 3,45).");
+  const termMonths = Number(str(fd, "termMonths"));
+  if (!Number.isInteger(termMonths) || termMonths < 1 || termMonths > 600) errors.add("termMonths", "Durée invalide : entre 1 et 600 mois.");
+  const firstDue = parseDay(str(fd, "firstDue"));
+  if (!firstDue) errors.add("firstDue", "Date invalide.");
+  const accountId = str(fd, "accountId");
+  if (!accountId) errors.add("accountId", "Champ obligatoire.");
+  const categoryId = str(fd, "categoryId");
+  if (!categoryId) errors.add("categoryId", "Champ obligatoire.");
+  return {
+    name: requiredField(fd, "name", errors), accountId, categoryId, firstDue: firstDue ?? new Date(0),
+    principal: principal ?? 0, annualRate, termMonths,
+    payment: optionalCents(fd, "payment", errors, null, false), insurance: optionalCents(fd, "insurance", errors, 0, true)!,
+  };
+}
+
+export async function createLoanAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const errors = new Errors();
+  const input = loanFields(fd, errors);
+  if (errors.state) return errors.state;
+  let id = "";
+  const error = await run(async () => (id = (await createLoan(user.householdId, input)).id));
+  if (error) return error;
+  done(`/credits/${id}`);
+}
+
+export async function updateLoanAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const id = str(fd, "id");
+  const errors = new Errors();
+  const input = loanFields(fd, errors);
+  if (errors.state) return errors.state;
+  const error = await run(() => updateLoan(user.householdId, id, input));
+  if (error) return error;
+  done(`/credits/${id}`);
+}
+
+export async function deleteLoanAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const error = await run(() => deleteLoan(user.householdId, str(fd, "id")));
+  if (error) return error;
+  done("/credits");
+}
+
+/** Remboursement anticipé : crée la dépense réelle (compte et catégorie du crédit). */
+export async function prepayLoanAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const id = str(fd, "id");
+  const errors = new Errors();
+  const amount = amountField(fd, errors);
+  const occurredOn = dayField(fd, errors);
+  const mode = str(fd, "mode");
+  if (mode !== "REDUCE_TERM" && mode !== "REDUCE_PAYMENT") errors.add("mode", "Choisissez un mode.");
+  if (errors.state) return errors.state;
+  const error = await run(() => prepay(user.householdId, user.id, id, amount, occurredOn, mode as "REDUCE_TERM"));
+  if (error) return error;
+  done(`/credits/${id}`);
 }
