@@ -25,8 +25,9 @@ const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
 const member = async () => getScope({ id: memberId, householdId: hh });
 const grant = (levels: Record<string, "READ" | "WRITE" | null>) => setAccess(hh, memberId, new Map(Object.entries(levels)));
+// Dépense commune (comptes personnels de l'admin) : comptée sur les lignes communes du budget.
 const spend = async (scope: Scope, accountId: string, amount: number, cat = "Supermarché") =>
-  createEntry(scope, adminId, { accountId, kind: "EXPENSE", amount, occurredOn: day("2026-11-09"), note: null, categoryId: await byName(cat) });
+  createEntry(scope, adminId, { accountId, kind: "EXPENSE", amount, occurredOn: day("2026-11-09"), note: null, categoryId: await byName(cat), shared: true });
 const charge = async (accountId: string) =>
   createCharge(admin, { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true });
 const loan = async (accountId: string) =>

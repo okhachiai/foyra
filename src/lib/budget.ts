@@ -15,6 +15,7 @@ export const addMonths = (month: Date, n: number) => new Date(Date.UTC(month.get
 export type Item = {
   id: string; parentId: string | null; categoryId: string | null; kind: CategoryKind;
   label: string; amount: number; included: boolean; recurring: boolean; sortOrder: number;
+  shared: boolean; reserve: boolean; // ligne commune (sinon personnelle) ; « Réserve imprévus »
   category?: { fixed: boolean } | null; // charge fixe ou variable : lue sur la catégorie d'une ligne principale
 };
 
@@ -57,7 +58,8 @@ export function budgetTotals(items: Item[]) {
 export type Seed = Omit<Item, "id" | "parentId" | "category"> & { children: Omit<Item, "id" | "parentId" | "category">[] };
 
 /** Valeurs recopiées d'une ligne : jamais son identifiant, son parent ni son budget. */
-const strip = ({ categoryId, kind, label, amount, included, recurring, sortOrder }: Item) => ({ categoryId, kind, label, amount, included, recurring, sortOrder });
+const strip = ({ categoryId, kind, label, amount, included, recurring, sortOrder, shared, reserve }: Item) =>
+  ({ categoryId, kind, label, amount, included, recurring, sortOrder, shared, reserve });
 
 /**
  * Reprise du budget précédent : seules les lignes récurrentes, avec leur structure et leurs valeurs.
@@ -80,7 +82,7 @@ type TemplateCategory = {
 /** Budget depuis les modèles : catégories actives marquées « modèle », montant par défaut (0 pour un parent avec enfants). */
 export function fromTemplates(categories: TemplateCategory[]): Seed[] {
   const seed = (c: Omit<TemplateCategory, "children">) => ({
-    categoryId: c.id, kind: c.kind, label: c.name, amount: c.forecastAmount, included: c.enabled, recurring: c.recurring, sortOrder: c.sortOrder,
+    categoryId: c.id, kind: c.kind, label: c.name, amount: c.forecastAmount, included: c.enabled, recurring: c.recurring, sortOrder: c.sortOrder, shared: true, reserve: false,
   });
   return categories
     .filter((c) => c.isTemplate && !c.archivedAt)
@@ -90,6 +92,21 @@ export function fromTemplates(categories: TemplateCategory[]): Seed[] {
     });
 }
 
+export type Envelope = { id: string; label: string; planned: number; actual: number; left: number };
+export type Reserve = Envelope & { overrun: number };
+
+/**
+ * Enveloppes communes : lignes principales de dépense incluses, communes, variables, hors réserve.
+ * Leurs dépassements sont absorbés par la réserve (reste = prévu − réel − dépassements).
+ */
+export function envelopes(tree: (Node & { actual: number })[]): { lines: Envelope[]; reserve: Reserve | null } {
+  const env = (n: Node & { actual: number }) => ({ id: n.id, label: n.label, planned: n.total, actual: n.actual, left: n.total - n.actual });
+  const lines = tree.filter((n) => n.kind === "EXPENSE" && n.included && n.shared && !n.category?.fixed && !n.reserve).map(env);
+  const overrun = lines.reduce((s, l) => s + Math.max(-l.left, 0), 0);
+  const r = tree.find((n) => n.reserve);
+  return { lines, reserve: r ? { ...env(r), left: r.total - r.actual - overrun, overrun } : null };
+}
+
 // --- Lecture ---
 
 const ITEM_ORDER = [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }];
@@ -97,6 +114,7 @@ const ITEM_ORDER = [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }
 /**
  * Budget d'un mois (null s'il n'est pas encore créé : jamais créé implicitement), son arbre, ses totaux prévus,
  * et le réel par ligne (opérations des comptes lisibles rattachées à la catégorie d'origine).
+ * Dépense : seules les opérations communes ou personnelles selon la ligne principale ; revenu : toutes.
  */
 export async function getBudget(scope: Scope, month: Date) {
   const householdId = scope.householdId;
@@ -106,16 +124,16 @@ export async function getBudget(scope: Scope, month: Date) {
   });
   if (!budget) return null;
   const sums = await prisma.transaction.groupBy({
-    by: ["categoryId"],
+    by: ["categoryId", "shared"],
     where: { householdId, accountId: readable(scope), kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: addMonths(month, 1) } },
     _sum: { amount: true },
   });
-  const real = new Map(sums.map((s) => [s.categoryId, s._sum.amount ?? 0]));
-  const actual = (i: Item) => (i.categoryId ? real.get(i.categoryId) ?? 0 : 0);
+  const actual = (i: Item, top: Item) => sums.reduce((t, s) =>
+    i.categoryId && s.categoryId === i.categoryId && (top.kind === "INCOME" || s.shared === top.shared) ? t + (s._sum.amount ?? 0) : t, 0);
   const tree = buildTree(budget.items).map((n) => ({
     ...n,
-    actual: actual(n) + n.children.reduce((s, c) => s + actual(c), 0),
-    children: n.children.map((c) => ({ ...c, actual: actual(c) })),
+    actual: actual(n, n) + n.children.reduce((s, c) => s + actual(c, n), 0),
+    children: n.children.map((c) => ({ ...c, actual: actual(c, n) })),
   }));
   return { ...budget, tree, totals: budgetTotals(budget.items) };
 }
@@ -178,7 +196,7 @@ export async function createBudget(householdId: string, month: Date, incomes?: I
         seeds = [
           ...incomes.map((i, sortOrder) => ({
             ...i, categoryId: i.categoryId && own.has(i.categoryId) ? i.categoryId : null,
-            kind: "INCOME" as const, included: true, recurring: true, sortOrder, children: [],
+            kind: "INCOME" as const, included: true, recurring: true, shared: true, reserve: false, sortOrder, children: [],
           })),
           ...seeds.filter((s) => s.kind !== "INCOME"),
         ];
@@ -210,14 +228,28 @@ export async function setBudgetStatus(householdId: string, budgetId: string, sta
   });
 }
 
-export type ItemFields = { label: string; amount: number; included: boolean; recurring: boolean };
+/** `shared` / `reserve` absents : inchangés (valeurs par défaut à la création). */
+export type ItemFields = { label: string; amount: number; included: boolean; recurring: boolean; shared?: boolean; reserve?: boolean };
+
+const ONE_RESERVE = "Une seule réserve par budget.";
+
+/** Une deuxième réserve (index SQL partiel) → message lisible. */
+async function oneReserve<T>(write: () => Promise<T>) {
+  try {
+    return await write();
+  } catch (e) {
+    if (isCode(e, "P2002")) throw new LedgerError(ONE_RESERVE);
+    throw e;
+  }
+}
 
 /**
- * Ajoute une ligne. Sous-ligne : le parent doit être une ligne principale du même budget ; elle prend son type,
- * et le montant direct du parent repasse à 0 (son total devient la somme de ses enfants). Elle se place en dernier.
+ * Ajoute une ligne. Sous-ligne : le parent doit être une ligne principale du même budget ; elle prend son type et son
+ * caractère commun (jamais réserve), et le montant direct du parent repasse à 0 (son total devient la somme de ses enfants).
+ * Elle se place en dernier.
  */
 export async function addItem(householdId: string, budgetId: string, input: ItemFields & { kind: CategoryKind; parentId: string | null }) {
-  return prisma.$transaction(async (tx) => {
+  return oneReserve(() => prisma.$transaction(async (tx) => {
     await lockBudget(tx, householdId, budgetId);
     let kind = input.kind;
     if (input.parentId) {
@@ -225,24 +257,32 @@ export async function addItem(householdId: string, budgetId: string, input: Item
       if (!parent) throw new NotFoundError();
       if (parent.parentId) throw new LedgerError("Une sous-catégorie ne peut pas avoir de sous-catégorie.", "parentId");
       kind = parent.kind;
+      input = { ...input, shared: parent.shared, reserve: false };
       await tx.budgetItem.update({ where: { id: parent.id }, data: { amount: 0 } });
     }
     const last = await tx.budgetItem.aggregate({ where: { budgetId, parentId: input.parentId, kind }, _max: { sortOrder: true } });
     return tx.budgetItem.create({ data: { ...input, kind, householdId, budgetId, sortOrder: (last._max.sortOrder ?? -1) + 1 } });
-  });
+  }));
 }
 
-/** Enregistre les lignes modifiées ; le montant d'une ligne qui a des enfants reste 0 (total calculé). Ids hors budget ignorés. */
+/**
+ * Enregistre les lignes modifiées ; le montant d'une ligne qui a des enfants reste 0 (total calculé). Ids hors budget ignorés.
+ * Sous-lignes : caractère commun du parent (le changer sur le parent l’applique à ses enfants), jamais réserve.
+ * Réserves retirées avant d'être posées : la déplacer d'une ligne à l'autre passe en un seul enregistrement.
+ */
 export async function saveItems(householdId: string, budgetId: string, items: Map<string, ItemFields>) {
-  await prisma.$transaction(async (tx) => {
+  await oneReserve(() => prisma.$transaction(async (tx) => {
     await lockBudget(tx, householdId, budgetId);
-    const parents = new Set(
-      (await tx.budgetItem.findMany({ where: { budgetId, householdId, parentId: { not: null } }, select: { parentId: true } })).map((p) => p.parentId),
-    );
-    for (const [id, data] of items) {
-      await tx.budgetItem.updateMany({ where: { id, budgetId, householdId }, data: parents.has(id) ? { ...data, amount: 0 } : data });
+    const subs = await tx.budgetItem.findMany({ where: { budgetId, householdId, parentId: { not: null } }, select: { id: true, parentId: true } });
+    const parents = new Set(subs.map((p) => p.parentId));
+    const children = new Set(subs.map((c) => c.id));
+    const entries = [...items].sort(([, a], [, b]) => Number(!!a.reserve) - Number(!!b.reserve));
+    for (const [id, { shared, reserve, ...data }] of entries) {
+      const own = children.has(id) ? data : { ...data, shared, reserve, ...(parents.has(id) && { amount: 0 }) };
+      await tx.budgetItem.updateMany({ where: { id, budgetId, householdId }, data: own });
+      if (parents.has(id) && shared !== undefined) await tx.budgetItem.updateMany({ where: { parentId: id, budgetId, householdId }, data: { shared } });
     }
-  });
+  }));
 }
 
 /** Retire une ligne ; retirer une ligne principale retire ses sous-lignes (FK en cascade). */
