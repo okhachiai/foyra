@@ -45,6 +45,9 @@ export type BudgetRow = {
   fixed?: number; unpaidFixed?: number; fixedActual?: number;
 };
 
+/** Disponible d'une ligne de dépense = prévu (vide = 0) − effectué ; négatif = dépassement. */
+export const available = (r: BudgetRow) => (r.planned ?? 0) - r.actual;
+
 /**
  * Totaux du mois (prévu vide = 0). Reste à vivre = fin de mois projetée.
  * Une charge non payée reste due même si le prévu est vide ou dépassé : restant = max(prévu − effectué, non payé).
@@ -117,7 +120,7 @@ export async function getBudget(householdId: string, month: Date) {
   const outside = { INCOME: 0, EXPENSE: 0 };
   for (const s of sums) if (!s.categoryId || !included.has(s.categoryId)) outside[s.kind as CategoryKind] += s._sum.amount ?? 0;
 
-  return { rows, totals: summarize(rows), outside };
+  return { rows, totals: summarize(rows), outside, charges };
 }
 
 /** Enregistre les montants prévus du mois ; ids hors foyer ignorés (filtre householdId). */

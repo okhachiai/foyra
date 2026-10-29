@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { CategoryKind } from "@prisma/client";
 import { requireUser } from "@/lib/auth";
-import { addMonths, formatMonth, getBudget, parseMonth, type BudgetRow } from "@/lib/budget";
+import { addMonths, formatMonth, available, getBudget, parseMonth, type BudgetRow } from "@/lib/budget";
 import { todayIn } from "@/lib/ledger";
 import { centsToInput, formatCents } from "@/lib/money";
 import { saveBudgetAction } from "../actions";
@@ -17,7 +17,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
   const money = (cents: number) => formatCents(cents, currency);
 
   const line = (r: BudgetRow) => {
-    const available = (r.planned ?? 0) - r.actual;
+    const left = available(r);
     const loaded = r.planned != null ? centsToInput(r.planned) : "";
     return (
       <li key={r.id}>
@@ -31,7 +31,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
           <input type="hidden" name={`orig:${r.id}`} value={loaded} />
           {r.kind === "EXPENSE" ? (
             <small className="muted">
-              Effectué {money(r.actual)} · Disponible <span className={available < 0 ? "neg" : undefined}>{money(available)}</span>
+              Effectué {money(r.actual)} · Disponible <span className={left < 0 ? "neg" : undefined}>{money(left)}</span>
             </small>
           ) : (
             <small className="muted">Perçu {money(r.actual)}</small>

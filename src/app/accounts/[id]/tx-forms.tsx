@@ -39,12 +39,26 @@ function CategorySelect({ categories, value }: { categories: CategoryTree; value
   );
 }
 
-export function EntryForm({ accountId, kind = "EXPENSE", categories, v }: { accountId: string; kind?: "INCOME" | "EXPENSE"; categories: CategoryTree; v: Values }) {
+/** Avec `accounts` (tableau de bord) : choix du compte et retour au tableau de bord ; sinon compte fixe `accountId`. */
+export function EntryForm({ accountId, accounts, kind = "EXPENSE", categories, v }: {
+  accountId?: string; accounts?: { id: string; name: string }[]; kind?: "INCOME" | "EXPENSE"; categories: CategoryTree; v: Values;
+}) {
   return (
     <ActionForm action={v.id ? updateTransactionAction : createEntryAction}>
       {v.id && <input type="hidden" name="id" value={v.id} />}
-      <input type="hidden" name="accountId" value={accountId} />
-      <input type="hidden" name="returnTo" value={accountId} />
+      {accounts ? (
+        <>
+          <Field name="accountId" label="Compte">
+            <select name="accountId">{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+          </Field>
+          <input type="hidden" name="back" value="dashboard" />
+        </>
+      ) : (
+        <>
+          <input type="hidden" name="accountId" value={accountId} />
+          <input type="hidden" name="returnTo" value={accountId} />
+        </>
+      )}
       <Field name="kind" label="Type">
         <select name="kind" defaultValue={kind}>
           <option value="EXPENSE">Dépense</option>

@@ -2,14 +2,15 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { logoutAction } from "../actions";
 
-/** En-tête commun aux pages connectées (réutilisé par /members, /categories, /budget, /charges, /credits et /calendrier). */
+/** En-tête commun aux pages connectées (réutilisé par /tableau-de-bord, /members, /categories, /budget, /charges, /credits et /calendrier). */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   return (
     <>
       <header className="top">
-        <Link href="/accounts" className="brand">{user.household.name}</Link>
+        <Link href="/tableau-de-bord" className="brand">{user.household.name}</Link>
         <nav>
+          <Link href="/tableau-de-bord">Tableau de bord</Link>
           <Link href="/accounts">Comptes</Link>
           <Link href="/budget">Budget</Link>
           <Link href="/charges">Charges fixes</Link>

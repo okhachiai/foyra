@@ -101,7 +101,7 @@ export async function setupAction(_: FormState, fd: FormData): Promise<FormState
   const admin = await setupHousehold(input);
   if (!admin) redirect("/login"); // un autre setup a gagné la course
   await startSession(admin.id);
-  done("/accounts");
+  done("/tableau-de-bord");
 }
 
 export async function loginAction(_: FormState, fd: FormData): Promise<FormState> {
@@ -118,7 +118,7 @@ export async function loginAction(_: FormState, fd: FormData): Promise<FormState
   }
   clearLoginFailures(ip, email);
   await startSession(user.id);
-  done("/accounts");
+  done("/tableau-de-bord");
 }
 
 export async function logoutAction() {
@@ -199,7 +199,8 @@ export async function createEntryAction(_: FormState, fd: FormData): Promise<For
   if (errors.state) return errors.state;
   const error = await run(() => createEntry(user.householdId, user.id, input));
   if (error) return error;
-  done(`/accounts/${input.accountId}`);
+  // Liste blanche : seule la valeur fixe « dashboard » change la page de retour.
+  done(str(fd, "back") === "dashboard" ? "/tableau-de-bord" : `/accounts/${input.accountId}`);
 }
 
 export async function createTransferAction(_: FormState, fd: FormData): Promise<FormState> {
