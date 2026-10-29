@@ -18,7 +18,7 @@ export const isCode = (e: unknown, code: string) => e instanceof Prisma.PrismaCl
 
 type Db = Prisma.TransactionClient;
 
-export type EntryInput = { accountId: string; kind: "INCOME" | "EXPENSE"; amount: number; occurredOn: Date; note: string | null; categoryId: string | null };
+export type EntryInput = { accountId: string; kind: "INCOME" | "EXPENSE"; amount: number; occurredOn: Date; note: string | null; categoryId: string | null; shared?: boolean };
 export type TransferInput = { fromAccountId: string; toAccountId: string; amount: number; occurredOn: Date; note: string | null };
 /** Clé d'idempotence facultative (formulaires) : rejouer la même clé renvoie l'opération déjà créée. */
 type Idempotent = { idempotencyKey?: string | null };
@@ -71,38 +71,65 @@ export function writableAccounts(scope: Scope, keep?: string) {
   });
 }
 
-type AccountData = { kind: AccountKind; name: string; notes?: string };
+/** `ownerId` : propriétaire (null = compte commun). */
+type AccountData = { kind: AccountKind; name: string; notes?: string; ownerId?: string | null };
 
-/** Crée un compte : son créateur en est gestionnaire ; partage par défaut limité aux membres sélectionnés. */
+/** Le propriétaire doit être un utilisateur du foyer. */
+async function checkOwner(tx: Db, householdId: string, ownerId: string | null | undefined) {
+  if (ownerId && !(await tx.user.count({ where: { id: ownerId, householdId } }))) throw new NotFoundError();
+}
+
+/** Crée un compte : son créateur en est gestionnaire (et propriétaire, sauf `ownerId` explicite) ; partage par défaut limité aux membres sélectionnés. */
 export function createAccount(scope: Scope, userId: string, data: AccountData & { initialBalance: number; sharing?: AccountSharing }) {
   return prisma.$transaction(async (tx) => {
-    const account = await tx.account.create({ data: { ...data, householdId: scope.householdId } });
+    const ownerId = data.ownerId === undefined ? userId : data.ownerId;
+    await checkOwner(tx, scope.householdId, ownerId);
+    const account = await tx.account.create({ data: { ...data, ownerId, householdId: scope.householdId } });
     await tx.accountAccess.create({ data: { userId, accountId: account.id, level: "MANAGE" } });
     return account;
   });
 }
 
-/** Nom, type et notes ; le solde initial reste celui fixé à la création. */
-export async function updateAccount(scope: Scope, id: string, data: AccountData) {
+/**
+ * Nom, type, notes et propriétaire ; le solde initial reste celui fixé à la création.
+ * Nouveau propriétaire : recettes / dépenses du mois `month` (hors paiements de charge) deviennent communes ou personnelles ; mois antérieurs inchangés.
+ */
+export async function updateAccount(scope: Scope, id: string, data: AccountData, month: Date) {
   assertManageable(scope, id);
-  const { count } = await prisma.account.updateMany({ where: { id, householdId: scope.householdId, archivedAt: null }, data });
-  if (!count) throw new LedgerError("Compte introuvable ou archivé.");
+  const householdId = scope.householdId;
+  await prisma.$transaction(async (tx) => {
+    const [a] = await tx.$queryRaw<{ ownerId: string | null }[]>`
+      SELECT "ownerId" FROM "Account" WHERE "id" = ${id} AND "householdId" = ${householdId} AND "archivedAt" IS NULL FOR UPDATE`;
+    if (!a) throw new LedgerError("Compte introuvable ou archivé.");
+    await checkOwner(tx, householdId, data.ownerId);
+    await tx.account.update({ where: { id }, data });
+    if (data.ownerId === undefined || data.ownerId === a.ownerId) return;
+    const next = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1));
+    await tx.transaction.updateMany({
+      where: { householdId, accountId: id, kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: next }, fixedPayment: null },
+      data: { shared: data.ownerId === null },
+    });
+  });
 }
 
-/** Vérifie l'écriture sur chaque compte, les verrouille (ordre stable, anti-interblocage), puis qu'ils sont du foyer et actifs. */
+/** Vérifie l'écriture sur chaque compte, les verrouille (ordre stable, anti-interblocage), puis qu'ils sont du foyer et actifs ; renvoie leurs lignes. */
 async function lockActiveAccounts(tx: Db, scope: Scope, accounts: { id: string; field: string }[]) {
   for (const a of accounts) assertWritable(scope, a.id, a.field);
   const householdId = scope.householdId;
   const ids = [...new Set(accounts.map((a) => a.id))].sort();
-  const rows = await tx.$queryRaw<{ id: string; archivedAt: Date | null }[]>`
-    SELECT "id", "archivedAt" FROM "Account"
+  const rows = await tx.$queryRaw<{ id: string; archivedAt: Date | null; ownerId: string | null }[]>`
+    SELECT "id", "archivedAt", "ownerId" FROM "Account"
     WHERE "householdId" = ${householdId} AND "id" IN (${Prisma.join(ids)})
     ORDER BY "id" FOR UPDATE`;
   if (rows.length !== ids.length) throw new NotFoundError();
   for (const a of accounts) {
     if (rows.find((r) => r.id === a.id)!.archivedAt) throw new LedgerError("Ce compte est archivé : aucune saisie possible.", a.field);
   }
+  return rows;
 }
+
+/** Compte commun : toujours commune ; compte personnel : personnelle sauf demande. */
+const sharedOn = (ownerId: string | null, input: EntryInput) => ownerId === null || (input.shared ?? false);
 
 /** Verrouille des lignes (FOR UPDATE, ordre stable) avant de les relire : elles ne peuvent plus changer de compte. */
 const lockLines = (tx: Db, householdId: string, where: Prisma.Sql) =>
@@ -126,9 +153,9 @@ async function checkCategory(tx: Db, householdId: string, input: EntryInput, cur
 
 /** Création dans une transaction SQL existante (ex. paiement d'une récurrence). */
 export async function createEntryTx(tx: Db, scope: Scope, userId: string, input: EntryInput & Idempotent) {
-  await lockActiveAccounts(tx, scope, [{ id: input.accountId, field: "accountId" }]);
+  const [a] = await lockActiveAccounts(tx, scope, [{ id: input.accountId, field: "accountId" }]);
   await checkCategory(tx, scope.householdId, input);
-  return tx.transaction.create({ data: { ...input, householdId: scope.householdId, createdById: userId } });
+  return tx.transaction.create({ data: { ...input, shared: sharedOn(a.ownerId, input), householdId: scope.householdId, createdById: userId } });
 }
 
 /** Écrit ; si la clé existe déjà (double clic, nouvelle tentative), renvoie l'opération déjà enregistrée au lieu d'un doublon. */
@@ -180,12 +207,13 @@ export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
       if (input.amount !== current.amount) throw new LedgerError(redo, "amount");
       if (input.occurredOn.getTime() !== current.occurredOn.getTime()) throw new LedgerError(redo, "occurredOn");
     }
-    await lockActiveAccounts(tx, scope, [
+    const rows = await lockActiveAccounts(tx, scope, [
       { id: current.accountId, field: "accountId" },
       { id: input.accountId, field: "accountId" },
     ]);
     await checkCategory(tx, householdId, input, current.categoryId);
-    return tx.transaction.update({ where: { id }, data: input });
+    const shared = sharedOn(rows.find((r) => r.id === input.accountId)!.ownerId, input);
+    return tx.transaction.update({ where: { id }, data: { ...input, shared } });
   });
 }
 

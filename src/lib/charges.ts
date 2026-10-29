@@ -9,14 +9,17 @@ export { dueDate };
 type Db = Prisma.TransactionClient;
 
 export type ChargeInput = {
-  kind: "INCOME" | "EXPENSE"; active: boolean; name: string; amount: number; dueDay: number; accountId: string; categoryId: string; startMonth: Date; endMonth: Date | null;
+  kind: "INCOME" | "EXPENSE"; active: boolean; name: string; amount: number; dueDay: number; accountId: string; categoryId: string; startMonth: Date; endMonth: Date | null; shared: boolean;
 };
 
 /** La récurrence s'applique au mois si elle est active et début ≤ mois ≤ dernier mois (vide = sans fin). */
 export const appliesTo = (charge: { active: boolean; startMonth: Date; endMonth: Date | null }, month: Date) =>
   charge.active && charge.startMonth <= month && (!charge.endMonth || month <= charge.endMonth);
 
-/** Catégorie du foyer du même sens, compte du foyer modifiable et non archivé ; FOR SHARE : ni l'un ni l'autre ne change avant l'écriture. */
+/**
+ * Catégorie du foyer du même sens, compte du foyer modifiable et non archivé ; FOR SHARE : ni l'un ni l'autre ne change avant l'écriture.
+ * Renvoie `shared` effectif : forcé à true sur un compte commun.
+ */
 export async function checkRefs(tx: Db, scope: Scope, input: ChargeInput) {
   const householdId = scope.householdId;
   if (input.endMonth && input.endMonth < input.startMonth) throw new LedgerError("Le dernier mois doit être après le mois de début.", "endMonth");
@@ -25,16 +28,17 @@ export async function checkRefs(tx: Db, scope: Scope, input: ChargeInput) {
   if (!c) throw new NotFoundError();
   if (c.kind !== input.kind) throw new LedgerError(input.kind === "EXPENSE" ? "Choisissez une catégorie de dépense." : "Choisissez une catégorie de revenu.", "categoryId");
   assertWritable(scope, input.accountId, "accountId");
-  const [a] = await tx.$queryRaw<{ archivedAt: Date | null }[]>`
-    SELECT "archivedAt" FROM "Account" WHERE "id" = ${input.accountId} AND "householdId" = ${householdId} FOR SHARE`;
+  const [a] = await tx.$queryRaw<{ archivedAt: Date | null; ownerId: string | null }[]>`
+    SELECT "archivedAt", "ownerId" FROM "Account" WHERE "id" = ${input.accountId} AND "householdId" = ${householdId} FOR SHARE`;
   if (!a) throw new NotFoundError();
   if (a.archivedAt) throw new LedgerError("Ce compte est archivé : aucune saisie possible.", "accountId");
+  return a.ownerId === null || input.shared;
 }
 
 export function createCharge(scope: Scope, input: ChargeInput) {
   return prisma.$transaction(async (tx) => {
-    await checkRefs(tx, scope, input);
-    return tx.fixedCharge.create({ data: { ...input, householdId: scope.householdId } });
+    const shared = await checkRefs(tx, scope, input);
+    return tx.fixedCharge.create({ data: { ...input, shared, householdId: scope.householdId } });
   });
 }
 
@@ -49,9 +53,9 @@ async function lockWritableCharge(tx: Db, scope: Scope, id: string) {
 export async function updateCharge(scope: Scope, id: string, input: ChargeInput) {
   await prisma.$transaction(async (tx) => {
     await lockWritableCharge(tx, scope, id);
-    await checkRefs(tx, scope, input);
+    const shared = await checkRefs(tx, scope, input);
     // Charge portée par un crédit : modifiable seulement via le crédit.
-    const { count } = await tx.fixedCharge.updateMany({ where: { id, householdId: scope.householdId, loan: null }, data: input });
+    const { count } = await tx.fixedCharge.updateMany({ where: { id, householdId: scope.householdId, loan: null }, data: { ...input, shared } });
     if (!count) throw new NotFoundError();
   });
 }
@@ -130,7 +134,7 @@ export async function payCharge(scope: Scope, userId: string, id: string, month:
       }
       if (await tx.fixedChargePayment.count({ where: { fixedChargeId: id, month } })) throw new LedgerError(ALREADY_PAID);
       const t = await createEntryTx(tx, scope, userId, {
-        accountId: charge.accountId, kind: charge.kind, amount, occurredOn, note: charge.name, categoryId: charge.categoryId,
+        accountId: charge.accountId, kind: charge.kind, amount, occurredOn, note: charge.name, categoryId: charge.categoryId, shared: charge.shared,
       });
       return tx.fixedChargePayment.create({ data: { householdId: scope.householdId, fixedChargeId: id, month, transactionId: t.id } });
     });

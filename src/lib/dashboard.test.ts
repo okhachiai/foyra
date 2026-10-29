@@ -17,7 +17,7 @@ const today = parseDay("2026-11-10")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, ...over });
+  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 const spend = async (cat: string, amount: number, accountId = courant) =>
   createEntry(fullScope(hh), user, { accountId, kind: "EXPENSE", amount, occurredOn: day("2026-11-09"), note: null, categoryId: await byName(cat) });
 

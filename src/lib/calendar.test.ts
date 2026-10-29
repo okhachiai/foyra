@@ -16,7 +16,7 @@ const nov = parseMonth("2026-11")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, ...over });
+  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 const summary = (cal: Awaited<ReturnType<typeof getCalendar>>) =>
   cal.days.map((d) => ({
     day: formatDay(d.day),

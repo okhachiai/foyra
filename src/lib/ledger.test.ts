@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
 import { fullScope, getScope } from "./access";
 import { prisma } from "./db";
+import { parseMonth } from "./budget";
+import { createCharge, payCharge } from "./charges";
 import {
-  accountBalance, archiveAccount, createEntry, createTransfer, deleteAccount, deleteTransaction, getAccount, getTransfer,
-  householdTotal, LedgerError, NotFoundError, parseDay, todayIn, updateEntry, updateTransfer,
+  accountBalance, archiveAccount, createAccount, createEntry, createTransfer, deleteAccount, deleteTransaction, getAccount, getTransfer,
+  householdTotal, LedgerError, NotFoundError, parseDay, todayIn, updateAccount, updateEntry, updateTransfer,
 } from "./ledger";
 
 async function resetDb() {
@@ -207,5 +209,44 @@ describe("ledger", () => {
     const d = await account("Autre", 1000);
     await transfer(d, e, 100);
     await expect(deleteAccount(fullScope(hh), d)).rejects.toThrow(LedgerError);
+  });
+
+  it("Compte créé : propriétaire = créateur par défaut, null si commun", async () => {
+    const perso = await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 });
+    expect(perso.ownerId).toBe(user);
+    const joint = await createAccount(fullScope(hh), user, { name: "Joint", kind: "CHECKING", initialBalance: 0, ownerId: null });
+    expect(joint.ownerId).toBeNull();
+    const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!;
+    await expect(createAccount(fullScope(hh), user, { name: "X", kind: "CHECKING", initialBalance: 0, ownerId: other.id })).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("Dépense sur compte commun : toujours commune, même avec shared=false", async () => {
+    const c = await account("Joint", 0);
+    const t = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null, shared: false });
+    expect(t.shared).toBe(true);
+    const u = await updateEntry(fullScope(hh), t.id, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null, shared: false });
+    expect(u.shared).toBe(true);
+  });
+
+  it("Dépense sur compte perso : personnelle par défaut, commune si demandé", async () => {
+    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
+    expect((await expense(c, 100)).shared).toBe(false);
+    const t = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null, shared: true });
+    expect(t.shared).toBe(true);
+  });
+
+  it("Changer le propriétaire : opérations du mois en cours basculent, mois précédent et paiements de charge inchangés", async () => {
+    const c = await account("Joint", 0);
+    const nov = parseMonth("2026-11")!;
+    const entry = (d: string) => createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: parseDay(d)!, note: null, categoryId: null });
+    const oct = await entry("2026-10-15");
+    const nv = await entry("2026-11-15");
+    const loyer = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name: "Loyer" } })).id;
+    const ch = await createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: c, categoryId: loyer, startMonth: nov, endMonth: null, shared: true });
+    const p = await payCharge(fullScope(hh), user, ch.id, nov, 95000, parseDay("2026-11-05")!);
+    await updateAccount(fullScope(hh), c, { name: "Joint", kind: "CHECKING", ownerId: user }, nov);
+    const shared = async (id: string) => (await prisma.transaction.findUniqueOrThrow({ where: { id } })).shared;
+    expect([await shared(nv.id), await shared(oct.id), await shared(p.transactionId)]).toEqual([false, true, true]);
+    expect((await getAccount(fullScope(hh), c)).ownerId).toBe(user);
   });
 });

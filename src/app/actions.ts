@@ -12,7 +12,7 @@ import {
 } from "@/lib/auth";
 import {
   archiveAccount, createAccount, createEntry, deleteAccount, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
-  parseDay, unarchiveAccount, updateAccount, updateEntry, updateTransfer, type EntryInput, type TransferInput,
+  parseDay, todayIn, unarchiveAccount, updateAccount, updateEntry, updateTransfer, type EntryInput, type TransferInput,
 } from "@/lib/ledger";
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, setCategoryArchived, updateCategory, type CategoryFields } from "@/lib/categories";
 import { addItem, createBudget, formatMonth, type IncomeLine, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
@@ -252,12 +252,13 @@ export async function saveSharingAction(_: FormState, fd: FormData): Promise<For
 }
 
 export async function updateAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
+  const { user, scope } = await requireScope();
   const id = str(fd, "id");
   const errors = new Errors();
   const data = accountFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => updateAccount(scope, id, data));
+  const month = parseMonth(todayIn(user.household.timezone).slice(0, 7))!;
+  const error = await run(() => updateAccount(scope, id, data, month));
   if (error) return error;
   done(`/accounts/${id}`);
 }
@@ -495,7 +496,7 @@ function chargeFields(fd: FormData, errors: Errors): ChargeInput {
   return {
     kind: kind as CategoryKind, active: fd.get("active") === "on",
     name: requiredField(fd, "name", errors), amount: amountField(fd, errors), dueDay, accountId, categoryId,
-    startMonth: startMonth ?? new Date(0), endMonth,
+    startMonth: startMonth ?? new Date(0), endMonth, shared: true,
   };
 }
 

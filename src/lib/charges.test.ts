@@ -13,7 +13,7 @@ const oct = parseMonth("2026-10")!;
 const nov = parseMonth("2026-11")!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, ...over });
+  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 const pay = (id: string, amount: number, day: string, month = nov) => payCharge(fullScope(hh), user, id, month, amount, parseDay(day)!);
 
 beforeEach(async () => {
@@ -101,5 +101,20 @@ describe("charges fixes", () => {
     await pay(c.id, 95000, "2026-11-05");
     await deleteCharge(fullScope(hh), c.id);
     expect(await prisma.transaction.count()).toBe(1);
+  });
+
+  it("Charge sur compte commun : shared forcé à true", async () => {
+    const c = await charge({ shared: false });
+    expect(c.shared).toBe(true);
+    await updateCharge(fullScope(hh), c.id, { ...c, shared: false });
+    expect((await prisma.fixedCharge.findUniqueOrThrow({ where: { id: c.id } })).shared).toBe(true);
+  });
+
+  it("Paiement d'une charge personnelle : opération shared=false", async () => {
+    await prisma.account.update({ where: { id: courant }, data: { ownerId: user } });
+    const c = await charge({ shared: false });
+    expect(c.shared).toBe(false);
+    const p = await pay(c.id, 95000, "2026-11-05");
+    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: p.transactionId } })).shared).toBe(false);
   });
 });
