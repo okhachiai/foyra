@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { CategoryKind } from "@prisma/client";
-import { getScope } from "@/lib/access";
+import { fullScope, getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { addMonths, budgetSeeds, envelopes, formatMonth, getBudget, incomeLines, mergeIncomes, parseMonth } from "@/lib/budget";
 import { listMonthCharges } from "@/lib/charges";
@@ -87,7 +87,9 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
   const draft = budget.status === "DRAFT";
   const { totals } = budget;
   const split = await getVisibleSplit(user, scope, month);
-  const env = envelopes(budget.tree);
+  // Enveloppes communes : réel de tout le foyer, identique quel que soit le lecteur (le tableau éditable reste sur sa portée).
+  const common = scope.read ? await getBudget(fullScope(user.householdId), month) : budget; // admin : portée déjà complète
+  const env = envelopes((common ?? budget).tree);
   // Charges fixes et crédits du mois, calculés en direct : un crédit soldé n'apparaît plus.
   const expenses = charges.filter((c) => c.kind === "EXPENSE");
   const fixed = expenses.filter((c) => !c.loanId), loans = expenses.filter((c) => c.loanId);
@@ -210,6 +212,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
                   <th className="py-2 pr-3 text-right font-medium">Dû</th>
                   <th className="py-2 pr-3 text-right font-medium">Déjà contribué</th>
                   <th className="py-2 pr-3 text-right font-medium">Reste à virer</th>
+                  <th className="py-2 pr-3 text-right font-medium">Reste perso</th>
                   <th className="py-2"><span className="sr-only">Virement</span></th>
                 </tr>
               </thead>
@@ -224,7 +227,10 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
                     <td className="py-2 pr-3 text-right whitespace-nowrap">{percent.format(m.shareBp / 10000)}</td>
                     <td className="py-2 pr-3 text-right whitespace-nowrap">{money(m.due)}</td>
                     <td className="py-2 pr-3 text-right whitespace-nowrap">{money(m.contribution)}</td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap text-heading">{money(m.toTransfer)}</td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap text-heading">
+                      {m.toTransfer < 0 ? <>à recevoir {money(-m.toTransfer)}</> : money(m.toTransfer)}
+                    </td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap">{m.personalLeft === null ? "—" : money(m.personalLeft)}</td>
                     <td className="py-2 text-right">
                       {split.transfer[m.userId] && <ButtonLink href={split.transfer[m.userId]} size="sm" variant="secondary">Préparer le virement</ButtonLink>}
                     </td>

@@ -2,7 +2,7 @@ import type { Account } from "@prisma/client";
 import type { listCategories } from "@/lib/categories";
 import { centsToInput } from "@/lib/money";
 import { createEntryAction, createTransferAction, updateTransactionAction } from "../../actions";
-import { ActionForm, Field } from "../../form";
+import { ActionForm, Field, SharedCheck } from "../../form";
 
 /**
  * Clé d'idempotence, tirée à chaque rendu serveur du formulaire : un double clic ou une nouvelle tentative
@@ -22,19 +22,6 @@ function CommonFields({ v }: { v: Values }) {
       <Field name="occurredOn" label="Date"><input name="occurredOn" type="date" required defaultValue={v.occurredOn} /></Field>
       <Field name="note" label="Note / libellé (facultatif)"><input name="note" maxLength={500} defaultValue={v.note ?? ""} /></Field>
     </>
-  );
-}
-
-/**
- * Case « commune » ; `sharedField` signale qu'elle était affichée (absente = choix laissé au serveur).
- * Masquée en CSS quand le compte choisi est commun (`option[data-common]`, cf. globals.css) : le serveur la force alors.
- */
-export function SharedCheck({ label, checked }: { label: string; checked: boolean }) {
-  return (
-    <label className="check shared-check">
-      <input type="hidden" name="sharedField" value="1" />
-      <input type="checkbox" name="shared" defaultChecked={checked} />{label}
-    </label>
   );
 }
 

@@ -161,7 +161,7 @@ export default async function DashboardPage() {
                 <li key={m.userId} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-hairline py-2.5">
                   <span className="min-w-0">{m.name}<small className="block text-xs text-muted">Dû {money(m.due)} · déjà contribué {money(m.contribution)}</small></span>
                   <span className="flex items-center gap-3">
-                    <span className="amount">{money(m.toTransfer)}</span>
+                    <span className="amount">{m.toTransfer < 0 ? <>à recevoir {money(-m.toTransfer)}</> : money(m.toTransfer)}</span>
                     {split.transfer[m.userId] && <ButtonLink href={split.transfer[m.userId]} size="sm" variant="secondary">Préparer le virement</ButtonLink>}
                   </span>
                 </li>

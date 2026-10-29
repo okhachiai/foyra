@@ -3,8 +3,7 @@ import { formatMonth } from "@/lib/budget";
 import type { listCategories } from "@/lib/categories";
 import { centsToInput } from "@/lib/money";
 import { createChargeAction, updateChargeAction } from "../actions";
-import { SharedCheck } from "../accounts/[id]/tx-forms";
-import { ActionForm, Field } from "../form";
+import { ActionForm, Field, SharedCheck } from "../form";
 
 /** Création ou modification d'une récurrence (échéance indicative) ; `accounts` = comptes proposés, `categories` = arbre du foyer. */
 export function ChargeForm({ charge, accounts, categories, startMonth }: {
