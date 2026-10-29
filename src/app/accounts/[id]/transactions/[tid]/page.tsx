@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { listCategories } from "@/lib/categories";
 import { prisma } from "@/lib/db";
 import { formatDay, getTransfer } from "@/lib/ledger";
 import { deleteTransactionAction } from "../../../../actions";
@@ -13,7 +14,7 @@ export default async function EditTransactionPage({ params }: { params: Promise<
   const account = await loadAccount(user.householdId, id);
   const t = await prisma.transaction.findFirst({ where: { id: tid, householdId: user.householdId, accountId: account.id } });
   if (!t || account.archivedAt) notFound();
-  const v = { id: t.id, amount: t.amount, occurredOn: formatDay(t.occurredOn), note: t.note };
+  const v = { id: t.id, amount: t.amount, occurredOn: formatDay(t.occurredOn), note: t.note, categoryId: t.categoryId };
 
   let form;
   if (t.transferId) {
@@ -31,7 +32,7 @@ export default async function EditTransactionPage({ params }: { params: Promise<
     }
     form = <TransferForm accounts={accounts} from={transfer.out.accountId} to={transfer.in.accountId} returnTo={account.id} v={v} />;
   } else {
-    form = <EntryForm accountId={account.id} kind={t.kind as "INCOME" | "EXPENSE"} v={v} />;
+    form = <EntryForm accountId={account.id} kind={t.kind as "INCOME" | "EXPENSE"} categories={await listCategories(user.householdId)} v={v} />;
   }
 
   return (

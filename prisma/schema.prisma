@@ -31,6 +31,18 @@ enum TransferSide {
   IN
 }
 
+enum CategoryKind {
+  INCOME
+  EXPENSE
+}
+
+// Règle de reconduction du prévisionnel d'un mois sur l'autre (appliquée par le cycle budget).
+enum CarryOver {
+  PREVIOUS // reprendre le montant du mois précédent
+  FORECAST // repartir du prévisionnel
+  NONE // à saisir chaque mois
+}
+
 model Household {
   id        String   @id @default(cuid())
   // Un seul foyer par instance : la colonne unique (+ CHECK = true) empêche un second setup concurrent.
@@ -43,6 +55,7 @@ model Household {
   users        User[]
   accounts     Account[]
   transactions Transaction[]
+  categories   Category[]
 }
 
 model User {
@@ -97,14 +110,40 @@ model Transaction {
   note         String?
   transferId   String?
   transferSide TransferSide?
+  categoryId   String?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
   household Household @relation(fields: [householdId], references: [id])
   account   Account   @relation(fields: [accountId], references: [id])
   createdBy User      @relation(fields: [createdById], references: [id])
+  category  Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@unique([transferId, transferSide])
   @@index([accountId, occurredOn])
   @@index([householdId])
+  @@index([categoryId])
+}
+
+// Deux niveaux au plus (catégorie › sous-catégorie) ; sens et parent fixés à la création.
+// Une sous-catégorie n'entre dans le budget que si elle ET son parent sont activés.
+// Nom unique par (foyer, parent), insensible à la casse : index SQL brut dans la migration.
+model Category {
+  id             String       @id @default(cuid())
+  householdId    String
+  parentId       String?
+  kind           CategoryKind
+  name           String
+  forecastAmount Int? // centimes, >= 0 (CHECK SQL)
+  carryOver      CarryOver    @default(FORECAST)
+  enabled        Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+
+  household    Household     @relation(fields: [householdId], references: [id])
+  parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children     Category[]    @relation("CategoryTree")
+  transactions Transaction[]
+
+  @@index([householdId])
+  @@index([parentId])
 }

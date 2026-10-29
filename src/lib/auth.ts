@@ -3,6 +3,7 @@ import { hash, verify } from "@node-rs/argon2";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { Prisma, type Role } from "@prisma/client";
+import { createDefaultCategories } from "./categories";
 import { prisma } from "./db";
 
 export const SESSION_COOKIE = "foyra_session"; // dupliqué dans src/middleware.ts (runtime edge)
@@ -135,6 +136,7 @@ export async function setupHousehold(input: { householdName: string; name: strin
   try {
     return await prisma.$transaction(async (tx) => {
       const household = await tx.household.create({ data: { name: input.householdName } });
+      await createDefaultCategories(tx, household.id);
       return tx.user.create({
         data: { householdId: household.id, name: input.name, email: input.email.trim().toLowerCase(), passwordHash, role: "ADMIN" },
       });

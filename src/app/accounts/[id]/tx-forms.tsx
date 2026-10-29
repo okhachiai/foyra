@@ -1,9 +1,11 @@
 import type { Account } from "@prisma/client";
+import type { listCategories } from "@/lib/categories";
 import { centsToInput } from "@/lib/money";
 import { createEntryAction, createTransferAction, updateTransactionAction } from "../../actions";
 import { ActionForm, Field } from "../../form";
 
-type Values = { id?: string; amount?: number; occurredOn: string; note?: string | null };
+type Values = { id?: string; amount?: number; occurredOn: string; note?: string | null; categoryId?: string | null };
+export type CategoryTree = Awaited<ReturnType<typeof listCategories>>;
 
 function CommonFields({ v }: { v: Values }) {
   return (
@@ -17,7 +19,27 @@ function CommonFields({ v }: { v: Values }) {
   );
 }
 
-export function EntryForm({ accountId, kind = "EXPENSE", v }: { accountId: string; kind?: "INCOME" | "EXPENSE"; v: Values }) {
+function CategorySelect({ categories, value }: { categories: CategoryTree; value?: string | null }) {
+  const group = (kind: "INCOME" | "EXPENSE", label: string) => (
+    <optgroup label={label}>
+      {categories.filter((c) => c.kind === kind).flatMap((c) => [
+        <option key={c.id} value={c.id}>{c.name}</option>,
+        ...c.children.map((s) => <option key={s.id} value={s.id}>{c.name} › {s.name}</option>),
+      ])}
+    </optgroup>
+  );
+  return (
+    <Field name="categoryId" label="Catégorie">
+      <select name="categoryId" defaultValue={value ?? ""}>
+        <option value="">Sans catégorie</option>
+        {group("EXPENSE", "Dépenses")}
+        {group("INCOME", "Revenus")}
+      </select>
+    </Field>
+  );
+}
+
+export function EntryForm({ accountId, kind = "EXPENSE", categories, v }: { accountId: string; kind?: "INCOME" | "EXPENSE"; categories: CategoryTree; v: Values }) {
   return (
     <ActionForm action={v.id ? updateTransactionAction : createEntryAction}>
       {v.id && <input type="hidden" name="id" value={v.id} />}
@@ -29,6 +51,7 @@ export function EntryForm({ accountId, kind = "EXPENSE", v }: { accountId: strin
           <option value="INCOME">Recette</option>
         </select>
       </Field>
+      <CategorySelect categories={categories} value={v.categoryId} />
       <CommonFields v={v} />
       <button type="submit">Enregistrer</button>
     </ActionForm>

@@ -13,7 +13,7 @@ export class NotFoundError extends Error {}
 
 type Db = Prisma.TransactionClient;
 
-export type EntryInput = { accountId: string; kind: "INCOME" | "EXPENSE"; amount: number; occurredOn: Date; note: string | null };
+export type EntryInput = { accountId: string; kind: "INCOME" | "EXPENSE"; amount: number; occurredOn: Date; note: string | null; categoryId: string | null };
 export type TransferInput = { fromAccountId: string; toAccountId: string; amount: number; occurredOn: Date; note: string | null };
 
 const SIGNED_AMOUNT = Prisma.sql`CASE WHEN t."kind" = 'INCOME' OR t."transferSide" = 'IN' THEN t."amount" ELSE -t."amount" END`;
@@ -73,9 +73,19 @@ const lockLines = (tx: Db, householdId: string, where: Prisma.Sql) =>
 
 // --- Recettes / dépenses ---
 
+/** La catégorie doit être du foyer et du même sens ; FOR SHARE : elle ne peut pas disparaître avant l'écriture. */
+async function checkCategory(tx: Db, householdId: string, input: EntryInput) {
+  if (!input.categoryId) return;
+  const [c] = await tx.$queryRaw<{ kind: string }[]>`
+    SELECT "kind"::text FROM "Category" WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
+  if (!c) throw new NotFoundError();
+  if (c.kind !== input.kind) throw new LedgerError("Catégorie incompatible avec le type d’opération.", "categoryId");
+}
+
 export async function createEntry(householdId: string, userId: string, input: EntryInput) {
   return prisma.$transaction(async (tx) => {
     await lockActiveAccounts(tx, householdId, [{ id: input.accountId, field: "accountId" }]);
+    await checkCategory(tx, householdId, input);
     return tx.transaction.create({ data: { ...input, householdId, createdById: userId } });
   });
 }
@@ -95,6 +105,7 @@ export async function updateEntry(householdId: string, id: string, input: EntryI
       { id: current.accountId, field: "accountId" },
       { id: input.accountId, field: "accountId" },
     ]);
+    await checkCategory(tx, householdId, input);
     return tx.transaction.update({ where: { id }, data: input });
   });
 }

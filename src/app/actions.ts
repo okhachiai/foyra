@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { AccountKind, Role } from "@prisma/client";
+import type { AccountKind, CarryOver, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import {
   checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
@@ -13,6 +13,7 @@ import {
   archiveAccount, createEntry, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
   parseDay, updateEntry, updateTransfer, type EntryInput, type TransferInput,
 } from "@/lib/ledger";
+import { addDefaultCategories, createCategory, deleteCategory, parseForecast, updateCategory, type CategoryFields } from "@/lib/categories";
 import { parseCents } from "@/lib/money";
 import type { FormState } from "./form";
 
@@ -178,7 +179,10 @@ export async function archiveAccountAction(_: FormState, fd: FormData): Promise<
 function entryFields(fd: FormData, errors: Errors): EntryInput {
   const kind = str(fd, "kind");
   if (kind !== "INCOME" && kind !== "EXPENSE") errors.add("kind", "Choisissez dépense ou recette.");
-  return { accountId: str(fd, "accountId"), kind: kind as EntryInput["kind"], amount: amountField(fd, errors), occurredOn: dayField(fd, errors), note: noteField(fd) };
+  return {
+    accountId: str(fd, "accountId"), kind: kind as EntryInput["kind"], amount: amountField(fd, errors), occurredOn: dayField(fd, errors),
+    note: noteField(fd), categoryId: str(fd, "categoryId") || null,
+  };
 }
 
 function transferFields(fd: FormData, errors: Errors): TransferInput {
@@ -230,4 +234,51 @@ export async function deleteTransactionAction(_: FormState, fd: FormData): Promi
   const error = await run(() => deleteTransaction(user.householdId, str(fd, "id")));
   if (error) return error;
   done(`/accounts/${str(fd, "returnTo")}`);
+}
+
+// --- Catégories ---
+
+const CARRY_OVERS: CarryOver[] = ["PREVIOUS", "FORECAST", "NONE"];
+
+function categoryFields(fd: FormData, errors: Errors): CategoryFields {
+  const forecastAmount = parseForecast(str(fd, "forecastAmount"));
+  if (forecastAmount === undefined) errors.add("forecastAmount", "Montant invalide : 0 ou plus (ex. 150 ou 12,50).");
+  const carryOver = str(fd, "carryOver") as CarryOver;
+  if (!CARRY_OVERS.includes(carryOver)) errors.add("carryOver", "Règle de reconduction invalide.");
+  return { name: requiredField(fd, "name", errors), forecastAmount: forecastAmount ?? null, carryOver, enabled: fd.get("enabled") === "on" };
+}
+
+export async function createCategoryAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const errors = new Errors();
+  const kind = str(fd, "kind");
+  if (kind !== "INCOME" && kind !== "EXPENSE") errors.add("kind", "Choisissez dépense ou revenu.");
+  const input = { ...categoryFields(fd, errors), kind: kind as "INCOME" | "EXPENSE", parentId: str(fd, "parentId") || null };
+  if (errors.state) return errors.state;
+  const error = await run(() => createCategory(user.householdId, input));
+  if (error) return error;
+  done("/categories");
+}
+
+export async function updateCategoryAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const errors = new Errors();
+  const input = categoryFields(fd, errors);
+  if (errors.state) return errors.state;
+  const error = await run(() => updateCategory(user.householdId, str(fd, "id"), input));
+  if (error) return error;
+  done("/categories");
+}
+
+export async function deleteCategoryAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const error = await run(() => deleteCategory(user.householdId, str(fd, "id")));
+  if (error) return error;
+  done("/categories");
+}
+
+export async function addDefaultCategoriesAction(): Promise<FormState> {
+  const user = await requireUser();
+  await addDefaultCategories(user.householdId);
+  done("/categories");
 }

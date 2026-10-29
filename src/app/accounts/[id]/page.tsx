@@ -25,7 +25,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
       orderBy: [{ occurredOn: "desc" }, { createdAt: "desc" }, { id: "desc" }],
       skip: (page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
-      include: { createdBy: { select: { name: true } } },
+      include: { createdBy: { select: { name: true } }, category: { select: { name: true, parent: { select: { name: true } } } } },
     }),
   ]);
 
@@ -76,7 +76,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
             <>
               <span>
                 {t.note || label}
-                <small className="muted">{formatDay(t.occurredOn).split("-").reverse().join("/")} · {t.note ? `${label} · ` : ""}{t.createdBy.name}</small>
+                <small className="muted">{formatDay(t.occurredOn).split("-").reverse().join("/")} · {t.note ? `${label} · ` : ""}{t.category ? `${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name} · ` : ""}{t.createdBy.name}</small>
               </span>
               <span className={credit ? "amount pos" : "amount"}>{formatCents(credit ? t.amount : -t.amount, currency)}</span>
             </>

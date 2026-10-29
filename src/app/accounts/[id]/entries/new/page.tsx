@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
+import { listCategories } from "@/lib/categories";
 import { todayIn } from "@/lib/ledger";
 import { loadAccount } from "../../load";
 import { EntryForm } from "../../tx-forms";
@@ -11,7 +12,7 @@ export default async function NewEntryPage({ params }: { params: Promise<{ id: s
   return (
     <>
       <h1>Nouvelle opération · {account.name}</h1>
-      <EntryForm accountId={account.id} v={{ occurredOn: todayIn(user.household.timezone) }} />
+      <EntryForm accountId={account.id} categories={await listCategories(user.householdId)} v={{ occurredOn: todayIn(user.household.timezone) }} />
     </>
   );
 }

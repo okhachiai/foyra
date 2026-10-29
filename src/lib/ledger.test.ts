@@ -18,7 +18,7 @@ async function account(name: string, initialBalance: number) {
   return (await prisma.account.create({ data: { householdId: hh, name, kind: "CHECKING", initialBalance } })).id;
 }
 const expense = (accountId: string, amount: number) =>
-  createEntry(hh, user, { accountId, kind: "EXPENSE", amount, occurredOn: day, note: null });
+  createEntry(hh, user, { accountId, kind: "EXPENSE", amount, occurredOn: day, note: null, categoryId: null });
 const transfer = (fromAccountId: string, toAccountId: string, amount: number) =>
   createTransfer(hh, user, { fromAccountId, toAccountId, amount, occurredOn: day, note: null });
 
@@ -109,7 +109,7 @@ describe("ledger", () => {
   it("Modifier une dépense 45,50 → 50,00 : solde recalculé", async () => {
     const c = await account("Courant", 100000);
     const t = await expense(c, 4550);
-    await updateEntry(hh, t.id, { accountId: c, kind: "EXPENSE", amount: 5000, occurredOn: day, note: null });
+    await updateEntry(hh, t.id, { accountId: c, kind: "EXPENSE", amount: 5000, occurredOn: day, note: null, categoryId: null });
     expect(await accountBalance(hh, c)).toBe(95000);
   });
 
@@ -140,7 +140,7 @@ describe("ledger", () => {
     await expect(getAccount(hh, "inexistant")).rejects.toBeInstanceOf(NotFoundError);
     await expect(getAccount("autre-foyer", c)).rejects.toBeInstanceOf(NotFoundError);
     await expect(accountBalance("autre-foyer", c)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(createEntry("autre-foyer", user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(createEntry("autre-foyer", user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null })).rejects.toBeInstanceOf(NotFoundError);
     const t = await expense(c, 100);
     await expect(deleteTransaction("autre-foyer", t.id)).rejects.toBeInstanceOf(NotFoundError);
   });
