@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum AccountKind {
+  CHECKING
+  SAVINGS
+  CASH
+  OTHER
+}
+
+enum TransactionKind {
+  INCOME
+  EXPENSE
+  TRANSFER
+}
+
+// Sens d'une ligne de virement : OUT débite le compte, IN le crédite.
+enum TransferSide {
+  OUT
+  IN
+}
+
+model Household {
+  id        String   @id @default(cuid())
+  // Un seul foyer par instance : la colonne unique (+ CHECK = true) empêche un second setup concurrent.
+  singleton Boolean  @unique @default(true)
+  name      String
+  currency  String   @default("EUR")
+  timezone  String   @default("Europe/Paris")
+  createdAt DateTime @default(now())
+
+  users        User[]
+  accounts     Account[]
+  transactions Transaction[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  householdId  String
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(MEMBER)
+  createdAt    DateTime @default(now())
+
+  household    Household     @relation(fields: [householdId], references: [id])
+  sessions     Session[]
+  transactions Transaction[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id             String      @id @default(cuid())
+  householdId    String
+  kind           AccountKind
+  name           String
+  initialBalance Int         @default(0)
+  archivedAt     DateTime?
+  createdAt      DateTime    @default(now())
+
+  household    Household     @relation(fields: [householdId], references: [id])
+  transactions Transaction[]
+
+  @@index([householdId])
+}
+
+model Transaction {
+  id           String          @id @default(cuid())
+  householdId  String
+  accountId    String
+  createdById  String
+  kind         TransactionKind
+  amount       Int
+  occurredOn   DateTime        @db.Date
+  note         String?
+  transferId   String?
+  transferSide TransferSide?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id])
+  account   Account   @relation(fields: [accountId], references: [id])
+  createdBy User      @relation(fields: [createdById], references: [id])
+
+  @@unique([transferId, transferSide])
+  @@index([accountId, occurredOn])
+  @@index([householdId])
+}

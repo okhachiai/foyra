@@ -3,14 +3,14 @@ title: 'Foyra — socle auto-hébergé : foyer, utilisateurs, comptes, transacti
 type: 'feature'
 ticket: ''
 created: '2026-10-29'
-status: 'ready-for-dev'
-baseline_revision: ''
+status: 'built'
+baseline_revision: '7f1a4c4026a18f72953fb670999103ff9e6dff16'
 route: 'full'
 route_source: 'auto'
 risk: 'high'
-review: ''
-review_source: ''
-lenses_ran: []
+review: 'quick'
+review_source: 'pinned'
+lenses_ran: ['quick']
 review_loop_iteration: 0
 context: []
 ---
@@ -83,16 +83,16 @@ Projet vierge. Arborescence prévue :
 ## Tasks & Acceptance
 
 **Execution:**
-- [ ] `package.json`, `tsconfig.json`, `next.config.ts` -- Next.js (output standalone, `serverActions.allowedOrigins` via `APP_URL`), Prisma, argon2, Vitest
-- [ ] `prisma/schema.prisma` + migration initiale -- modèle ci-dessus, CHECK en SQL brut
-- [ ] `src/lib/money.ts` -- parse/format en centimes
-- [ ] `src/lib/auth.ts`, `src/middleware.ts` -- sessions, gardes, limitation
-- [ ] `src/lib/ledger.ts` -- règles financières et virements atomiques
-- [ ] `src/app/setup`, `src/app/login` -- setup transactionnel (refus si un foyer existe), connexion, déconnexion
-- [ ] `src/app/accounts/*` -- CRUD comptes, archivage, saisie/modification/suppression des transactions et virements, historique
-- [ ] `src/app/members` -- création de membre par l'admin
-- [ ] `src/lib/*.test.ts` -- un test par ligne de la matrice, sur un vrai Postgres (`DATABASE_URL_TEST`, service `db-test` dans compose)
-- [ ] `Dockerfile`, `docker-entrypoint.sh`, `docker-compose.yml`, `.env.example`, `README.md` -- déploiement, sauvegarde `pg_dump`
+- [x] `package.json`, `tsconfig.json`, `next.config.ts` -- Next.js (output standalone, `serverActions.allowedOrigins` via `APP_URL`), Prisma, argon2, Vitest
+- [x] `prisma/schema.prisma` + migration initiale -- modèle ci-dessus, CHECK en SQL brut
+- [x] `src/lib/money.ts` -- parse/format en centimes
+- [x] `src/lib/auth.ts`, `src/middleware.ts` -- sessions, gardes, limitation
+- [x] `src/lib/ledger.ts` -- règles financières et virements atomiques
+- [x] `src/app/setup`, `src/app/login` -- setup transactionnel (refus si un foyer existe), connexion, déconnexion
+- [x] `src/app/accounts/*` -- CRUD comptes, archivage, saisie/modification/suppression des transactions et virements, historique
+- [x] `src/app/members` -- création de membre par l'admin
+- [x] `src/lib/*.test.ts` -- un test par ligne de la matrice, sur un vrai Postgres (`DATABASE_URL_TEST`, service `db-test` dans compose)
+- [x] `Dockerfile`, `docker-entrypoint.sh`, `docker-compose.yml`, `.env.example`, `README.md` -- déploiement, sauvegarde `pg_dump`
 
 **Acceptance Criteria:**
 - Given une machine avec Docker, when `cp .env.example .env && docker compose up -d`, then `/` redirige vers `/setup`.
@@ -103,9 +103,30 @@ Projet vierge. Arborescence prévue :
 
 ## Implementation Notes
 
+- Versions figées : Next.js 15.5.28, React 19.2.9, Prisma 6.19.3 (Prisma 7/8 et Next 16 écartés : changements de rupture), `@node-rs/argon2` (binaires précompilés, pas de node-gyp), Vitest 3.2.7.
+- Sens des virements : colonne `transferSide` (OUT/IN) en plus de `kind = TRANSFER`, indispensable puisque `amount` est toujours > 0. CHECK SQL : `kind = TRANSFER` ⇔ `transferId` non nul ⇔ `transferSide` non nul ; `@@unique([transferId, transferSide])`.
+- Foyer unique : colonne `Household.singleton` unique + CHECK = true ; un setup concurrent échoue en P2002 → redirection `/login`.
+- Écritures du grand livre dans des transactions interactives qui verrouillent les comptes (`SELECT … FOR UPDATE`, ordre trié) : pas de saisie concurrente pendant un archivage. Un compte archivé est en lecture seule (ni saisie, ni modification, ni suppression de ses lignes).
+- Renouvellement de session (< 15 j restants) uniquement quand le cookie peut être réécrit (Server Action), pour garder cookie et base alignés.
+- Pas de route handler : la déconnexion est une Server Action. Les Server Actions renvoient « Élément introuvable » (sans distinction) pour un id hors foyer ; les pages renvoient 404.
+- Formulaires : `useActionState` + soumission via `onSubmit` pour conserver la saisie en cas d'erreur de champ.
+- Compose : `POSTGRES_PASSWORD` par défaut `foyra` (base non exposée sur l'hôte) ; ports `APP_PORT`/`APP_BIND` configurables ; `db-test` sous le profil `test` (tmpfs, port 5433).
+
 ## Plan Change Log
 
+- 2026-10-29 : ajout de `Transaction.transferSide` et `User.name` au modèle (non listés dans la Code Map, nécessaires au calcul du solde et à l'affichage).
+
 ## Review Triage Log
+
+**Passe 1 (quick)** — high 0 · medium 3 · low 2 · false 0 · maybe-false 0
+
+| # | Finding | Verdict | Route | Evidence |
+|---|---------|---------|-------|----------|
+| 1 | Erreur « compte archivé » invisible (champ sans `<Field>`) | medium | patch | `run()` renvoie `fields.accountId`, `ActionForm` n'affiche que `state.error` ; EntryForm/archive/suppression n'ont pas ce champ. |
+| 2 | Virement dont l'autre côté est archivé reste modifiable | medium | patch | `[tid]/page.tsx:15` ne teste que le compte courant ; `TransferForm` reçoit seulement les comptes actifs. |
+| 3 | Limite par IP contournable / clé `unknown` partagée | medium | patch | `actions.ts:104` prend la 1ʳᵉ entrée X-Forwarded-For (fournie par le client), repli `unknown` commun. Correctif : entrée la plus à droite, pas de clé IP si inconnue. Résiduel différé (proxy de confiance). |
+| 4 | Ligne lue avant le verrou des comptes | low | patch | `deleteTransaction` lit hors `$transaction`, les autres avant `lockActiveAccounts` ; correctif = relire après verrou, trivial. |
+| 5 | Renouvellement de session absent en simple navigation | low | reject | Conforme au plan (renouvelé quand le cookie peut être réécrit) ; 30 j sans aucune action = rare, correctif ajoute de la complexité. |
 
 ## Verification
 

@@ -22,3 +22,6 @@
 - source_plan: `/Users/oktech/Sites/foyra-project/_bmad-output/initiative-foyra/plan-foyra-socle-comptes-transactions.md`
   summary: Gestion avancée des membres : désactivation, interdiction de retirer le dernier admin, changement de mot de passe par l'utilisateur, script CLI de réinitialisation du mot de passe.
   evidence: Sorti du plan socle à la relecture pour rester proche de la cible de taille ; le socle garde le rôle ADMIN/MEMBER et la création des membres par l'admin.
+- source_plan: `/Users/oktech/Sites/foyra-project/_bmad-output/initiative-foyra/plan-foyra-socle-comptes-transactions.md`
+  summary: Limite de connexion par IP fiable derrière un reverse proxy (réglage de proxy de confiance, ex. TRUST_PROXY).
+  evidence: Sans proxy de confiance déclaré, l'en-tête X-Forwarded-For reste contrôlable par le client ; seule la limite par email est garantie.
