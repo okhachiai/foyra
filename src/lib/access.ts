@@ -1,11 +1,11 @@
-import type { AccessLevel, AccountSharing } from "@prisma/client";
+import type { AccessLevel, AccountSharing, Role } from "@prisma/client";
 import { prisma } from "./db";
 import { LedgerError, NotFoundError } from "./ledger";
 
 /**
  * Portée d'un utilisateur : comptes lisibles, modifiables et gérables (null = tous les comptes du foyer, usage interne et tests).
  * Seul point de contrôle des accès : toute fonction de src/lib qui touche un compte la reçoit.
- * Le rôle admin ne donne aucun accès aux comptes : seuls comptent les accès explicites et le partage « tout le foyer ».
+ * L'admin voit et gère tous les comptes du foyer ; pour un membre, seuls comptent les accès explicites et le partage « tout le foyer ».
  */
 export type Scope = { householdId: string; read: string[] | null; write: string[] | null; manage: string[] | null };
 
@@ -23,7 +23,8 @@ export function effectiveLevel(sharing: AccountSharing, explicit: AccessLevel | 
   return shared && RANK[shared] > RANK[explicit] ? shared : explicit;
 }
 
-export async function getScope(user: { id: string; householdId: string }): Promise<Scope> {
+export async function getScope(user: { id: string; householdId: string; role?: Role }): Promise<Scope> {
+  if (user.role === "ADMIN") return fullScope(user.householdId);
   const accounts = await prisma.account.findMany({
     where: { householdId: user.householdId, OR: [{ sharing: "HOUSEHOLD" }, { access: { some: { userId: user.id } } }] },
     select: { id: true, sharing: true, access: { where: { userId: user.id }, select: { level: true } } },

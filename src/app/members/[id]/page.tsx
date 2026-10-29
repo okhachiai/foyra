@@ -51,7 +51,7 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
       <h2>Accès aux comptes</h2>
       <p className="muted">
         Les accès (lecture, écriture, gestion) se règlent depuis la page de chaque compte, par ses gestionnaires.
-        Le rôle administrateur ne donne aucun accès automatique aux comptes privés des autres membres.
+        Un administrateur a accès à tous les comptes du foyer.
       </p>
     </>
   );

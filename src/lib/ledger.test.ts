@@ -186,7 +186,7 @@ describe("ledger", () => {
     const t = await expense(c, 100);
     const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!;
     const s = await getScope(other);
-    expect(s.read).toEqual([]);
+    expect(s.read).toBeNull(); // admin : portée complète, mais limitée à son propre foyer
     await expect(getAccount(s, c)).rejects.toBeInstanceOf(NotFoundError);
     await expect(createEntry(s, other.id, { accountId: c, kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null })).rejects.toBeInstanceOf(NotFoundError);
     await expect(deleteTransaction(s, t.id)).rejects.toBeInstanceOf(NotFoundError);

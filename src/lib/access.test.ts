@@ -47,6 +47,13 @@ beforeEach(async () => {
 });
 
 describe("accès par compte", () => {
+  it("Admin : portée complète, même sur un compte privé d'un membre", async () => {
+    const privé = await createAccount(await member(), memberId, { name: "Privé", kind: "CHECKING", initialBalance: 0, sharing: "SELECTED" });
+    const s = await getScope({ id: adminId, householdId: hh, role: "ADMIN" });
+    expect([s.read, s.write, s.manage]).toEqual([null, null, null]);
+    await expect(getAccount(s, privé.id)).resolves.toBeTruthy();
+  });
+
   it("Migration : chaque membre existant reçoit l'écriture sur chaque compte du foyer", async () => {
     expect(await prisma.accountAccess.count({ where: { userId: memberId } })).toBe(0); // nouveau membre : aucun accès
     const sql = readFileSync(new URL("../../prisma/migrations/20261101000000_account_access/migration.sql", import.meta.url), "utf8");
