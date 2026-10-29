@@ -74,15 +74,18 @@ export function writableAccounts(scope: Scope, keep?: string) {
 /** `ownerId` : propriétaire (null = compte commun). */
 type AccountData = { kind: AccountKind; name: string; notes?: string; ownerId?: string | null };
 
-/** Le propriétaire doit être un utilisateur du foyer. */
+/** Le propriétaire doit être un utilisateur actif du foyer. */
 async function checkOwner(tx: Db, householdId: string, ownerId: string | null | undefined) {
-  if (ownerId && !(await tx.user.count({ where: { id: ownerId, householdId } }))) throw new NotFoundError();
+  if (ownerId && !(await tx.user.count({ where: { id: ownerId, householdId, disabledAt: null } }))) throw new NotFoundError();
 }
 
 /** Crée un compte : son créateur en est gestionnaire (et propriétaire, sauf `ownerId` explicite) ; partage par défaut limité aux membres sélectionnés. */
 export function createAccount(scope: Scope, userId: string, data: AccountData & { initialBalance: number; sharing?: AccountSharing }) {
   return prisma.$transaction(async (tx) => {
     const ownerId = data.ownerId === undefined ? userId : data.ownerId;
+    if (scope.read && ownerId !== null && ownerId !== userId) {
+      throw new LedgerError("Seul l'admin peut attribuer un compte à un autre membre.", "ownerId");
+    }
     await checkOwner(tx, scope.householdId, ownerId);
     const account = await tx.account.create({ data: { ...data, ownerId, householdId: scope.householdId } });
     await tx.accountAccess.create({ data: { userId, accountId: account.id, level: "MANAGE" } });
@@ -97,14 +100,18 @@ export function createAccount(scope: Scope, userId: string, data: AccountData & 
 export async function updateAccount(scope: Scope, id: string, data: AccountData, month: Date) {
   assertManageable(scope, id);
   const householdId = scope.householdId;
+  const next = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1));
   await prisma.$transaction(async (tx) => {
+    // Lignes du mois avant le compte : même ordre de verrous que updateEntry (Transaction → Account), anti-interblocage.
+    if (data.ownerId !== undefined) {
+      await lockLines(tx, householdId, Prisma.sql`"accountId" = ${id} AND "kind" IN ('INCOME', 'EXPENSE') AND "occurredOn" >= ${month} AND "occurredOn" < ${next}`);
+    }
     const [a] = await tx.$queryRaw<{ ownerId: string | null }[]>`
       SELECT "ownerId" FROM "Account" WHERE "id" = ${id} AND "householdId" = ${householdId} AND "archivedAt" IS NULL FOR UPDATE`;
     if (!a) throw new LedgerError("Compte introuvable ou archivé.");
     await checkOwner(tx, householdId, data.ownerId);
     await tx.account.update({ where: { id }, data });
     if (data.ownerId === undefined || data.ownerId === a.ownerId) return;
-    const next = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1));
     await tx.transaction.updateMany({
       where: { householdId, accountId: id, kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: next }, fixedPayment: null },
       data: { shared: data.ownerId === null },

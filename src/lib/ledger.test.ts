@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { setupHousehold } from "./auth";
+import { createMember, setupHousehold } from "./auth";
 import { fullScope, getScope } from "./access";
 import { prisma } from "./db";
 import { parseMonth } from "./budget";
@@ -248,5 +248,41 @@ describe("ledger", () => {
     const shared = async (id: string) => (await prisma.transaction.findUniqueOrThrow({ where: { id } })).shared;
     expect([await shared(nv.id), await shared(oct.id), await shared(p.transactionId)]).toEqual([false, true, true]);
     expect((await getAccount(fullScope(hh), c)).ownerId).toBe(user);
+  });
+
+  it("Changer le propriétaire : perso → commun, recettes et dépenses du mois deviennent communes, virements inchangés", async () => {
+    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
+    const e = await account("Épargne", 0);
+    const nov = parseMonth("2026-11")!, d = parseDay("2026-11-10")!;
+    const dep = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: d, note: null, categoryId: null });
+    const rec = await createEntry(fullScope(hh), user, { accountId: c, kind: "INCOME", amount: 100, occurredOn: d, note: null, categoryId: null });
+    const tid = await createTransfer(fullScope(hh), user, { fromAccountId: c, toAccountId: e, amount: 50, occurredOn: d, note: null });
+    await prisma.transaction.updateMany({ where: { transferId: tid }, data: { shared: false } });
+    await updateAccount(fullScope(hh), c, { name: "Perso", kind: "CHECKING", ownerId: null }, nov);
+    const rows = await prisma.transaction.findMany({ where: { OR: [{ id: { in: [dep.id, rec.id] } }, { transferId: tid }] } });
+    expect(rows.filter((r) => r.kind !== "TRANSFER").map((r) => r.shared)).toEqual([true, true]);
+    expect(rows.filter((r) => r.kind === "TRANSFER").map((r) => r.shared)).toEqual([false, false]);
+  });
+
+  it("Propriétaire inchangé : aucune bascule ; propriétaire d'un autre foyer refusé", async () => {
+    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
+    const nov = parseMonth("2026-11")!;
+    const t = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: parseDay("2026-11-10")!, note: null, categoryId: null, shared: true });
+    await updateAccount(fullScope(hh), c, { name: "Perso 2", kind: "CHECKING", ownerId: user }, nov);
+    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: t.id } })).shared).toBe(true);
+    const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!;
+    await expect(updateAccount(fullScope(hh), c, { name: "Perso", kind: "CHECKING", ownerId: other.id }, nov)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("Attribution : un membre ne peut créer un compte qu'à son nom ou commun ; membre désactivé refusé", async () => {
+    const m1 = (await createMember(hh, { name: "M1", email: "m1@test.fr", password: "password1", role: "MEMBER" }))!.id;
+    const m2 = (await createMember(hh, { name: "M2", email: "m2@test.fr", password: "password1", role: "MEMBER" }))!.id;
+    const s = await getScope({ id: m1, householdId: hh });
+    const data = { name: "X", kind: "CHECKING" as const, initialBalance: 0 };
+    await expect(createAccount(s, m1, { ...data, ownerId: m2 })).rejects.toMatchObject({ field: "ownerId" });
+    expect((await createAccount(s, m1, data)).ownerId).toBe(m1);
+    expect((await createAccount(s, m1, { ...data, ownerId: null })).ownerId).toBeNull();
+    await prisma.user.update({ where: { id: m2 }, data: { disabledAt: new Date() } });
+    await expect(createAccount(fullScope(hh), user, { ...data, ownerId: m2 })).rejects.toBeInstanceOf(NotFoundError);
   });
 });
