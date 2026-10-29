@@ -31,6 +31,12 @@ enum TransferSide {
   IN
 }
 
+// Accès d'un membre à un compte ; absence de ligne = aucun accès. L'admin a toujours accès à tout.
+enum AccessLevel {
+  READ
+  WRITE
+}
+
 enum CategoryKind {
   INCOME
   EXPENSE
@@ -79,8 +85,9 @@ model User {
   createdAt    DateTime @default(now())
 
   household    Household     @relation(fields: [householdId], references: [id])
-  sessions     Session[]
-  transactions Transaction[]
+  sessions      Session[]
+  transactions  Transaction[]
+  accountAccess AccountAccess[]
 }
 
 model Session {
@@ -107,8 +114,21 @@ model Account {
   household    Household     @relation(fields: [householdId], references: [id])
   transactions Transaction[]
   fixedCharges FixedCharge[]
+  access       AccountAccess[]
 
   @@index([householdId])
+}
+
+model AccountAccess {
+  userId    String
+  accountId String
+  level     AccessLevel
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([userId, accountId])
+  @@index([accountId])
 }
 
 model Transaction {

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { parseDay, todayIn } from "@/lib/ledger";
 import { listLoans } from "@/lib/loans";
@@ -8,7 +9,7 @@ import { monthYear } from "./loan-form";
 export default async function LoansPage() {
   const user = await requireUser();
   const today = parseDay(todayIn(user.household.timezone))!;
-  const loans = await listLoans(user.householdId, today);
+  const loans = await listLoans(await getScope(user), today);
   const money = (cents: number) => formatCents(cents, user.household.currency);
 
   return (

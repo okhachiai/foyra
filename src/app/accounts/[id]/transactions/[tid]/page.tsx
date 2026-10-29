@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { listCategories } from "@/lib/categories";
 import { prisma } from "@/lib/db";
-import { formatDay, getTransfer } from "@/lib/ledger";
+import { formatDay, getTransfer, writableAccounts } from "@/lib/ledger";
 import { deleteTransactionAction } from "../../../../actions";
 import { ActionForm } from "../../../../form";
 import { loadAccount } from "../../load";
@@ -11,22 +12,23 @@ import { EntryForm, TransferForm } from "../../tx-forms";
 export default async function EditTransactionPage({ params }: { params: Promise<{ id: string; tid: string }> }) {
   const user = await requireUser();
   const { id, tid } = await params;
-  const account = await loadAccount(user.householdId, id);
+  const scope = await getScope(user);
+  const account = await loadAccount(scope, id, "WRITE");
   const t = await prisma.transaction.findFirst({ where: { id: tid, householdId: user.householdId, accountId: account.id } });
   if (!t || account.archivedAt) notFound();
   const v = { id: t.id, amount: t.amount, occurredOn: formatDay(t.occurredOn), note: t.note, categoryId: t.categoryId };
 
   let form;
   if (t.transferId) {
-    const transfer = await getTransfer(user.householdId, t.transferId);
-    const accounts = await prisma.account.findMany({ where: { householdId: user.householdId, archivedAt: null }, orderBy: { createdAt: "asc" } });
+    const transfer = await getTransfer(scope, t.transferId);
+    const accounts = await writableAccounts(scope);
     const active = (id: string) => accounts.some((a) => a.id === id);
-    // L'autre côté est sur un compte archivé : virement en lecture seule.
+    // L'autre côté est sur un compte archivé ou non modifiable : virement en lecture seule.
     if (!active(transfer.out.accountId) || !active(transfer.in.accountId)) {
       return (
         <>
           <h1>Virement</h1>
-          <p className="muted">L’un des deux comptes de ce virement est archivé : il ne peut plus être modifié ni supprimé.</p>
+          <p className="muted">L’un des deux comptes de ce virement est archivé ou en lecture seule pour vous : il ne peut pas être modifié ni supprimé.</p>
         </>
       );
     }

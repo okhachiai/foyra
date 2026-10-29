@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { canWrite, getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { addMonths, formatMonth, parseMonth } from "@/lib/budget";
 import { getCalendar, type ChargeStatus } from "@/lib/calendar";
@@ -17,7 +18,8 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
   const todayStr = todayIn(user.household.timezone);
   const today = parseDay(todayStr)!;
   const month = parseMonth((await searchParams).m) ?? parseMonth(todayStr.slice(0, 7))!;
-  const { days, upcoming, forecast } = await getCalendar(user.householdId, month, today);
+  const scope = await getScope(user);
+  const { days, upcoming, forecast } = await getCalendar(scope, month, today);
   const money = (cents: number) => formatCents(cents, user.household.currency);
   const m = formatMonth(month);
   const lastDay = formatDay(new Date(addMonths(month, 1).getTime() - 86_400_000));
@@ -85,9 +87,11 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
                       </div>
                       {t ? (
                         <small>
-                          <span className={cls}>{label}</span> · {money(t.amount)} le {frDay(t.occurredOn)} ·{" "}
-                          <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>voir la dépense</Link>
+                          <span className={cls}>{label}</span> · {money(t.amount)} le {frDay(t.occurredOn)}
+                          {canWrite(scope, t.accountId) && <> · <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>voir la dépense</Link></>}
                         </small>
+                      ) : !canWrite(scope, c.accountId) ? (
+                        <small className={cls}>{label}</small>
                       ) : (
                         <details>
                           <summary><span className={cls}>{label}</span> · Marquer payée</summary>
@@ -112,7 +116,7 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
               {transactions.map((t) => {
                 const credit = t.kind === "INCOME" || t.transferSide === "IN";
                 const cat = t.category && `${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name}`;
-                const label = t.kind === "TRANSFER" ? `Virement vers ${t.toAccount ?? "?"}` : t.kind === "INCOME" ? "Recette" : "Dépense";
+                const label = t.kind === "TRANSFER" ? `Virement ${t.transferSide === "OUT" ? "vers" : "depuis"} ${t.otherAccount ?? "compte non partagé"}` : t.kind === "INCOME" ? "Recette" : "Dépense";
                 const content = (
                   <>
                     <span>
@@ -122,8 +126,8 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
                     <span className={credit ? "amount pos" : "amount"}>{money(credit ? t.amount : -t.amount)}</span>
                   </>
                 );
-                // Compte archivé : opération en lecture seule, comme sur la page du compte.
-                return <li key={t.id}>{t.account.archivedAt ? <div>{content}</div> : <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>{content}</Link>}</li>;
+                // Compte archivé ou non modifiable : opération en lecture seule, comme sur la page du compte.
+                return <li key={t.id}>{t.account.archivedAt || !canWrite(scope, t.accountId) ? <div>{content}</div> : <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>{content}</Link>}</li>;
               })}
             </ul>
           </section>

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
 import { addDefaultCategories, createCategory, deleteCategory, getCategory, listCategories, parseForecast, updateCategory } from "./categories";
+import { fullScope } from "./access";
 import { prisma } from "./db";
 import { accountBalance, createEntry, createTransfer, LedgerError, NotFoundError, parseDay, updateEntry } from "./ledger";
 
@@ -13,7 +14,7 @@ const cat = (name: string, kind: "INCOME" | "EXPENSE" = "EXPENSE", parentId: str
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, parentId: null } })).id;
 const account = async () => (await prisma.account.create({ data: { householdId: hh, name: "Courant", kind: "CHECKING", initialBalance: 100000 } })).id;
 const expense = (accountId: string, categoryId: string | null, amount = 4550) =>
-  createEntry(hh, user, { accountId, kind: "EXPENSE", amount, occurredOn: day, note: null, categoryId });
+  createEntry(fullScope(hh), user, { accountId, kind: "EXPENSE", amount, occurredOn: day, note: null, categoryId });
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
@@ -68,9 +69,9 @@ describe("catégories", () => {
     expect(t.categoryId).toBe(courses);
     const salaires = await byName("Salaires");
     await expect(expense(c, salaires)).rejects.toMatchObject({ field: "categoryId", message: "Catégorie incompatible avec le type d’opération." });
-    await expect(updateEntry(hh, t.id, { accountId: c, kind: "INCOME", amount: 100, occurredOn: day, note: null, categoryId: courses })).rejects.toBeInstanceOf(LedgerError);
+    await expect(updateEntry(fullScope(hh), t.id, { accountId: c, kind: "INCOME", amount: 100, occurredOn: day, note: null, categoryId: courses })).rejects.toBeInstanceOf(LedgerError);
     const e = (await prisma.account.create({ data: { householdId: hh, name: "Épargne", kind: "SAVINGS" } })).id;
-    await createTransfer(hh, user, { fromAccountId: c, toAccountId: e, amount: 100, occurredOn: day, note: null });
+    await createTransfer(fullScope(hh), user, { fromAccountId: c, toAccountId: e, amount: 100, occurredOn: day, note: null });
     await expect(prisma.transaction.updateMany({ where: { kind: "TRANSFER" }, data: { categoryId: courses } })).rejects.toThrow();
   });
 
@@ -78,10 +79,10 @@ describe("catégories", () => {
     const c = await account();
     const courses = await byName("Courses");
     const t = await expense(c, courses);
-    const before = await accountBalance(hh, c);
+    const before = await accountBalance(fullScope(hh), c);
     await deleteCategory(hh, courses);
     expect((await prisma.transaction.findUniqueOrThrow({ where: { id: t.id } })).categoryId).toBeNull();
-    expect(await accountBalance(hh, c)).toBe(before);
+    expect(await accountBalance(fullScope(hh), c)).toBe(before);
     await expect(deleteCategory(hh, await byName("Factures"))).rejects.toBeInstanceOf(LedgerError);
   });
 

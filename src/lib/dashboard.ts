@@ -1,3 +1,4 @@
+import type { Scope } from "./access";
 import { available, getBudget } from "./budget";
 import { chargeStatus } from "./calendar";
 import { listAccounts } from "./ledger";
@@ -6,9 +7,9 @@ import { listAccounts } from "./ledger";
  * Tableau de bord du mois de `today` (jour du foyer) : combien avons-nous, combien reste-t-il à payer,
  * combien pouvons-nous dépenser. Aucun calcul propre : soldes de listAccounts, budget de getBudget, statut de chargeStatus.
  */
-export async function getDashboard(householdId: string, today: Date) {
+export async function getDashboard(scope: Scope, today: Date) {
   const month = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const [accounts, budget] = await Promise.all([listAccounts(householdId), getBudget(householdId, month)]);
+  const [accounts, budget] = await Promise.all([listAccounts(scope), getBudget(scope, month)]);
   const active = accounts.filter((a) => !a.archivedAt);
 
   // Ordre de listMonthCharges (par échéance) : les retards (échéance passée) sont déjà en tête.

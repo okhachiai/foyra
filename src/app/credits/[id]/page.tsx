@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { canWrite, getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { formatMonth } from "@/lib/budget";
 import { listCategories } from "@/lib/categories";
-import { prisma } from "@/lib/db";
-import { formatDay, NotFoundError, parseDay, todayIn } from "@/lib/ledger";
+import { formatDay, NotFoundError, parseDay, todayIn, writableAccounts } from "@/lib/ledger";
 import { getLoan } from "@/lib/loans";
 import { formatCents } from "@/lib/money";
 import { deleteLoanAction, prepayLoanAction } from "../../actions";
@@ -17,14 +17,16 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
   const user = await requireUser();
   const todayStr = todayIn(user.household.timezone);
   const today = parseDay(todayStr)!;
-  const loan = await getLoan(user.householdId, (await params).id, today).catch((e) => {
+  const scope = await getScope(user);
+  const loan = await getLoan(scope, (await params).id, today).catch((e) => {
     if (e instanceof NotFoundError) notFound();
     throw e;
   });
   const c = loan.fixedCharge;
+  const editable = canWrite(scope, c.accountId);
   const [accounts, categories] = await Promise.all([
     // Le compte actuel reste affiché même archivé : l'enregistrement demandera d'en choisir un autre.
-    prisma.account.findMany({ where: { householdId: user.householdId, OR: [{ archivedAt: null }, { id: c.accountId }] }, orderBy: { createdAt: "asc" } }),
+    writableAccounts(scope, c.accountId),
     listCategories(user.householdId),
   ]);
   const money = (cents: number) => formatCents(cents, user.household.currency);
@@ -51,7 +53,8 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
         </dl>
       </section>
 
-      <details>
+      {!editable && <p className="muted">Accès en lecture seule sur le compte de ce crédit.</p>}
+      {editable && <details>
         <summary>Remboursement anticipé</summary>
         <ActionForm action={prepayLoanAction}>
           <input type="hidden" name="id" value={loan.id} />
@@ -70,7 +73,7 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
           <p className="muted"><small>Crée la dépense sur {c.name} : supprimer cette dépense annule le remboursement.</small></p>
           <button type="submit">Enregistrer le remboursement</button>
         </ActionForm>
-      </details>
+      </details>}
 
       {loan.prepayments.length > 0 && (
         <>
@@ -78,13 +81,23 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
           <ul className="list">
             {loan.prepayments.map((p) => (
               <li key={p.id}>
-                <Link href={`/accounts/${p.transaction.accountId}/transactions/${p.transaction.id}`}>
-                  <span>
-                    {frDay(p.transaction.occurredOn)}
-                    <small className="muted">{p.mode === "REDUCE_TERM" ? "Réduction de durée" : "Réduction de mensualité"} · voir la dépense</small>
-                  </span>
-                  <span className="amount">{money(p.transaction.amount)}</span>
-                </Link>
+                {editable ? (
+                  <Link href={`/accounts/${p.transaction.accountId}/transactions/${p.transaction.id}`}>
+                    <span>
+                      {frDay(p.transaction.occurredOn)}
+                      <small className="muted">{p.mode === "REDUCE_TERM" ? "Réduction de durée" : "Réduction de mensualité"} · voir la dépense</small>
+                    </span>
+                    <span className="amount">{money(p.transaction.amount)}</span>
+                  </Link>
+                ) : (
+                  <div>
+                    <span>
+                      {frDay(p.transaction.occurredOn)}
+                      <small className="muted">{p.mode === "REDUCE_TERM" ? "Réduction de durée" : "Réduction de mensualité"}</small>
+                    </span>
+                    <span className="amount">{money(p.transaction.amount)}</span>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -116,18 +129,18 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
         </table>
       </div>
 
-      <details>
+      {editable && <details>
         <summary>Modifier le crédit</summary>
         <LoanForm loan={loan} accounts={accounts} categories={categories} firstDue="" />
-      </details>
+      </details>}
 
-      <ActionForm
+      {editable && <ActionForm
         action={deleteLoanAction} className="danger-zone"
         confirm="Supprimer ce crédit ? Les dépenses déjà payées et les remboursements anticipés sont conservés comme dépenses."
       >
         <input type="hidden" name="id" value={loan.id} />
         <button type="submit" className="danger">Supprimer</button>
-      </ActionForm>
+      </ActionForm>}
     </>
   );
 }

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { canWrite, getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { addMonths, formatMonth, parseMonth } from "@/lib/budget";
 import { listMonthCharges } from "@/lib/charges";
@@ -13,7 +14,8 @@ const frDay = (d: Date) => formatDay(d).split("-").reverse().join("/");
 export default async function ChargesPage({ searchParams }: { searchParams: Promise<{ m?: string }> }) {
   const user = await requireUser();
   const month = parseMonth((await searchParams).m) ?? parseMonth(todayIn(user.household.timezone).slice(0, 7))!;
-  const charges = await listMonthCharges(user.householdId, month);
+  const scope = await getScope(user);
+  const charges = await listMonthCharges(scope, month);
   const money = (cents: number) => formatCents(cents, user.household.currency);
   const total = charges.reduce((s, c) => s + c.amount, 0);
   const unpaid = charges.reduce((s, c) => s + (c.payment ? 0 : c.amount), 0);
@@ -59,9 +61,11 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
                 </div>
                 {t ? (
                   <small>
-                    <span className="pos">Payée</span> · {money(t.amount)} le {frDay(t.occurredOn)} ·{" "}
-                    <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>voir la dépense</Link>
+                    <span className="pos">Payée</span> · {money(t.amount)} le {frDay(t.occurredOn)}
+                    {canWrite(scope, t.accountId) && <> · <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>voir la dépense</Link></>}
                   </small>
+                ) : !canWrite(scope, c.accountId) ? (
+                  <small className="neg">À payer</small>
                 ) : (
                   <details>
                     <summary><span className="neg">À payer</span> · Marquer payée</summary>

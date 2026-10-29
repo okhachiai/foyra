@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import type { ChargeStatus } from "@/lib/calendar";
 import { listCategories } from "@/lib/categories";
 import { getDashboard } from "@/lib/dashboard";
-import { formatDay, parseDay, todayIn } from "@/lib/ledger";
+import { formatDay, parseDay, todayIn, writableAccounts } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
 import { KIND_LABELS } from "../accounts/kinds";
 import { EntryForm } from "../accounts/[id]/tx-forms";
@@ -15,7 +16,10 @@ const STATUS: Record<ChargeStatus, [string, string]> = { paid: ["pos", "Payée"]
 export default async function DashboardPage() {
   const user = await requireUser();
   const todayStr = todayIn(user.household.timezone);
-  const [d, categories] = await Promise.all([getDashboard(user.householdId, parseDay(todayStr)!), listCategories(user.householdId)]);
+  const scope = await getScope(user);
+  const [d, categories, writable] = await Promise.all([
+    getDashboard(scope, parseDay(todayStr)!), listCategories(user.householdId), writableAccounts(scope),
+  ]);
   const money = (cents: number) => formatCents(cents, user.household.currency);
 
   return (
@@ -88,13 +92,13 @@ export default async function DashboardPage() {
         )}
       </section>
 
-      {d.accounts.length === 0 ? (
+      {writable.length === 0 ? (
         <p><Link href="/accounts/new" className="button">Créer un compte</Link></p>
       ) : (
         <details>
           <summary>Nouvelle opération</summary>
           {/* Clé = solde global : une saisie réussie le change, le formulaire repart vide. */}
-          <EntryForm key={d.total} accounts={d.accounts} categories={categories} v={{ occurredOn: todayStr }} />
+          <EntryForm key={d.total} accounts={writable} categories={categories} v={{ occurredOn: todayStr }} />
         </details>
       )}
     </>

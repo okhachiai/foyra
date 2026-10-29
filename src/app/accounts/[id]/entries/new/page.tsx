@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { listCategories } from "@/lib/categories";
 import { todayIn } from "@/lib/ledger";
@@ -7,7 +8,7 @@ import { EntryForm } from "../../tx-forms";
 
 export default async function NewEntryPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
-  const account = await loadAccount(user.householdId, (await params).id);
+  const account = await loadAccount(await getScope(user), (await params).id, "WRITE");
   if (account.archivedAt) notFound();
   return (
     <>

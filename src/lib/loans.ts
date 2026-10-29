@@ -1,8 +1,11 @@
-import type { PrepaymentMode } from "@prisma/client";
+import type { Prisma, PrepaymentMode } from "@prisma/client";
 import { buildSchedule, dueDate, firstInterest, loanStatus, type Schedule } from "./amortization";
 import { checkRefs, type ChargeInput } from "./charges";
+import { assertWritable, readable, type Scope } from "./access";
 import { prisma } from "./db";
 import { createEntryTx, LedgerError, NotFoundError } from "./ledger";
+
+type Db = Prisma.TransactionClient;
 
 export type LoanInput = {
   name: string; accountId: string; categoryId: string; firstDue: Date;
@@ -25,33 +28,43 @@ function chargeOf(i: LoanInput): ChargeInput {
   };
 }
 
-export async function createLoan(householdId: string, input: LoanInput) {
+export async function createLoan(scope: Scope, input: LoanInput) {
   const charge = chargeOf(input);
+  const householdId = scope.householdId;
   return prisma.$transaction(async (tx) => {
-    await checkRefs(tx, householdId, charge);
+    await checkRefs(tx, scope, charge);
     const c = await tx.fixedCharge.create({ data: { ...charge, householdId } });
     return tx.loan.create({ data: { ...loanTerms(input), householdId, fixedChargeId: c.id } });
   });
 }
 
 /** Modification complète : l'échéancier est recalculé (paiements et anticipés conservés). */
-export async function updateLoan(householdId: string, id: string, input: LoanInput) {
+export async function updateLoan(scope: Scope, id: string, input: LoanInput) {
   const charge = chargeOf(input);
   await prisma.$transaction(async (tx) => {
-    const [loan] = await tx.$queryRaw<{ fixedChargeId: string }[]>`
-      SELECT "fixedChargeId" FROM "Loan" WHERE "id" = ${id} AND "householdId" = ${householdId} FOR UPDATE`;
-    if (!loan) throw new NotFoundError();
-    await checkRefs(tx, householdId, charge);
+    const loan = await lockWritableLoan(tx, scope, id);
+    await checkRefs(tx, scope, charge);
     await tx.fixedCharge.update({ where: { id: loan.fixedChargeId }, data: charge });
     await tx.loan.update({ where: { id }, data: loanTerms(input) });
   });
 }
 
-/** Supprime la charge (et donc le crédit, ses paiements et anticipés) ; les dépenses sont conservées. */
-export async function deleteLoan(householdId: string, id: string) {
-  const loan = await prisma.loan.findFirst({ where: { id, householdId } });
+/** Verrouille le crédit ; il doit être sur un compte lisible (sinon introuvable) et modifiable. */
+async function lockWritableLoan(tx: Db, scope: Scope, id: string) {
+  const [loan] = await tx.$queryRaw<{ fixedChargeId: string; accountId: string }[]>`
+    SELECT l."fixedChargeId", f."accountId" FROM "Loan" l JOIN "FixedCharge" f ON f."id" = l."fixedChargeId"
+    WHERE l."id" = ${id} AND l."householdId" = ${scope.householdId} FOR UPDATE OF l`;
   if (!loan) throw new NotFoundError();
-  await prisma.fixedCharge.deleteMany({ where: { id: loan.fixedChargeId, householdId } });
+  assertWritable(scope, loan.accountId);
+  return loan;
+}
+
+/** Supprime la charge (et donc le crédit, ses paiements et anticipés) ; les dépenses sont conservées. */
+export async function deleteLoan(scope: Scope, id: string) {
+  await prisma.$transaction(async (tx) => {
+    const loan = await lockWritableLoan(tx, scope, id);
+    await tx.fixedCharge.deleteMany({ where: { id: loan.fixedChargeId, householdId: scope.householdId } });
+  });
 }
 
 const INCLUDE = {
@@ -60,8 +73,8 @@ const INCLUDE = {
 } as const;
 
 type FullLoan = NonNullable<Awaited<ReturnType<typeof findLoan>>>;
-const findLoan = (householdId: string, id: string, db: Pick<typeof prisma, "loan"> = prisma) =>
-  db.loan.findFirst({ where: { id, householdId }, include: INCLUDE });
+const findLoan = (scope: Scope, id: string, db: Pick<typeof prisma, "loan"> = prisma) =>
+  db.loan.findFirst({ where: { id, householdId: scope.householdId, fixedCharge: { accountId: readable(scope) } }, include: INCLUDE });
 
 const termsOf = (loan: FullLoan) => ({ ...loan, dueDay: loan.fixedCharge.dueDay, startMonth: loan.fixedCharge.startMonth });
 const prepaymentsOf = (loan: FullLoan) =>
@@ -74,31 +87,30 @@ function withSchedule(loan: FullLoan, today: Date) {
 }
 
 /** Crédit + charge + paiements + anticipés (avec leur dépense), échéancier calculé et situation au jour `today`. */
-export async function getLoan(householdId: string, id: string, today: Date) {
-  const loan = await findLoan(householdId, id);
+export async function getLoan(scope: Scope, id: string, today: Date) {
+  const loan = await findLoan(scope, id);
   if (!loan) throw new NotFoundError();
   return withSchedule(loan, today);
 }
 
-export async function listLoans(householdId: string, today: Date) {
-  const loans = await prisma.loan.findMany({ where: { householdId }, include: INCLUDE, orderBy: { createdAt: "asc" } });
+export async function listLoans(scope: Scope, today: Date) {
+  const loans = await prisma.loan.findMany({ where: { householdId: scope.householdId, fixedCharge: { accountId: readable(scope) } }, include: INCLUDE, orderBy: { createdAt: "asc" } });
   return loans.map((l) => withSchedule(l, today));
 }
 
 /** Remboursement anticipé : contrôle du capital restant dû et dépense créés sous verrou du crédit. */
-export async function prepay(householdId: string, userId: string, loanId: string, amount: number, occurredOn: Date, mode: PrepaymentMode) {
+export async function prepay(scope: Scope, userId: string, loanId: string, amount: number, occurredOn: Date, mode: PrepaymentMode) {
   return prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw`SELECT "id" FROM "Loan" WHERE "id" = ${loanId} AND "householdId" = ${householdId} FOR UPDATE`;
-    if (!(locked as unknown[]).length) throw new NotFoundError();
-    const loan = withSchedule((await findLoan(householdId, loanId, tx))!, occurredOn);
+    await lockWritableLoan(tx, scope, loanId);
+    const loan = withSchedule((await findLoan(scope, loanId, tx))!, occurredOn);
     // Le nouvel anticipé doit s'appliquer en entier sans rogner ceux datés après lui.
     const total = (s: Schedule) => s.prepayments.reduce((sum, p) => sum + p.amount, 0);
     const after = buildSchedule(termsOf(loan), [...prepaymentsOf(loan), { occurredOn, amount, mode }]);
     if (total(after) < total(loan.schedule) + amount) throw new LedgerError("Montant supérieur au capital restant dû à cette date.", "amount");
-    const t = await createEntryTx(tx, householdId, userId, {
+    const t = await createEntryTx(tx, scope, userId, {
       accountId: loan.fixedCharge.accountId, kind: "EXPENSE", amount, occurredOn,
       note: `Remboursement anticipé · ${loan.fixedCharge.name}`, categoryId: loan.fixedCharge.categoryId,
     });
-    return tx.loanPrepayment.create({ data: { householdId, loanId, transactionId: t.id, mode } });
+    return tx.loanPrepayment.create({ data: { householdId: scope.householdId, loanId, transactionId: t.id, mode } });
   });
 }

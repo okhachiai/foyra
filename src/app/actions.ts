@@ -3,15 +3,15 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { AccountKind, CarryOver, Role } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import type { AccessLevel, AccountKind, CarryOver, Role } from "@prisma/client";
+import { getScope, setAccess } from "@/lib/access";
 import {
   checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
   recordLoginFailure, requireAdmin, requireUser, setupHousehold, startSession,
 } from "@/lib/auth";
 import {
-  archiveAccount, createEntry, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
-  parseDay, updateEntry, updateTransfer, type EntryInput, type TransferInput,
+  archiveAccount, createAccount, createEntry, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
+  parseDay, updateAccount, updateEntry, updateTransfer, type EntryInput, type TransferInput,
 } from "@/lib/ledger";
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, updateCategory, type CategoryFields } from "@/lib/categories";
 import { formatMonth, parseMonth, savePlanned } from "@/lib/budget";
@@ -81,6 +81,12 @@ function requiredField(fd: FormData, name: string, errors: Errors) {
   return value;
 }
 
+/** Utilisateur connecté et sa portée (comptes lisibles / modifiables). */
+async function requireScope() {
+  const user = await requireUser();
+  return { user, scope: await getScope(user) };
+}
+
 function done(path: string): never {
   revalidatePath("/", "layout");
   redirect(path);
@@ -138,6 +144,23 @@ export async function createMemberAction(_: FormState, fd: FormData): Promise<Fo
   done("/members");
 }
 
+const ACCESS_LEVELS: AccessLevel[] = ["READ", "WRITE"];
+
+/** Accès d'un membre : un champ `access:<accountId>` = NONE | READ | WRITE par compte. */
+export async function saveAccessAction(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const levels = new Map<string, AccessLevel | null>();
+  for (const [key, value] of fd) {
+    if (!key.startsWith("access:")) continue;
+    const level = String(value);
+    if (level !== "NONE" && !ACCESS_LEVELS.includes(level as AccessLevel)) return { error: "Niveau d’accès invalide." };
+    levels.set(key.slice("access:".length), level === "NONE" ? null : (level as AccessLevel));
+  }
+  const error = await run(() => setAccess(admin.householdId, str(fd, "id"), levels));
+  if (error) return error;
+  done("/members");
+}
+
 // --- Comptes ---
 
 function accountFields(fd: FormData, errors: Errors) {
@@ -150,29 +173,29 @@ function accountFields(fd: FormData, errors: Errors) {
 }
 
 export async function createAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { user, scope } = await requireScope();
   const errors = new Errors();
   const data = accountFields(fd, errors);
   if (errors.state) return errors.state;
-  const account = await prisma.account.create({ data: { ...data, householdId: user.householdId } });
+  const account = await createAccount(scope, user.id, data);
   done(`/accounts/${account.id}`);
 }
 
 export async function updateAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { scope } = await requireScope();
   const id = str(fd, "id");
   const errors = new Errors();
   const data = accountFields(fd, errors);
   if (errors.state) return errors.state;
-  const { count } = await prisma.account.updateMany({ where: { id, householdId: user.householdId, archivedAt: null }, data });
-  if (!count) return { error: "Compte introuvable ou archivé." };
+  const error = await run(() => updateAccount(scope, id, data));
+  if (error) return error;
   done(`/accounts/${id}`);
 }
 
 export async function archiveAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { scope } = await requireScope();
   const id = str(fd, "id");
-  const error = await run(() => archiveAccount(user.householdId, id));
+  const error = await run(() => archiveAccount(scope, id));
   if (error) return error;
   done(`/accounts/${id}`);
 }
@@ -193,39 +216,39 @@ function transferFields(fd: FormData, errors: Errors): TransferInput {
 }
 
 export async function createEntryAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { user, scope } = await requireScope();
   const errors = new Errors();
   const input = entryFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => createEntry(user.householdId, user.id, input));
+  const error = await run(() => createEntry(scope, user.id, input));
   if (error) return error;
   // Liste blanche : seule la valeur fixe « dashboard » change la page de retour.
   done(str(fd, "back") === "dashboard" ? "/tableau-de-bord" : `/accounts/${input.accountId}`);
 }
 
 export async function createTransferAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { user, scope } = await requireScope();
   const errors = new Errors();
   const input = transferFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => createTransfer(user.householdId, user.id, input));
+  const error = await run(() => createTransfer(scope, user.id, input));
   if (error) return error;
   done(`/accounts/${str(fd, "returnTo") || input.fromAccountId}`);
 }
 
 /** Modifie une transaction : un virement est toujours modifié des deux côtés. */
 export async function updateTransactionAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { scope } = await requireScope();
   const id = str(fd, "id");
   const errors = new Errors();
   const error = await run(async () => {
-    const t = await getTransaction(user.householdId, id);
+    const t = await getTransaction(scope, id);
     if (t.transferId) {
       const input = transferFields(fd, errors);
-      if (!errors.state) await updateTransfer(user.householdId, t.transferId, input);
+      if (!errors.state) await updateTransfer(scope, t.transferId, input);
     } else {
       const input = entryFields(fd, errors);
-      if (!errors.state) await updateEntry(user.householdId, id, input);
+      if (!errors.state) await updateEntry(scope, id, input);
     }
   });
   if (errors.state) return errors.state;
@@ -234,8 +257,8 @@ export async function updateTransactionAction(_: FormState, fd: FormData): Promi
 }
 
 export async function deleteTransactionAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
-  const error = await run(() => deleteTransaction(user.householdId, str(fd, "id")));
+  const { scope } = await requireScope();
+  const error = await run(() => deleteTransaction(scope, str(fd, "id")));
   if (error) return error;
   done(`/accounts/${str(fd, "returnTo")}`);
 }
@@ -331,42 +354,42 @@ function chargeFields(fd: FormData, errors: Errors): ChargeInput {
 }
 
 export async function createChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { scope } = await requireScope();
   const errors = new Errors();
   const input = chargeFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => createCharge(user.householdId, input));
+  const error = await run(() => createCharge(scope, input));
   if (error) return error;
   done("/charges");
 }
 
 export async function updateChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { scope } = await requireScope();
   const errors = new Errors();
   const input = chargeFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => updateCharge(user.householdId, str(fd, "id"), input));
+  const error = await run(() => updateCharge(scope, str(fd, "id"), input));
   if (error) return error;
   done("/charges");
 }
 
 export async function deleteChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
-  const error = await run(() => deleteCharge(user.householdId, str(fd, "id")));
+  const { scope } = await requireScope();
+  const error = await run(() => deleteCharge(scope, str(fd, "id")));
   if (error) return error;
   done("/charges");
 }
 
 /** Marque une charge payée pour le mois : crée la dépense réelle (montant et date saisis). */
 export async function payChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { user, scope } = await requireScope();
   const month = parseMonth(str(fd, "month"));
   if (!month) return { error: "Mois invalide." };
   const errors = new Errors();
   const amount = amountField(fd, errors);
   const occurredOn = dayField(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => payCharge(user.householdId, user.id, str(fd, "id"), month, amount, occurredOn));
+  const error = await run(() => payCharge(scope, user.id, str(fd, "id"), month, amount, occurredOn));
   if (error) return error;
   // Liste blanche : seule la valeur fixe « calendar » change la page de retour.
   done(`${str(fd, "back") === "calendar" ? "/calendrier" : "/charges"}?m=${formatMonth(month)}`);
@@ -406,37 +429,37 @@ function loanFields(fd: FormData, errors: Errors): LoanInput {
 }
 
 export async function createLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { scope } = await requireScope();
   const errors = new Errors();
   const input = loanFields(fd, errors);
   if (errors.state) return errors.state;
   let id = "";
-  const error = await run(async () => (id = (await createLoan(user.householdId, input)).id));
+  const error = await run(async () => (id = (await createLoan(scope, input)).id));
   if (error) return error;
   done(`/credits/${id}`);
 }
 
 export async function updateLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { scope } = await requireScope();
   const id = str(fd, "id");
   const errors = new Errors();
   const input = loanFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => updateLoan(user.householdId, id, input));
+  const error = await run(() => updateLoan(scope, id, input));
   if (error) return error;
   done(`/credits/${id}`);
 }
 
 export async function deleteLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
-  const error = await run(() => deleteLoan(user.householdId, str(fd, "id")));
+  const { scope } = await requireScope();
+  const error = await run(() => deleteLoan(scope, str(fd, "id")));
   if (error) return error;
   done("/credits");
 }
 
 /** Remboursement anticipé : crée la dépense réelle (compte et catégorie du crédit). */
 export async function prepayLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const { user, scope } = await requireScope();
   const id = str(fd, "id");
   const errors = new Errors();
   const amount = amountField(fd, errors);
@@ -444,7 +467,7 @@ export async function prepayLoanAction(_: FormState, fd: FormData): Promise<Form
   const mode = str(fd, "mode");
   if (mode !== "REDUCE_TERM" && mode !== "REDUCE_PAYMENT") errors.add("mode", "Choisissez un mode.");
   if (errors.state) return errors.state;
-  const error = await run(() => prepay(user.householdId, user.id, id, amount, occurredOn, mode as "REDUCE_TERM"));
+  const error = await run(() => prepay(scope, user.id, id, amount, occurredOn, mode as "REDUCE_TERM"));
   if (error) return error;
   done(`/credits/${id}`);
 }

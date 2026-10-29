@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
+import type { AccountKind } from "@prisma/client";
+import { assertWritable, readable, writable, type Scope } from "./access";
 import { prisma } from "./db";
 
 /** Erreur métier affichable (optionnellement rattachée à un champ du formulaire). */
@@ -20,44 +22,73 @@ export type TransferInput = { fromAccountId: string; toAccountId: string; amount
 
 const SIGNED_AMOUNT = Prisma.sql`CASE WHEN t."kind" = 'INCOME' OR t."transferSide" = 'IN' THEN t."amount" ELSE -t."amount" END`;
 
-/** Soldes calculés (initial + somme signée) de tous les comptes du foyer, archivés compris. */
-async function balances(householdId: string, db: Db = prisma, accountId?: string) {
+/** Soldes calculés (initial + somme signée) des comptes lisibles du foyer, archivés compris. */
+async function balances(scope: Scope, db: Db = prisma, accountId?: string) {
   const rows = await db.$queryRaw<{ id: string; balance: bigint }[]>`
     SELECT a."id", a."initialBalance"::bigint + COALESCE(SUM(${SIGNED_AMOUNT}), 0)::bigint AS balance
     FROM "Account" a LEFT JOIN "Transaction" t ON t."accountId" = a."id"
-    WHERE a."householdId" = ${householdId} ${accountId ? Prisma.sql`AND a."id" = ${accountId}` : Prisma.empty}
+    WHERE a."householdId" = ${scope.householdId}
+      ${scope.read ? Prisma.sql`AND a."id" = ANY(${scope.read})` : Prisma.empty}
+      ${accountId ? Prisma.sql`AND a."id" = ${accountId}` : Prisma.empty}
     GROUP BY a."id"`;
   return new Map(rows.map((r) => [r.id, Number(r.balance)]));
 }
 
-export async function accountBalance(householdId: string, accountId: string, db: Db = prisma) {
-  const balance = (await balances(householdId, db, accountId)).get(accountId);
+export async function accountBalance(scope: Scope, accountId: string, db: Db = prisma) {
+  const balance = (await balances(scope, db, accountId)).get(accountId);
   if (balance === undefined) throw new NotFoundError();
   return balance;
 }
 
-/** Comptes du foyer avec leur solde ; les archivés sont marqués. */
-export async function listAccounts(householdId: string) {
+/** Comptes lisibles du foyer avec leur solde ; les archivés sont marqués. */
+export async function listAccounts(scope: Scope) {
   const [accounts, map] = await Promise.all([
-    prisma.account.findMany({ where: { householdId }, orderBy: [{ createdAt: "asc" }] }),
-    balances(householdId),
+    prisma.account.findMany({ where: { householdId: scope.householdId, id: readable(scope) }, orderBy: [{ createdAt: "asc" }] }),
+    balances(scope),
   ]);
   return accounts.map((a) => ({ ...a, balance: map.get(a.id) ?? a.initialBalance }));
 }
 
-/** Solde global = somme des soldes des comptes non archivés. */
-export async function householdTotal(householdId: string) {
-  return (await listAccounts(householdId)).filter((a) => !a.archivedAt).reduce((s, a) => s + a.balance, 0);
+/** Solde global = somme des soldes des comptes lisibles non archivés. */
+export async function householdTotal(scope: Scope) {
+  return (await listAccounts(scope)).filter((a) => !a.archivedAt).reduce((s, a) => s + a.balance, 0);
 }
 
-export async function getAccount(householdId: string, id: string) {
-  const account = await prisma.account.findFirst({ where: { id, householdId } });
+export async function getAccount(scope: Scope, id: string) {
+  const account = await prisma.account.findFirst({ where: { id, householdId: scope.householdId, AND: [{ id: readable(scope) }] } });
   if (!account) throw new NotFoundError();
   return account;
 }
 
-/** Verrouille les comptes (ordre stable, anti-interblocage) et vérifie qu'ils sont du foyer et actifs. */
-async function lockActiveAccounts(tx: Db, householdId: string, accounts: { id: string; field: string }[]) {
+/** Comptes actifs modifiables (listes de choix) ; `keep` : compte actuel conservé même archivé. */
+export function writableAccounts(scope: Scope, keep?: string) {
+  return prisma.account.findMany({
+    where: { householdId: scope.householdId, id: writable(scope), OR: [{ archivedAt: null }, ...(keep ? [{ id: keep }] : [])] },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+type AccountData = { kind: AccountKind; name: string; initialBalance: number };
+
+/** Crée un compte ; un membre (portée restreinte) reçoit l'écriture dessus, les autres membres rien. */
+export function createAccount(scope: Scope, userId: string, data: AccountData) {
+  return prisma.$transaction(async (tx) => {
+    const account = await tx.account.create({ data: { ...data, householdId: scope.householdId } });
+    if (scope.write) await tx.accountAccess.create({ data: { userId, accountId: account.id, level: "WRITE" } });
+    return account;
+  });
+}
+
+export async function updateAccount(scope: Scope, id: string, data: AccountData) {
+  assertWritable(scope, id);
+  const { count } = await prisma.account.updateMany({ where: { id, householdId: scope.householdId, archivedAt: null }, data });
+  if (!count) throw new LedgerError("Compte introuvable ou archivé.");
+}
+
+/** Vérifie l'écriture sur chaque compte, les verrouille (ordre stable, anti-interblocage), puis qu'ils sont du foyer et actifs. */
+async function lockActiveAccounts(tx: Db, scope: Scope, accounts: { id: string; field: string }[]) {
+  for (const a of accounts) assertWritable(scope, a.id, a.field);
+  const householdId = scope.householdId;
   const ids = [...new Set(accounts.map((a) => a.id))].sort();
   const rows = await tx.$queryRaw<{ id: string; archivedAt: Date | null }[]>`
     SELECT "id", "archivedAt" FROM "Account"
@@ -85,26 +116,28 @@ async function checkCategory(tx: Db, householdId: string, input: EntryInput) {
 }
 
 /** Création dans une transaction SQL existante (ex. paiement d'une charge fixe). */
-export async function createEntryTx(tx: Db, householdId: string, userId: string, input: EntryInput) {
-  await lockActiveAccounts(tx, householdId, [{ id: input.accountId, field: "accountId" }]);
-  await checkCategory(tx, householdId, input);
-  return tx.transaction.create({ data: { ...input, householdId, createdById: userId } });
+export async function createEntryTx(tx: Db, scope: Scope, userId: string, input: EntryInput) {
+  await lockActiveAccounts(tx, scope, [{ id: input.accountId, field: "accountId" }]);
+  await checkCategory(tx, scope.householdId, input);
+  return tx.transaction.create({ data: { ...input, householdId: scope.householdId, createdById: userId } });
 }
 
-export async function createEntry(householdId: string, userId: string, input: EntryInput) {
-  return prisma.$transaction((tx) => createEntryTx(tx, householdId, userId, input));
+export async function createEntry(scope: Scope, userId: string, input: EntryInput) {
+  return prisma.$transaction((tx) => createEntryTx(tx, scope, userId, input));
 }
 
-export async function getTransaction(householdId: string, id: string) {
-  const t = await prisma.transaction.findFirst({ where: { id, householdId } });
+/** Opération d'un compte lisible. */
+export async function getTransaction(scope: Scope, id: string) {
+  const t = await prisma.transaction.findFirst({ where: { id, householdId: scope.householdId, accountId: readable(scope) } });
   if (!t) throw new NotFoundError();
   return t;
 }
 
-export async function updateEntry(householdId: string, id: string, input: EntryInput) {
+export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
+  const householdId = scope.householdId;
   return prisma.$transaction(async (tx) => {
     await lockLines(tx, householdId, Prisma.sql`"id" = ${id}`);
-    const current = await tx.transaction.findFirst({ where: { id, householdId, kind: { not: "TRANSFER" } } });
+    const current = await tx.transaction.findFirst({ where: { id, householdId, accountId: readable(scope), kind: { not: "TRANSFER" } } });
     if (!current) throw new NotFoundError();
     // Dépense réglant une charge fixe : elle doit rester une dépense du mois payé.
     const payment = await tx.fixedChargePayment.findUnique({ where: { transactionId: id } });
@@ -122,7 +155,7 @@ export async function updateEntry(householdId: string, id: string, input: EntryI
       if (input.amount !== current.amount) throw new LedgerError(redo, "amount");
       if (input.occurredOn.getTime() !== current.occurredOn.getTime()) throw new LedgerError(redo, "occurredOn");
     }
-    await lockActiveAccounts(tx, householdId, [
+    await lockActiveAccounts(tx, scope, [
       { id: current.accountId, field: "accountId" },
       { id: input.accountId, field: "accountId" },
     ]);
@@ -132,13 +165,14 @@ export async function updateEntry(householdId: string, id: string, input: EntryI
 }
 
 /** Supprime une transaction ; s'il s'agit d'un côté de virement, les deux côtés partent ensemble. */
-export async function deleteTransaction(householdId: string, id: string) {
+export async function deleteTransaction(scope: Scope, id: string) {
+  const householdId = scope.householdId;
   await prisma.$transaction(async (tx) => {
     await lockLines(tx, householdId, Prisma.sql`"id" = ${id}`);
-    const t = await tx.transaction.findFirst({ where: { id, householdId } });
+    const t = await tx.transaction.findFirst({ where: { id, householdId, accountId: readable(scope) } });
     if (!t) throw new NotFoundError();
-    if (t.transferId) return deleteTransferTx(tx, householdId, t.transferId);
-    await lockActiveAccounts(tx, householdId, [{ id: t.accountId, field: "accountId" }]);
+    if (t.transferId) return deleteTransferTx(tx, scope, t.transferId);
+    await lockActiveAccounts(tx, scope, [{ id: t.accountId, field: "accountId" }]);
     await tx.transaction.deleteMany({ where: { id, householdId } });
   });
 }
@@ -149,39 +183,40 @@ function checkDistinct(input: TransferInput) {
   if (input.fromAccountId === input.toAccountId) throw new LedgerError("Choisissez deux comptes différents.", "toAccountId");
 }
 
-const lockTransferAccounts = (tx: Db, householdId: string, input: TransferInput) =>
-  lockActiveAccounts(tx, householdId, [
+const lockTransferAccounts = (tx: Db, scope: Scope, input: TransferInput) =>
+  lockActiveAccounts(tx, scope, [
     { id: input.fromAccountId, field: "fromAccountId" },
     { id: input.toAccountId, field: "toAccountId" },
   ]);
 
-export async function createTransfer(householdId: string, userId: string, input: TransferInput) {
+export async function createTransfer(scope: Scope, userId: string, input: TransferInput) {
   checkDistinct(input);
   const transferId = randomUUID();
-  const common = { householdId, createdById: userId, kind: "TRANSFER" as const, amount: input.amount, occurredOn: input.occurredOn, note: input.note, transferId };
+  const common = { householdId: scope.householdId, createdById: userId, kind: "TRANSFER" as const, amount: input.amount, occurredOn: input.occurredOn, note: input.note, transferId };
   await prisma.$transaction(async (tx) => {
-    await lockTransferAccounts(tx, householdId, input);
+    await lockTransferAccounts(tx, scope, input);
     await tx.transaction.create({ data: { ...common, accountId: input.fromAccountId, transferSide: "OUT" } });
     await tx.transaction.create({ data: { ...common, accountId: input.toAccountId, transferSide: "IN" } });
   });
   return transferId;
 }
 
-/** Les deux lignes d'un virement du foyer, [OUT, IN]. */
-export async function getTransfer(householdId: string, transferId: string, db: Db = prisma) {
-  const lines = await db.transaction.findMany({ where: { householdId, transferId }, orderBy: { transferSide: "asc" } });
+/** Les deux lignes d'un virement du foyer, [OUT, IN] ; au moins un des deux comptes doit être lisible. */
+export async function getTransfer(scope: Scope, transferId: string, db: Db = prisma) {
+  const lines = await db.transaction.findMany({ where: { householdId: scope.householdId, transferId }, orderBy: { transferSide: "asc" } });
   const out = lines.find((l) => l.transferSide === "OUT");
   const inn = lines.find((l) => l.transferSide === "IN");
   if (!out || !inn) throw new NotFoundError();
+  if (scope.read && !scope.read.includes(out.accountId) && !scope.read.includes(inn.accountId)) throw new NotFoundError();
   return { out, in: inn };
 }
 
-export async function updateTransfer(householdId: string, transferId: string, input: TransferInput) {
+export async function updateTransfer(scope: Scope, transferId: string, input: TransferInput) {
   checkDistinct(input);
   await prisma.$transaction(async (tx) => {
-    await lockLines(tx, householdId, Prisma.sql`"transferId" = ${transferId}`);
-    const current = await getTransfer(householdId, transferId, tx);
-    await lockActiveAccounts(tx, householdId, [
+    await lockLines(tx, scope.householdId, Prisma.sql`"transferId" = ${transferId}`);
+    const current = await getTransfer(scope, transferId, tx);
+    await lockActiveAccounts(tx, scope, [
       { id: current.out.accountId, field: "fromAccountId" },
       { id: current.in.accountId, field: "toAccountId" },
       { id: input.fromAccountId, field: "fromAccountId" },
@@ -193,14 +228,15 @@ export async function updateTransfer(householdId: string, transferId: string, in
   });
 }
 
-export async function deleteTransfer(householdId: string, transferId: string) {
-  await prisma.$transaction((tx) => deleteTransferTx(tx, householdId, transferId));
+export async function deleteTransfer(scope: Scope, transferId: string) {
+  await prisma.$transaction((tx) => deleteTransferTx(tx, scope, transferId));
 }
 
-async function deleteTransferTx(tx: Db, householdId: string, transferId: string) {
+async function deleteTransferTx(tx: Db, scope: Scope, transferId: string) {
+  const householdId = scope.householdId;
   await lockLines(tx, householdId, Prisma.sql`"transferId" = ${transferId}`);
-  const current = await getTransfer(householdId, transferId, tx);
-  await lockActiveAccounts(tx, householdId, [
+  const current = await getTransfer(scope, transferId, tx);
+  await lockActiveAccounts(tx, scope, [
     { id: current.out.accountId, field: "fromAccountId" },
     { id: current.in.accountId, field: "toAccountId" },
   ]);
@@ -210,10 +246,10 @@ async function deleteTransferTx(tx: Db, householdId: string, transferId: string)
 // --- Comptes ---
 
 /** Archive un compte : refusé si le solde n'est pas exactement 0. L'historique est conservé. */
-export async function archiveAccount(householdId: string, accountId: string) {
+export async function archiveAccount(scope: Scope, accountId: string) {
   await prisma.$transaction(async (tx) => {
-    await lockActiveAccounts(tx, householdId, [{ id: accountId, field: "accountId" }]);
-    if ((await accountBalance(householdId, accountId, tx)) !== 0) {
+    await lockActiveAccounts(tx, scope, [{ id: accountId, field: "accountId" }]);
+    if ((await accountBalance(scope, accountId, tx)) !== 0) {
       throw new LedgerError("Le solde doit être de 0 pour archiver ce compte.");
     }
     await tx.account.update({ where: { id: accountId }, data: { archivedAt: new Date() } });

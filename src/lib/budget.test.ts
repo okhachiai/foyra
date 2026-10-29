@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
 import { addMonths, ensureMonth, getBudget, parseMonth, savePlanned, summarize } from "./budget";
 import { parseForecast, updateCategory } from "./categories";
+import { fullScope } from "./access";
 import { prisma } from "./db";
 import { createEntry, createTransfer, parseDay } from "./ledger";
 
@@ -12,10 +13,10 @@ const nov = parseMonth("2026-11")!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const setCat = (name: string, data: { forecastAmount?: number | null; carryOver?: "PREVIOUS" | "FORECAST" | "NONE"; enabled?: boolean }) =>
   prisma.category.updateMany({ where: { name }, data });
-const row = async (month: Date, name: string) => (await getBudget(hh, month)).rows.find((r) => r.label === name);
+const row = async (month: Date, name: string) => (await getBudget(fullScope(hh), month)).rows.find((r) => r.label === name);
 const account = async () => (await prisma.account.create({ data: { householdId: hh, name: "Courant", kind: "CHECKING" } })).id;
 const entry = (accountId: string, kind: "INCOME" | "EXPENSE", categoryId: string | null, amount: number, day: string) =>
-  createEntry(hh, user, { accountId, kind, amount, occurredOn: parseDay(day)!, note: null, categoryId });
+  createEntry(fullScope(hh), user, { accountId, kind, amount, occurredOn: parseDay(day)!, note: null, categoryId });
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
@@ -39,14 +40,14 @@ describe("budget mensuel", () => {
 
   it("NONE : prévu vide « à saisir », compte 0", async () => {
     await setCat("Électricité", { forecastAmount: 8000, carryOver: "NONE" });
-    const b = await getBudget(hh, nov);
+    const b = await getBudget(fullScope(hh), nov);
     expect(b.rows.find((r) => r.label === "Factures › Électricité")?.planned).toBeNull();
     expect(b.totals.expensePlanned).toBe(0);
   });
 
   it("Instantané : mois déjà ouvert inchangé ; ouvertures simultanées → une seule ligne", async () => {
     await setCat("Courses", { forecastAmount: 40000 });
-    await Promise.all([ensureMonth(hh, nov), ensureMonth(hh, nov), getBudget(hh, nov)]);
+    await Promise.all([ensureMonth(hh, nov), ensureMonth(hh, nov), getBudget(fullScope(hh), nov)]);
     const courses = await byName("Courses");
     expect(await prisma.budgetLine.count({ where: { categoryId: courses, month: nov } })).toBe(1);
     await setCat("Courses", { forecastAmount: 99900 });
@@ -56,7 +57,7 @@ describe("budget mensuel", () => {
   it("Modifier : « 450 » → 45000 centimes, totaux recalculés ; saisies invalides refusées", async () => {
     const courses = await byName("Courses");
     await savePlanned(hh, nov, new Map([[courses, parseForecast("450")!]]));
-    const b = await getBudget(hh, nov);
+    const b = await getBudget(fullScope(hh), nov);
     expect(b.rows.find((r) => r.id === courses)?.planned).toBe(45000);
     expect(b.totals.expensePlanned).toBe(45000);
     expect([parseForecast("-3"), parseForecast("abc")]).toEqual([undefined, undefined]);
@@ -77,7 +78,7 @@ describe("budget mensuel", () => {
     await setCat("Loisirs", { enabled: false, forecastAmount: 5000 });
     await setCat("Factures", { enabled: false });
     await setCat("Gaz", { forecastAmount: 3000 });
-    const b = await getBudget(hh, nov);
+    const b = await getBudget(fullScope(hh), nov);
     expect(b.rows.some((r) => r.label === "Loisirs" || r.label.startsWith("Factures"))).toBe(false);
     expect(b.totals.expensePlanned).toBe(0);
   });
@@ -101,10 +102,10 @@ describe("budget mensuel", () => {
     const c = await account();
     const e = (await prisma.account.create({ data: { householdId: hh, name: "Épargne", kind: "SAVINGS" } })).id;
     await entry(c, "EXPENSE", null, 1234, "2026-11-05");
-    await createTransfer(hh, user, { fromAccountId: c, toAccountId: e, amount: 5000, occurredOn: parseDay("2026-11-05")!, note: null });
+    await createTransfer(fullScope(hh), user, { fromAccountId: c, toAccountId: e, amount: 5000, occurredOn: parseDay("2026-11-05")!, note: null });
     await updateCategory(hh, await byName("Loisirs"), { name: "Loisirs", forecastAmount: null, carryOver: "FORECAST", enabled: false });
     await entry(c, "EXPENSE", await byName("Loisirs"), 100, "2026-11-06");
-    const b = await getBudget(hh, nov);
+    const b = await getBudget(fullScope(hh), nov);
     expect(b.totals.expenseActual).toBe(0);
     expect(b.outside).toEqual({ EXPENSE: 1334, INCOME: 0 });
   });

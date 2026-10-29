@@ -1,4 +1,5 @@
 import type { CarryOver, CategoryKind } from "@prisma/client";
+import { readable, type Scope } from "./access";
 import { listCategories } from "./categories";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
@@ -78,8 +79,10 @@ export function summarize(rows: BudgetRow[]) {
   return t;
 }
 
-/** Budget d'un mois : catégories incluses (prévu + réel), totaux, et opérations hors calcul. */
-export async function getBudget(householdId: string, month: Date) {
+/** Budget d'un mois : catégories incluses (prévu + réel des comptes lisibles), totaux, et opérations hors calcul. */
+export async function getBudget(scope: Scope, month: Date) {
+  const householdId = scope.householdId;
+  const accountId = readable(scope);
   await ensureMonth(householdId, month);
   const next = addMonths(month, 1);
   const [categories, lines, sums, charges, fixedSums] = await Promise.all([
@@ -87,13 +90,13 @@ export async function getBudget(householdId: string, month: Date) {
     prisma.budgetLine.findMany({ where: { householdId, month }, select: { categoryId: true, planned: true } }),
     prisma.transaction.groupBy({
       by: ["categoryId", "kind"],
-      where: { householdId, kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: next } },
+      where: { householdId, accountId, kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: next } },
       _sum: { amount: true },
     }),
-    listMonthCharges(householdId, month),
+    listMonthCharges(scope, month),
     prisma.transaction.groupBy({
       by: ["categoryId"],
-      where: { householdId, kind: "EXPENSE", occurredOn: { gte: month, lt: next }, fixedPayment: { isNot: null } },
+      where: { householdId, accountId, kind: "EXPENSE", occurredOn: { gte: month, lt: next }, fixedPayment: { isNot: null } },
       _sum: { amount: true },
     }),
   ]);

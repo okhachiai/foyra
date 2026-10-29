@@ -1,27 +1,34 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { canWrite, getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { listCategories } from "@/lib/categories";
 import { getCharge } from "@/lib/charges";
-import { prisma } from "@/lib/db";
-import { NotFoundError } from "@/lib/ledger";
+import { NotFoundError, writableAccounts } from "@/lib/ledger";
 import { deleteChargeAction } from "../../actions";
 import { ActionForm } from "../../form";
 import { ChargeForm } from "../charge-form";
 
 export default async function EditChargePage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
-  const charge = await getCharge(user.householdId, (await params).id).catch((e) => {
+  const scope = await getScope(user);
+  const charge = await getCharge(scope, (await params).id).catch((e) => {
     if (e instanceof NotFoundError) notFound();
     throw e;
   });
   if (charge.loan) redirect(`/credits/${charge.loan.id}`);
+  if (!canWrite(scope, charge.accountId)) {
+    return (
+      <>
+        <p><Link href="/charges">← Charges fixes</Link></p>
+        <h1>{charge.name}</h1>
+        <p className="muted">Accès en lecture seule sur le compte de cette charge : elle ne peut pas être modifiée.</p>
+      </>
+    );
+  }
   const [accounts, categories] = await Promise.all([
     // Le compte actuel reste affiché même archivé : l'enregistrement demandera d'en choisir un autre.
-    prisma.account.findMany({
-      where: { householdId: user.householdId, OR: [{ archivedAt: null }, { id: charge.accountId }] },
-      orderBy: { createdAt: "asc" },
-    }),
+    writableAccounts(scope, charge.accountId),
     listCategories(user.householdId),
   ]);
 

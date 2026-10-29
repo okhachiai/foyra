@@ -28,3 +28,6 @@
 - source_plan: `/Users/oktech/Sites/foyra-project/_bmad-output/initiative-foyra/plan-foyra-calendrier.md`
   summary: Dates importantes libres dans le calendrier (rappels saisis par l’utilisateur : renouvellement, impôts, échéances ponctuelles), avec leur propre modèle.
   evidence: Le calendrier couvre les échéances des charges fixes et crédits ; des dates libres demandent un nouveau modèle et des écrans de saisie, hors cible du cycle.
+- source_plan: none
+  summary: Gestion avancée des membres (désactivation d'un membre, interdiction de retirer/rétrograder le dernier admin, changement de son propre mot de passe, script CLI `npm run reset-password`).
+  evidence: Séparé de l'intention « permissions d'accès par compte » au contrôle multi-objectif (livrable indépendant) ; traité dans un second cycle bmad-build immédiatement après.

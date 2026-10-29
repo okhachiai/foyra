@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { listAccounts } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
@@ -7,7 +8,7 @@ import { KIND_LABELS } from "./kinds";
 export default async function AccountsPage() {
   const user = await requireUser();
   const currency = user.household.currency;
-  const accounts = await listAccounts(user.householdId);
+  const accounts = await listAccounts(await getScope(user));
   const active = accounts.filter((a) => !a.archivedAt);
   const archived = accounts.filter((a) => a.archivedAt);
   const total = active.reduce((s, a) => s + a.balance, 0);

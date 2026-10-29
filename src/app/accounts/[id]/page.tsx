@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { canWrite, getScope, readable } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { accountBalance, formatDay } from "@/lib/ledger";
@@ -12,13 +13,14 @@ const PAGE_SIZE = 50;
 
 export default async function AccountPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ page?: string }> }) {
   const user = await requireUser();
-  const account = await loadAccount(user.householdId, (await params).id);
+  const scope = await getScope(user);
+  const account = await loadAccount(scope, (await params).id, "READ");
   const page = Math.max(1, Number.parseInt((await searchParams).page ?? "1", 10) || 1);
   const currency = user.household.currency;
   const where = { householdId: user.householdId, accountId: account.id };
 
   const [balance, count, rows] = await Promise.all([
-    accountBalance(user.householdId, account.id),
+    accountBalance(scope, account.id),
     prisma.transaction.count({ where }),
     prisma.transaction.findMany({
       where,
@@ -33,13 +35,14 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
   const transferIds = rows.flatMap((r) => (r.transferId ? [r.transferId] : []));
   const others = transferIds.length
     ? await prisma.transaction.findMany({
-        where: { householdId: user.householdId, transferId: { in: transferIds }, accountId: { not: account.id } },
+        where: { householdId: user.householdId, transferId: { in: transferIds }, AND: [{ accountId: { not: account.id } }, { accountId: readable(scope) }] },
         select: { transferId: true, account: { select: { name: true } } },
       })
     : [];
   const otherName = new Map(others.map((o) => [o.transferId, o.account.name]));
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
-  const active = !account.archivedAt;
+  // Saisie et modification : compte actif et modifiable par l'utilisateur.
+  const active = !account.archivedAt && canWrite(scope, account.id);
 
   return (
     <>
@@ -70,7 +73,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
           const credit = t.kind === "INCOME" || t.transferSide === "IN";
           const label =
             t.kind === "TRANSFER"
-              ? `Virement ${t.transferSide === "OUT" ? "vers" : "depuis"} ${otherName.get(t.transferId) ?? "?"}`
+              ? `Virement ${t.transferSide === "OUT" ? "vers" : "depuis"} ${otherName.get(t.transferId) ?? "compte non partagé"}`
               : t.kind === "INCOME" ? "Recette" : "Dépense";
           const content = (
             <>

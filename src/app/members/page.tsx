@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { createMemberAction } from "../actions";
@@ -12,10 +13,17 @@ export default async function MembersPage() {
       <ul className="list">
         {members.map((m) => (
           <li key={m.id}>
-            <div>
-              <span>{m.name}<small className="muted">{m.email}</small></span>
-              <span className="muted">{m.role === "ADMIN" ? "Admin" : "Membre"}</span>
-            </div>
+            {m.role === "ADMIN" ? (
+              <div>
+                <span>{m.name}<small className="muted">{m.email}</small></span>
+                <span className="muted">Admin</span>
+              </div>
+            ) : (
+              <Link href={`/members/${m.id}`}>
+                <span>{m.name}<small className="muted">{m.email}</small></span>
+                <span className="muted">Membre · accès</span>
+              </Link>
+            )}
           </li>
         ))}
       </ul>

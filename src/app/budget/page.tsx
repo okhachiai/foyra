@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { CategoryKind } from "@prisma/client";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { addMonths, formatMonth, available, getBudget, parseMonth, type BudgetRow } from "@/lib/budget";
 import { todayIn } from "@/lib/ledger";
@@ -13,7 +14,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
   const user = await requireUser();
   const currency = user.household.currency;
   const month = parseMonth((await searchParams).m) ?? parseMonth(todayIn(user.household.timezone).slice(0, 7))!;
-  const { rows, totals, outside } = await getBudget(user.householdId, month);
+  const { rows, totals, outside } = await getBudget(await getScope(user), month);
   const money = (cents: number) => formatCents(cents, currency);
 
   const line = (r: BudgetRow) => {
