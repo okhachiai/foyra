@@ -2,12 +2,14 @@ import Link from "next/link";
 import type { CategoryKind } from "@prisma/client";
 import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
-import { addMonths, budgetSeeds, formatMonth, getBudget, incomeLines, mergeIncomes, parseMonth } from "@/lib/budget";
+import { addMonths, budgetSeeds, envelopes, formatMonth, getBudget, incomeLines, mergeIncomes, parseMonth } from "@/lib/budget";
 import { listMonthCharges } from "@/lib/charges";
 import { prisma } from "@/lib/db";
 import { formatDay, todayIn } from "@/lib/ledger";
 import { centsToInput, formatCents } from "@/lib/money";
+import { getVisibleSplit } from "@/lib/split";
 import { Badge } from "@/components/ui/badge";
+import { ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Stat } from "@/components/ui/stat";
@@ -15,6 +17,7 @@ import { budgetAction, createBudgetAction } from "../actions";
 import { ActionForm, Field } from "../form";
 import { itemSignature } from "./signature";
 
+const percent = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 2 });
 const monthLabel = (month: Date) => new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(month);
 /** Dépenses prévues réparties selon le type de leur catégorie ; une ligne sans catégorie est variable. */
 const SECTIONS: [CategoryKind, string, fixed?: boolean][] = [
@@ -83,6 +86,8 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
 
   const draft = budget.status === "DRAFT";
   const { totals } = budget;
+  const split = await getVisibleSplit(user, scope, month);
+  const env = envelopes(budget.tree);
   // Charges fixes et crédits du mois, calculés en direct : un crédit soldé n'apparaît plus.
   const expenses = charges.filter((c) => c.kind === "EXPENSE");
   const fixed = expenses.filter((c) => !c.loanId), loans = expenses.filter((c) => c.loanId);
@@ -99,10 +104,12 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
   const row = (i: Line, opts: { total?: number; child?: boolean; parentExcluded?: boolean; first: boolean; last: boolean }) => {
     const p = `${i.id}:`;
     const computed = opts.total !== undefined;
+    // Cases « Commune » / « Réserve » : lignes principales de dépense, en brouillon seulement.
+    const flags = draft && !opts.child && i.kind === "EXPENSE";
     return (
       <div key={i.id} className={`grid grid-cols-[1.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2 border-t border-hairline py-2 sm:grid-cols-[1.5rem_minmax(0,1fr)_8rem_1rem_7rem_1.75rem_4.75rem_2.75rem] [&_.field>span]:sr-only ${opts.child ? "pl-4 sm:pl-8" : ""} ${opts.parentExcluded || !i.included ? "opacity-60" : ""}`}>
         <input type="hidden" name="item" value={i.id} />
-        <input type="hidden" name={`sig:${i.id}`} value={itemSignature(i)} />
+        <input type="hidden" name={`sig:${i.id}`} value={itemSignature(flags ? i : { ...i, shared: undefined, reserve: undefined })} />
         <label className="check" title="Inclure dans le budget">
           <input type="checkbox" name={`${p}included`} defaultChecked={i.included} disabled={!draft} />
           <span className="sr-only">Inclure · {i.label}</span>
@@ -142,6 +149,19 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
             </>
           )}
         </div>
+        {flags && (
+          <div className="col-start-2 flex flex-wrap gap-4 text-sm">
+            <input type="hidden" name={`${p}flags`} value="1" />
+            <label className="check" title="Dépense commune, partagée au prorata des revenus">
+              <input type="checkbox" name={`${p}shared`} defaultChecked={i.shared} />
+              <span>Commune<span className="sr-only"> · {i.label}</span></span>
+            </label>
+            <label className="check" title="Réserve imprévus : absorbe les dépassements des enveloppes">
+              <input type="checkbox" name={`${p}reserve`} defaultChecked={i.reserve} />
+              <span>Réserve<span className="sr-only"> · {i.label}</span></span>
+            </label>
+          </div>
+        )}
       </div>
     );
   };
@@ -173,6 +193,81 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
           note={totals.expense ? `${money(afterFixed - totals.expense)} après les autres dépenses prévues` : undefined}
         />
       </div>
+
+      {split && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Partage</CardTitle>
+            <span className="amount" title="Dépenses communes prévues, moins les recettes des comptes communs">{money(split.commonNet)}</span>
+          </CardHeader>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm tabular-nums">
+              <thead>
+                <tr className="text-left text-muted">
+                  <th className="py-2 pr-3 font-medium">Membre</th>
+                  <th className="py-2 pr-3 text-right font-medium">Revenu</th>
+                  <th className="py-2 pr-3 text-right font-medium">Part</th>
+                  <th className="py-2 pr-3 text-right font-medium">Dû</th>
+                  <th className="py-2 pr-3 text-right font-medium">Déjà contribué</th>
+                  <th className="py-2 pr-3 text-right font-medium">Reste à virer</th>
+                  <th className="py-2"><span className="sr-only">Virement</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {split.members.map((m) => (
+                  <tr key={m.userId} className="border-t border-hairline">
+                    <td className="py-2 pr-3">{m.name}</td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap">
+                      {m.income === null ? "—" : money(m.income)}
+                      {m.income !== null && m.forecast && <small className="block text-xs text-muted">prévu</small>}
+                    </td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap">{percent.format(m.shareBp / 10000)}</td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap">{money(m.due)}</td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap">{money(m.contribution)}</td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap text-heading">{money(m.toTransfer)}</td>
+                    <td className="py-2 text-right">
+                      {split.transfer[m.userId] && <ButtonLink href={split.transfer[m.userId]} size="sm" variant="secondary">Préparer le virement</ButtonLink>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {(env.lines.length > 0 || env.reserve) && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Enveloppes</CardTitle>
+          </CardHeader>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm tabular-nums">
+              <thead>
+                <tr className="text-left text-muted">
+                  <th className="py-2 pr-3 font-medium">Libellé</th>
+                  <th className="py-2 pr-3 text-right font-medium">Prévu</th>
+                  <th className="py-2 pr-3 text-right font-medium">Réel</th>
+                  <th className="py-2 text-right font-medium">Restant</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...env.lines, ...(env.reserve ? [env.reserve] : [])].map((e) => (
+                  <tr key={e.id} className="border-t border-hairline">
+                    <td className="py-2 pr-3 break-words">
+                      {e.label}
+                      {e === env.reserve && <small className="block text-xs text-muted">Réserve · dont {money(env.reserve.overrun)} de dépassements absorbés</small>}
+                    </td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap">{money(e.planned)}</td>
+                    <td className="py-2 pr-3 text-right whitespace-nowrap">{money(e.actual)}</td>
+                    <td className={`py-2 text-right whitespace-nowrap ${e.left < 0 ? "text-neg" : "text-heading"}`}>{money(e.left)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       <div className="my-4 grid gap-4 lg:grid-cols-2">
         <Card>

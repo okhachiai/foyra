@@ -103,7 +103,7 @@ export function envelopes(tree: (Node & { actual: number })[]): { lines: Envelop
   const env = (n: Node & { actual: number }) => ({ id: n.id, label: n.label, planned: n.total, actual: n.actual, left: n.total - n.actual });
   const lines = tree.filter((n) => n.kind === "EXPENSE" && n.included && n.shared && !n.category?.fixed && !n.reserve).map(env);
   const overrun = lines.reduce((s, l) => s + Math.max(-l.left, 0), 0);
-  const r = tree.find((n) => n.reserve);
+  const r = tree.find((n) => n.reserve && n.kind === "EXPENSE" && n.included);
   return { lines, reserve: r ? { ...env(r), left: r.total - r.actual - overrun, overrun } : null };
 }
 
@@ -232,6 +232,7 @@ export async function setBudgetStatus(householdId: string, budgetId: string, sta
 export type ItemFields = { label: string; amount: number; included: boolean; recurring: boolean; shared?: boolean; reserve?: boolean };
 
 const ONE_RESERVE = "Une seule réserve par budget.";
+const RESERVE_TOP = "La réserve doit être une ligne principale de dépense.";
 
 /** Une deuxième réserve (index SQL partiel) → message lisible. */
 async function oneReserve<T>(write: () => Promise<T>) {
@@ -245,19 +246,20 @@ async function oneReserve<T>(write: () => Promise<T>) {
 
 /**
  * Ajoute une ligne. Sous-ligne : le parent doit être une ligne principale du même budget ; elle prend son type et son
- * caractère commun (jamais réserve), et le montant direct du parent repasse à 0 (son total devient la somme de ses enfants).
+ * caractère commun (une réserve est refusée), et le montant direct du parent repasse à 0 (son total devient la somme de ses enfants).
  * Elle se place en dernier.
  */
 export async function addItem(householdId: string, budgetId: string, input: ItemFields & { kind: CategoryKind; parentId: string | null }) {
   return oneReserve(() => prisma.$transaction(async (tx) => {
     await lockBudget(tx, householdId, budgetId);
     let kind = input.kind;
+    if (input.reserve && (input.parentId || kind === "INCOME")) throw new LedgerError(RESERVE_TOP);
     if (input.parentId) {
       const parent = await tx.budgetItem.findFirst({ where: { id: input.parentId, budgetId, householdId } });
       if (!parent) throw new NotFoundError();
       if (parent.parentId) throw new LedgerError("Une sous-catégorie ne peut pas avoir de sous-catégorie.", "parentId");
       kind = parent.kind;
-      input = { ...input, shared: parent.shared, reserve: false };
+      input = { ...input, shared: parent.shared };
       await tx.budgetItem.update({ where: { id: parent.id }, data: { amount: 0 } });
     }
     const last = await tx.budgetItem.aggregate({ where: { budgetId, parentId: input.parentId, kind }, _max: { sortOrder: true } });
@@ -267,15 +269,17 @@ export async function addItem(householdId: string, budgetId: string, input: Item
 
 /**
  * Enregistre les lignes modifiées ; le montant d'une ligne qui a des enfants reste 0 (total calculé). Ids hors budget ignorés.
- * Sous-lignes : caractère commun du parent (le changer sur le parent l’applique à ses enfants), jamais réserve.
+ * Sous-lignes : caractère commun du parent (le changer sur le parent l’applique à ses enfants). Réserve : ligne principale de dépense seulement.
  * Réserves retirées avant d'être posées : la déplacer d'une ligne à l'autre passe en un seul enregistrement.
  */
 export async function saveItems(householdId: string, budgetId: string, items: Map<string, ItemFields>) {
   await oneReserve(() => prisma.$transaction(async (tx) => {
     await lockBudget(tx, householdId, budgetId);
-    const subs = await tx.budgetItem.findMany({ where: { budgetId, householdId, parentId: { not: null } }, select: { id: true, parentId: true } });
+    const all = await tx.budgetItem.findMany({ where: { budgetId, householdId }, select: { id: true, parentId: true, kind: true } });
+    const subs = all.filter((i) => i.parentId);
     const parents = new Set(subs.map((p) => p.parentId));
     const children = new Set(subs.map((c) => c.id));
+    if (all.some((i) => items.get(i.id)?.reserve && (i.parentId || i.kind === "INCOME"))) throw new LedgerError(RESERVE_TOP);
     const entries = [...items].sort(([, a], [, b]) => Number(!!a.reserve) - Number(!!b.reserve));
     for (const [id, { shared, reserve, ...data }] of entries) {
       const own = children.has(id) ? data : { ...data, shared, reserve, ...(parents.has(id) && { amount: 0 }) };

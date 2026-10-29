@@ -1,5 +1,5 @@
 import type { Role } from "@prisma/client";
-import { canRead, fullScope, type Scope } from "./access";
+import { canRead, canWrite, fullScope, type Scope } from "./access";
 import { addMonths, getBudget } from "./budget";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
@@ -99,4 +99,26 @@ export async function getSplit(householdId: string, month: Date): Promise<Split>
 export function visibleSplit(split: Split, viewer: { id: string; role: Role }, scope: Scope, ownedBy: Record<string, string[]>): Split {
   const sees = (userId: string) => viewer.role === "ADMIN" || viewer.id === userId || !!ownedBy[userId]?.length && ownedBy[userId].every((id) => canRead(scope, id));
   return { ...split, members: split.members.map((m) => (sees(m.userId) ? m : { ...m, income: null, personalLeft: null })) };
+}
+
+/**
+ * Partage du mois tel que `viewer` peut le voir, avec le lien « Préparer le virement » par membre (`transfer`) :
+ * de son premier compte perso actif vers le premier compte commun, tous deux modifiables par le lecteur.
+ * null si sans objet (aucun membre propriétaire, ou ni compte commun ni deux membres).
+ */
+export async function getVisibleSplit(viewer: { id: string; role: Role; householdId: string }, scope: Scope, month: Date) {
+  const [split, accounts] = await Promise.all([
+    getSplit(viewer.householdId, month),
+    prisma.account.findMany({ where: { householdId: viewer.householdId }, select: { id: true, ownerId: true, archivedAt: true }, orderBy: { createdAt: "asc" } }),
+  ]);
+  const common = accounts.find((a) => a.ownerId === null && !a.archivedAt && canWrite(scope, a.id))?.id;
+  if (!split.members.length || (!accounts.some((a) => a.ownerId === null && !a.archivedAt) && split.members.length < 2)) return null;
+  const ownedBy: Record<string, string[]> = {};
+  for (const a of accounts) if (a.ownerId) (ownedBy[a.ownerId] ??= []).push(a.id);
+  const transfer: Record<string, string> = {};
+  for (const m of split.members) {
+    const from = accounts.find((a) => a.ownerId === m.userId && !a.archivedAt && canWrite(scope, a.id));
+    if (m.toTransfer > 0 && from && common) transfer[m.userId] = `/accounts/${from.id}?virement=${common}&montant=${m.toTransfer}`;
+  }
+  return { ...visibleSplit(split, viewer, scope, ownedBy), transfer };
 }

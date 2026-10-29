@@ -6,6 +6,7 @@ import { listCategories } from "@/lib/categories";
 import { getDashboard, getDashboardCharts } from "@/lib/dashboard";
 import { formatDay, parseDay, todayIn, writableAccounts } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
+import { getVisibleSplit } from "@/lib/split";
 import { Badge } from "@/components/ui/badge";
 import { ButtonLink } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,8 +27,11 @@ export default async function DashboardPage() {
   const today = parseDay(todayStr)!;
   const [d, categories, writable] = await Promise.all([getDashboard(scope, today), listCategories(user.householdId), writableAccounts(scope)]);
   const money = (cents: number) => formatCents(cents, user.household.currency);
-  // Graphiques seulement s'il existe des opérations réelles : jamais de courbe inventée.
-  const charts = d.recent.length ? await getDashboardCharts(scope, today, d.total) : null;
+  const [charts, split] = await Promise.all([
+    // Graphiques seulement s'il existe des opérations réelles : jamais de courbe inventée.
+    d.recent.length ? getDashboardCharts(scope, today, d.total) : null,
+    d.budget ? getVisibleSplit(user, scope, d.month) : null,
+  ]);
 
   return (
     <>
@@ -145,6 +149,26 @@ export default async function DashboardPage() {
             <EmptyState title="Pas encore de budget ce mois-ci" action={<ButtonLink href="/budget" size="sm" variant="secondary">Préparer le budget</ButtonLink>} />
           )}
         </Card>
+
+        {split && (
+          <Card className="lg:col-span-12">
+            <CardHeader>
+              <CardTitle>Reste à virer</CardTitle>
+              <Link href="/budget" className="text-sm">Partage du budget</Link>
+            </CardHeader>
+            <ul className="m-0 grid list-none gap-x-8 p-0 sm:grid-cols-2">
+              {split.members.map((m) => (
+                <li key={m.userId} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-hairline py-2.5">
+                  <span className="min-w-0">{m.name}<small className="block text-xs text-muted">Dû {money(m.due)} · déjà contribué {money(m.contribution)}</small></span>
+                  <span className="flex items-center gap-3">
+                    <span className="amount">{money(m.toTransfer)}</span>
+                    {split.transfer[m.userId] && <ButtonLink href={split.transfer[m.userId]} size="sm" variant="secondary">Préparer le virement</ButtonLink>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
       </div>
 
       {charts && <div className="mt-4"><AnalyticsBento currency={user.household.currency} total={d.total} data={charts} /></div>}

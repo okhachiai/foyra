@@ -64,10 +64,11 @@ describe("enveloppes (pures)", () => {
       item({ id: "p", amount: 1000, shared: false }),
       item({ id: "f", amount: 1000, category: { fixed: true } }),
       item({ id: "x", amount: 1000, included: false }),
-      item({ id: "i", amount: 1000, kind: "INCOME" }),
+      item({ id: "i", amount: 1000, kind: "INCOME", reserve: true }),
+      item({ id: "xr", amount: 1000, included: false, reserve: true }),
     ], { p: 9000, f: 9000, x: 9000, i: 9000 });
     expect(lines.map((l) => l.id)).toEqual(["c"]);
-    expect(reserve).toBeNull();
+    expect(reserve).toBeNull(); // réserve sur un revenu ou une ligne exclue : ignorée
   });
 });
 
@@ -308,9 +309,15 @@ describe("budget mensuel", () => {
     const b = await createBudget(hh, nov);
     const divers = await find(b.id, "Divers et imprévus");
     const factures = await find(b.id, "Factures");
-    const sub = await addItem(hh, b.id, { kind: "EXPENSE", parentId: divers.id, label: "Cadeaux", amount: 0, included: true, recurring: true, shared: false, reserve: true });
+    const cadeaux = { kind: "EXPENSE" as const, parentId: divers.id, label: "Cadeaux", amount: 0, included: true, recurring: true, shared: false };
+    await expect(addItem(hh, b.id, { ...cadeaux, reserve: true })).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
+    await expect(addItem(hh, b.id, { ...cadeaux, parentId: null, kind: "INCOME", reserve: true })).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
+    const sub = await addItem(hh, b.id, cadeaux);
     expect(sub).toMatchObject({ shared: true, reserve: false });
-    await saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), shared: false, reserve: true }], [sub.id, { ...fields(divers), shared: true, reserve: true }]]));
+    await expect(saveItems(hh, b.id, new Map([[sub.id, { ...fields(divers), reserve: true }]]))).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
+    const salaire = await prisma.budgetItem.create({ data: { householdId: hh, budgetId: b.id, kind: "INCOME", label: "Salaire", sortOrder: 99 } });
+    await expect(saveItems(hh, b.id, new Map([[salaire.id, { label: "Salaire", amount: 0, included: true, recurring: true, reserve: true }]]))).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
+    await saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), shared: false, reserve: true }], [sub.id, { ...fields(divers), shared: true }]]));
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: divers.id } })).toMatchObject({ shared: false, reserve: true });
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: sub.id } })).toMatchObject({ shared: false, reserve: false });
     await expect(saveItems(hh, b.id, new Map([[factures.id, { ...fields(factures), reserve: true }]]))).rejects.toThrow("Une seule réserve par budget.");

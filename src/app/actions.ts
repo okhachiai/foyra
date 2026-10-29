@@ -451,7 +451,12 @@ function itemFields(fd: FormData, prefix: string, errors: Errors): ItemFields {
   if (!label) errors.add(`${prefix}label`, "Libellé obligatoire.");
   const amount = parseForecast(str(fd, `${prefix}amount`));
   if (amount === undefined) errors.add(`${prefix}amount`, BUDGET_AMOUNT);
-  return { label, amount: amount ?? 0, included: fd.get(`${prefix}included`) === "on", recurring: fd.get(`${prefix}recurring`) === "on" };
+  // Cases « Commune » / « Réserve » : `flags` signale qu'elles étaient affichées (absentes = inchangées).
+  const flags = fd.has(`${prefix}flags`);
+  return {
+    label, amount: amount ?? 0, included: fd.get(`${prefix}included`) === "on", recurring: fd.get(`${prefix}recurring`) === "on",
+    shared: flags ? fd.get(`${prefix}shared`) === "on" : undefined, reserve: flags ? fd.get(`${prefix}reserve`) === "on" : undefined,
+  };
 }
 
 /**

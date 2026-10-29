@@ -5,7 +5,7 @@ import { addItem, createBudget, parseMonth } from "./budget";
 import { createCharge } from "./charges";
 import { prisma } from "./db";
 import { createAccount, createEntry, createTransfer, parseDay } from "./ledger";
-import { getSplit, splitMonth, visibleSplit, type SplitInput } from "./split";
+import { getSplit, getVisibleSplit, splitMonth, visibleSplit, type SplitInput } from "./split";
 
 const A = { id: "a", name: "Alice" };
 const B = { id: "b", name: "Bob" };
@@ -114,5 +114,27 @@ describe("getSplit", () => {
     const [a, b] = s.members;
     expect(a).toMatchObject({ income: 300000, forecast: false, shareBp: 6000, due: 81000, contribution: 13000, toTransfer: 68000, personalLeft: 300000 - 81000 - 5000 - 7000 });
     expect(b).toMatchObject({ income: 200000, forecast: true, shareBp: 4000, due: 54000, contribution: 50000, toTransfer: 4000, personalLeft: 146000 });
+  });
+
+  it("getVisibleSplit : masquage pour un membre, lien de virement si comptes modifiables, null sans membre propriétaire", async () => {
+    const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
+    hh = admin.householdId;
+    const all = fullScope(hh);
+    const bob = (await createMember(hh, { name: "Bob", email: "b@test.fr", password: "password1", role: "MEMBER" }))!;
+    const acc = async (name: string, ownerId: string | null) => (await createAccount(all, admin.id, { name, kind: "CHECKING", initialBalance: 0, ownerId })).id;
+    const commun = await acc("Commun", null);
+    expect(await getVisibleSplit(admin, all, nov)).toBeNull(); // réglage par défaut : tout commun
+    const pa = await acc("Perso A", admin.id);
+    const pb = await acc("Perso B", bob.id);
+    await createCharge(all, { kind: "EXPENSE", active: true, name: "Loyer", amount: 100000, dueDay: 5, accountId: commun, categoryId: await cat("Loyer"), startMonth: nov, endMonth: null, shared: true });
+
+    const asAdmin = (await getVisibleSplit(admin, all, nov))!;
+    expect(asAdmin.transfer).toEqual({ [admin.id]: `/accounts/${pa}?virement=${commun}&montant=50000`, [bob.id]: `/accounts/${pb}?virement=${commun}&montant=50000` });
+    const bobScope: Scope = { householdId: hh, read: [pb, commun], write: [pb, commun], manage: [pb] };
+    const asBob = (await getVisibleSplit({ ...bob, householdId: hh }, bobScope, nov))!;
+    expect(asBob.members[0]).toMatchObject({ userId: admin.id, income: null, personalLeft: null, toTransfer: 50000 });
+    expect(asBob.members[1]).toMatchObject({ userId: bob.id, income: 0 });
+    expect(asBob.transfer).toEqual({ [bob.id]: `/accounts/${pb}?virement=${commun}&montant=50000` });
+    expect((await getVisibleSplit({ ...bob, householdId: hh }, { ...bobScope, write: [pb] }, nov))!.transfer).toEqual({}); // commun en lecture seule
   });
 });
