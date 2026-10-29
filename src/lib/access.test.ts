@@ -161,7 +161,7 @@ describe("accès par compte", () => {
     expect((await listAccounts(admin)).map((a) => a.name)).toContain("Perso");
   });
 
-  it("Réglage admin : écriture → aucun accès ; membre admin ou hors foyer → introuvable", async () => {
+  it("Réglage admin : écriture → aucun accès ; réglage sur un admin ou hors foyer → introuvable", async () => {
     await grant({ [courant]: "WRITE" });
     expect((await listAccounts(await member())).map((a) => a.name)).toEqual(["Courant"]);
     await grant({ [courant]: null });
@@ -169,7 +169,8 @@ describe("accès par compte", () => {
     expect((await getAccess(hh, memberId)).accounts.map((a) => a.level)).toEqual([null, null]);
     await expect(setAccess(hh, adminId, new Map([[courant, "READ"]]))).rejects.toBeInstanceOf(NotFoundError);
     await expect(setAccess("autre-foyer", memberId, new Map([[courant, "READ"]]))).rejects.toBeInstanceOf(NotFoundError);
-    await expect(getAccess(hh, adminId)).rejects.toBeInstanceOf(NotFoundError);
+    expect((await getAccess(hh, adminId)).member.id).toBe(adminId); // la page membre charge tout utilisateur du foyer
+    await expect(getAccess("autre-foyer", memberId)).rejects.toBeInstanceOf(NotFoundError);
     await expect(grant({ inexistant: "READ" })).rejects.toBeInstanceOf(NotFoundError);
   });
 });

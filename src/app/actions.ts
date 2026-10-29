@@ -6,8 +6,8 @@ import { revalidatePath } from "next/cache";
 import type { AccessLevel, AccountKind, CarryOver, Role } from "@prisma/client";
 import { getScope, setAccess } from "@/lib/access";
 import {
-  checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
-  recordLoginFailure, requireAdmin, requireUser, setupHousehold, startSession,
+  changePassword, checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
+  recordLoginFailure, requireAdmin, requireUser, setDisabled, setRole, setupHousehold, startSession,
 } from "@/lib/auth";
 import {
   archiveAccount, createAccount, createEntry, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
@@ -159,6 +159,38 @@ export async function saveAccessAction(_: FormState, fd: FormData): Promise<Form
   const error = await run(() => setAccess(admin.householdId, str(fd, "id"), levels));
   if (error) return error;
   done("/members");
+}
+
+export async function setRoleAction(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const id = str(fd, "id");
+  const role: Role = str(fd, "role") === "ADMIN" ? "ADMIN" : "MEMBER";
+  const error = await run(() => setRole(admin.householdId, admin.id, id, role));
+  if (error) return error;
+  done(`/members/${encodeURIComponent(id)}`);
+}
+
+export async function setDisabledAction(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const id = str(fd, "id");
+  const error = await run(() => setDisabled(admin.householdId, admin.id, id, str(fd, "disabled") === "1"));
+  if (error) return error;
+  done(`/members/${encodeURIComponent(id)}`);
+}
+
+// --- Mon compte ---
+
+export async function changePasswordAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const errors = new Errors();
+  const current = String(fd.get("current") ?? "");
+  if (!current) errors.add("current", "Champ obligatoire.");
+  const password = passwordField(fd, errors);
+  if (String(fd.get("confirm") ?? "") !== password) errors.add("confirm", "La confirmation ne correspond pas.");
+  if (errors.state) return errors.state;
+  const error = await run(() => changePassword(user.id, current, password));
+  if (error) return error;
+  done("/profil?ok=1");
 }
 
 // --- Comptes ---

@@ -23,6 +23,8 @@ COPY --from=prisma-cli /prisma-cli /prisma-cli
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build /app/prisma ./prisma
+# `npm run reset-password` (le package.json du standalone contient le script ; ses dépendances y sont tracées).
+COPY --from=build /app/scripts ./scripts
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 USER node
 EXPOSE 3000

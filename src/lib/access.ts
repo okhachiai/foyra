@@ -45,9 +45,10 @@ async function findMember(householdId: string, memberId: string) {
   return member;
 }
 
-/** Membre (rôle MEMBER du foyer) et niveau d'accès sur chaque compte du foyer, archivés compris. */
+/** Utilisateur du foyer (tout rôle) et niveau d'accès sur chaque compte du foyer, archivés compris. */
 export async function getAccess(householdId: string, memberId: string) {
-  const member = await findMember(householdId, memberId);
+  const member = await prisma.user.findFirst({ where: { id: memberId, householdId } });
+  if (!member) throw new NotFoundError();
   const accounts = await prisma.account.findMany({
     where: { householdId },
     include: { access: { where: { userId: memberId }, select: { level: true } } },

@@ -23,6 +23,16 @@ Dans `.env` : `COOKIE_SECURE=true`, `APP_URL=https://foyra.example.org` (lu au b
 docker compose up -d --build
 ```
 
+### Mot de passe oublié
+
+Chacun change son mot de passe dans **Mon compte**. Un mot de passe perdu (y compris celui de l'unique admin) se réinitialise depuis le serveur :
+
+```sh
+docker compose exec app npm run reset-password admin@exemple.fr
+```
+
+Un mot de passe provisoire aléatoire s'affiche une seule fois ; toutes les sessions de l'utilisateur sont fermées. Un compte désactivé reste désactivé (un admin le réactive dans **Membres**). Sans email en argument, il est demandé.
+
 ## Sauvegarde et restauration
 
 ```sh
@@ -48,6 +58,7 @@ npm run build
 
 ## Règles métier
 
+- Membres : l'admin change le rôle et désactive / réactive un utilisateur (jamais de suppression). Désactivé : sessions fermées, connexion refusée, accès aux comptes conservés. Le foyer garde toujours au moins un admin actif ; on ne peut pas désactiver son propre compte. Rétrogradé en membre : aucun accès aux comptes tant que l'admin n'en donne pas.
 - Montants en centimes entiers, toujours > 0 (contrainte CHECK) ; le sens découle du type.
 - Solde = solde initial + somme signée des opérations, jamais stocké. Le découvert est autorisé.
 - Un virement = deux lignes liées (`transferId`, côté `OUT`/`IN`), créées, modifiées et supprimées ensemble.

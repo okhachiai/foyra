@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { Prisma, type Role } from "@prisma/client";
 import { createDefaultCategories } from "./categories";
 import { prisma } from "./db";
+import { LedgerError, NotFoundError } from "./ledger";
 
 export const SESSION_COOKIE = "foyra_session"; // dupliqué dans src/middleware.ts (runtime edge)
 const SESSION_DAYS = 30;
@@ -34,7 +35,7 @@ export async function startSession(userId: string) {
   await setSessionCookie(token);
 }
 
-/** Session valide pour ce jeton, ou null (expirée → supprimée). */
+/** Session valide pour ce jeton, ou null (expirée → supprimée ; utilisateur désactivé → ses sessions supprimées). */
 export async function findSession(token: string | undefined) {
   if (!token) return null;
   const session = await prisma.session.findUnique({
@@ -44,6 +45,10 @@ export async function findSession(token: string | undefined) {
   if (!session) return null;
   if (session.expiresAt <= new Date()) {
     await prisma.session.deleteMany({ where: { id: session.id } });
+    return null;
+  }
+  if (session.user.disabledAt) {
+    await prisma.session.deleteMany({ where: { userId: session.userId } });
     return null;
   }
   return session;
@@ -113,7 +118,7 @@ export function clearLoginFailures(ip: string, email: string) {
 
 let dummyHash: Promise<string> | undefined;
 
-/** Vérifie email + mot de passe ; temps comparable que l'utilisateur existe ou non. */
+/** Vérifie email + mot de passe ; temps comparable que l'utilisateur existe, soit désactivé ou non. */
 export async function checkCredentials(email: string, password: string) {
   const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
   if (!user) {
@@ -121,7 +126,8 @@ export async function checkCredentials(email: string, password: string) {
     await verifyPassword(await dummyHash, password);
     return null;
   }
-  return (await verifyPassword(user.passwordHash, password)) ? user : null;
+  const ok = await verifyPassword(user.passwordHash, password);
+  return ok && !user.disabledAt ? user : null;
 }
 
 // --- Initialisation et membres ---
@@ -157,4 +163,55 @@ export async function createMember(householdId: string, input: { name: string; e
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return null;
     throw e;
   }
+}
+
+const LAST_ADMIN = "Le foyer doit garder au moins un admin actif.";
+
+/**
+ * Change le rôle et/ou l'état actif d'un utilisateur du foyer, sans jamais laisser zéro admin actif.
+ * Les admins actifs sont verrouillés (FOR UPDATE) : deux changements concurrents se sérialisent,
+ * le second relit l'état validé par le premier.
+ */
+async function updateUser(householdId: string, actorId: string, userId: string, change: { role?: Role; disabled?: boolean }) {
+  await prisma.$transaction(async (tx) => {
+    const admins = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "User" WHERE "householdId" = ${householdId} AND "role" = 'ADMIN' AND "disabledAt" IS NULL FOR UPDATE`;
+    // Cible verrouillée aussi (après les admins, même ordre partout) : pas d'écriture depuis une lecture périmée.
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} AND "householdId" = ${householdId} FOR UPDATE`;
+    const target = await tx.user.findFirst({ where: { id: userId, householdId } });
+    if (!target) throw new NotFoundError();
+    if (change.disabled && userId === actorId) throw new LedgerError("Vous ne pouvez pas désactiver votre propre compte.");
+    const role = change.role ?? target.role;
+    const disabled = change.disabled ?? target.disabledAt !== null;
+    const losesAdmin = admins.some((a) => a.id === userId) && (role !== "ADMIN" || disabled);
+    if (losesAdmin && admins.length === 1) throw new LedgerError(LAST_ADMIN, change.role ? "role" : undefined);
+    // Acteur rétrogradé / désactivé entre-temps : aucune écriture (après le refus « dernier admin », attendu en cas de croisement).
+    if (!admins.some((a) => a.id === actorId)) throw new NotFoundError();
+
+    await tx.user.update({
+      where: { id: userId },
+      data: { role, disabledAt: disabled ? (target.disabledAt ?? new Date()) : null },
+    });
+    // Rétrogradé : aucun accès aux comptes tant que l'admin n'en donne pas (comme un nouveau membre).
+    if (target.role === "ADMIN" && role === "MEMBER") await tx.accountAccess.deleteMany({ where: { userId } });
+    if (disabled) await tx.session.deleteMany({ where: { userId } });
+  });
+}
+
+export const setRole = (householdId: string, actorId: string, userId: string, role: Role) =>
+  updateUser(householdId, actorId, userId, { role });
+
+export const setDisabled = (householdId: string, actorId: string, userId: string, disabled: boolean) =>
+  updateUser(householdId, actorId, userId, { disabled });
+
+/** Change son mot de passe (actuel exigé) ; supprime ses autres sessions, garde celle du cookie courant. */
+export async function changePassword(userId: string, current: string, next: string) {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (!(await verifyPassword(user.passwordHash, current))) throw new LedgerError("Mot de passe actuel incorrect.", "current");
+  const token = (await cookies()).get(SESSION_COOKIE)?.value ?? "";
+  const passwordHash = await hashPassword(next);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
+    prisma.session.deleteMany({ where: { userId, NOT: { tokenHash: sha256(token) } } }),
+  ]);
 }

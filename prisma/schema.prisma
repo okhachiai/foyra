@@ -82,6 +82,7 @@ model User {
   name         String
   passwordHash String
   role         Role     @default(MEMBER)
+  disabledAt   DateTime? // désactivé : connexion refusée, sessions supprimées ; réactivable
   createdAt    DateTime @default(now())
 
   household    Household     @relation(fields: [householdId], references: [id])
