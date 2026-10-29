@@ -165,6 +165,18 @@ export async function createEntryTx(tx: Db, scope: Scope, userId: string, input:
   return tx.transaction.create({ data: { ...input, shared: sharedOn(a.ownerId, input, false), householdId: scope.householdId, createdById: userId } });
 }
 
+/** Ajuste le solde d'un compte à `target` par une opération d'écart ; `null` si déjà égal. Compte verrouillé avant de lire le solde. */
+export async function adjustBalance(scope: Scope, userId: string, accountId: string, target: number, occurredOn: Date) {
+  return prisma.$transaction(async (tx) => {
+    await lockActiveAccounts(tx, scope, [{ id: accountId, field: "accountId" }]);
+    const diff = target - (await accountBalance(scope, accountId, tx));
+    if (diff === 0) return null;
+    return createEntryTx(tx, scope, userId, {
+      accountId, kind: diff > 0 ? "INCOME" : "EXPENSE", amount: Math.abs(diff), occurredOn, note: "Ajustement de solde", categoryId: null,
+    });
+  });
+}
+
 /** Écrit ; si la clé existe déjà (double clic, nouvelle tentative), renvoie l'opération déjà enregistrée au lieu d'un doublon. */
 async function replay<T>(scope: Scope, key: string | null | undefined, write: () => Promise<T>, existing: (id: string, transferId: string | null) => T | PromiseLike<T>): Promise<T> {
   try {

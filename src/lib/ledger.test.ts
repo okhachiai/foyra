@@ -5,7 +5,7 @@ import { prisma } from "./db";
 import { parseMonth } from "./budget";
 import { createCharge, payCharge } from "./charges";
 import {
-  accountBalance, archiveAccount, createAccount, createEntry, createTransfer, deleteAccount, deleteTransaction, getAccount, getTransfer,
+  accountBalance, adjustBalance, archiveAccount, createAccount, createEntry, createTransfer, deleteAccount, deleteTransaction, getAccount, getTransfer,
   householdTotal, LedgerError, NotFoundError, parseDay, todayIn, updateAccount, updateEntry, updateTransfer,
 } from "./ledger";
 
@@ -284,5 +284,14 @@ describe("ledger", () => {
     expect((await createAccount(s, m1, { ...data, ownerId: null })).ownerId).toBeNull();
     await prisma.user.update({ where: { id: m2 }, data: { disabledAt: new Date() } });
     await expect(createAccount(fullScope(hh), user, { ...data, ownerId: m2 })).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("ajuster le solde : crée l'écart, rien si égal", async () => {
+    const c = await account("Courant", 100000);
+    const t = await adjustBalance(fullScope(hh), user, c, 95000, day);
+    expect(t).toMatchObject({ kind: "EXPENSE", amount: 5000, note: "Ajustement de solde", categoryId: null });
+    expect(await accountBalance(fullScope(hh), c)).toBe(95000);
+    expect(await adjustBalance(fullScope(hh), user, c, 95000, day)).toBeNull();
+    expect((await adjustBalance(fullScope(hh), user, c, 96000, day))!.kind).toBe("INCOME");
   });
 });
