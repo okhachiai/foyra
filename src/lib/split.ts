@@ -81,9 +81,8 @@ export async function getSplit(householdId: string, month: Date): Promise<Split>
     const who = owner.get(t.accountId);
     if (t.kind === "TRANSFER") {
       if (t.transferSide === "OUT" && who && intoCommon.has(t.transferId)) add(input.toCommon, who, t.amount);
-    } else if (t.categoryId === null) {
-      // Ajustement de solde : ni revenu ni dépense.
     } else if (t.kind === "INCOME") {
+      if (t.categoryId === null) continue; // ajustement de solde : pas un revenu
       if (who === null) input.commonIncome += t.amount;
       else add(input.income, who, t.amount);
     } else add(t.shared ? input.paidCommon : input.spentPersonal, who, t.amount);
@@ -96,8 +95,8 @@ export async function getSplit(householdId: string, month: Date): Promise<Split>
   return splitMonth(input);
 }
 
-/** Admin, soi-même ou membre dont tous les comptes sont lisibles : détail complet ; sinon revenu et reste perso masqués. */
+/** Admin, soi-même ou membre dont tous les comptes sont lisibles : détail complet ; sinon (comptes inconnus inclus) revenu et reste perso masqués. */
 export function visibleSplit(split: Split, viewer: { id: string; role: Role }, scope: Scope, ownedBy: Record<string, string[]>): Split {
-  const sees = (userId: string) => viewer.role === "ADMIN" || viewer.id === userId || (ownedBy[userId] ?? []).every((id) => canRead(scope, id));
+  const sees = (userId: string) => viewer.role === "ADMIN" || viewer.id === userId || !!ownedBy[userId]?.length && ownedBy[userId].every((id) => canRead(scope, id));
   return { ...split, members: split.members.map((m) => (sees(m.userId) ? m : { ...m, income: null, personalLeft: null })) };
 }

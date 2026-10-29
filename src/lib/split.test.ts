@@ -50,12 +50,14 @@ describe("splitMonth", () => {
 
   it("visibleSplit : membre sans lecture des comptes de l'autre → revenu et reste perso masqués", () => {
     const s = splitMonth(base({ income: { a: 300000, b: 200000 }, plannedCommon: 1000 }));
-    const scope: Scope = { householdId: "h", read: ["ab", "c"], write: [], manage: [] };
-    const owned = { a: ["aa", "ab"], b: ["ab", "c"] };
+    const scope: Scope = { householdId: "h", read: ["a2", "b1"], write: [], manage: [] };
+    const owned = { a: ["a1", "a2"], b: ["b1"] };
     const v = visibleSplit(s, { id: "b", role: "MEMBER" }, scope, owned);
     expect(v.members[0]).toMatchObject({ income: null, personalLeft: null, shareBp: 6000, due: 600, toTransfer: 600 });
     expect(v.members[1].income).toBe(200000); // soi-même
-    expect(visibleSplit(s, { id: "b", role: "MEMBER" }, { ...scope, read: ["aa", "ab"] }, owned).members[0].income).toBe(300000);
+    expect(visibleSplit(s, { id: "b", role: "MEMBER" }, { ...scope, read: ["a1", "a2"] }, owned).members[0].income).toBe(300000);
+    // Absent de ownedBy : masqué par défaut.
+    expect(visibleSplit(s, { id: "b", role: "MEMBER" }, { ...scope, read: ["a1", "a2"] }, { b: ["b1"] }).members[0]).toMatchObject({ income: null, personalLeft: null });
     expect(visibleSplit(s, { id: "b", role: "ADMIN" }, scope, owned).members[0].income).toBe(300000);
   });
 });
@@ -70,7 +72,7 @@ describe("getSplit", () => {
     await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
   });
 
-  it("getSplit : virement perso → commun compté en contribution ; ajustements sans catégorie ignorés", async () => {
+  it("getSplit : virement perso → commun compté en contribution ; revenus sans catégorie ignorés, dépenses sans catégorie comptées", async () => {
     const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
     hh = admin.householdId;
     const all = fullScope(hh);
@@ -85,7 +87,8 @@ describe("getSplit", () => {
 
     await entry(pa, "INCOME", 300000, await cat("Salaire 1"));
     await entry(pa, "INCOME", 50000, null); // ajustement : ignoré
-    await entry(pa, "EXPENSE", 7000, null); // ajustement : ignoré
+    await entry(pa, "EXPENSE", 7000, null); // dépense sans catégorie (perso) : comptée
+    await entry(pa, "EXPENSE", 2000, null, true); // dépense commune sans catégorie : contribution
     await entry(pa, "INCOME", 99999, await cat("Salaire 1"), undefined, "2026-10-31"); // hors mois
     await entry(pa, "EXPENSE", 11000, await cat("Supermarché"), true);
     await entry(pa, "EXPENSE", 5000, await cat("Supermarché"), false);
@@ -109,7 +112,7 @@ describe("getSplit", () => {
     expect(s.members.map((m) => m.userId)).toEqual([admin.id, bob.id]); // ghost : aucun compte
     expect(s.commonNet).toBe(95000 + 60000 - 20000);
     const [a, b] = s.members;
-    expect(a).toMatchObject({ income: 300000, forecast: false, shareBp: 6000, due: 81000, contribution: 11000, toTransfer: 70000, personalLeft: 300000 - 81000 - 5000 });
+    expect(a).toMatchObject({ income: 300000, forecast: false, shareBp: 6000, due: 81000, contribution: 13000, toTransfer: 68000, personalLeft: 300000 - 81000 - 5000 - 7000 });
     expect(b).toMatchObject({ income: 200000, forecast: true, shareBp: 4000, due: 54000, contribution: 50000, toTransfer: 4000, personalLeft: 146000 });
   });
 });
