@@ -60,11 +60,14 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
       <section className="total">
         <span className="muted">Reste à vivre</span>
         <strong className={totals.restToLive < 0 ? "neg" : undefined}>{money(totals.restToLive)}</strong>
-        <small className="muted">Revenus max(prévu, perçu) − dépenses max(prévu, effectué)</small>
+        <small className="muted">Revenus max(prévu, perçu) − dépenses max(prévu, effectué + charges fixes à payer)</small>
         <dl className="totals">
           <dt>Revenus prévus / perçus</dt><dd>{money(totals.incomePlanned)} / {money(totals.incomeActual)}</dd>
           <dt>Dépenses prévues / effectuées</dt><dd>{money(totals.expensePlanned)} / {money(totals.expenseActual)}</dd>
           <dt>Restant à payer</dt><dd>{money(totals.remainingToPay)}</dd>
+          <dt><Link href={`/charges?m=${formatMonth(month)}`}>Charges fixes</Link></dt>
+          <dd>{money(totals.fixedTotal)} dont {money(totals.fixedRemaining)} à payer</dd>
+          <dt>Dépenses variables effectuées</dt><dd>{money(totals.variableActual)}</dd>
         </dl>
       </section>
       {(outside.EXPENSE > 0 || outside.INCOME > 0) && (

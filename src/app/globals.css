@@ -100,3 +100,4 @@ form:has(small.error) > p.error { display: none; }
 .totals { display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 1rem; margin: 0.75rem 0 0; }
 .totals dt { color: var(--muted); }
 .totals dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.budget-line details { margin-top: 0; }

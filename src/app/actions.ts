@@ -15,6 +15,7 @@ import {
 } from "@/lib/ledger";
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, updateCategory, type CategoryFields } from "@/lib/categories";
 import { formatMonth, parseMonth, savePlanned } from "@/lib/budget";
+import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
 import { parseCents } from "@/lib/money";
 import type { FormState } from "./form";
 
@@ -305,4 +306,65 @@ export async function saveBudgetAction(_: FormState, fd: FormData): Promise<Form
   if (errors.state) return errors.state;
   await savePlanned(user.householdId, month, planned);
   done(`/budget?m=${formatMonth(month)}`);
+}
+
+// --- Charges fixes ---
+
+function chargeFields(fd: FormData, errors: Errors): ChargeInput {
+  const dueDay = Number(str(fd, "dueDay"));
+  if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) errors.add("dueDay", "Jour invalide : entre 1 et 31.");
+  const startMonth = parseMonth(str(fd, "startMonth"));
+  if (!startMonth) errors.add("startMonth", "Mois invalide.");
+  const rawEnd = str(fd, "endMonth");
+  const endMonth = rawEnd ? parseMonth(rawEnd) : null;
+  if (rawEnd && !endMonth) errors.add("endMonth", "Mois invalide.");
+  const accountId = str(fd, "accountId");
+  if (!accountId) errors.add("accountId", "Champ obligatoire.");
+  const categoryId = str(fd, "categoryId");
+  if (!categoryId) errors.add("categoryId", "Champ obligatoire.");
+  return {
+    name: requiredField(fd, "name", errors), amount: amountField(fd, errors), dueDay, accountId, categoryId,
+    startMonth: startMonth ?? new Date(0), endMonth,
+  };
+}
+
+export async function createChargeAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const errors = new Errors();
+  const input = chargeFields(fd, errors);
+  if (errors.state) return errors.state;
+  const error = await run(() => createCharge(user.householdId, input));
+  if (error) return error;
+  done("/charges");
+}
+
+export async function updateChargeAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const errors = new Errors();
+  const input = chargeFields(fd, errors);
+  if (errors.state) return errors.state;
+  const error = await run(() => updateCharge(user.householdId, str(fd, "id"), input));
+  if (error) return error;
+  done("/charges");
+}
+
+export async function deleteChargeAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const error = await run(() => deleteCharge(user.householdId, str(fd, "id")));
+  if (error) return error;
+  done("/charges");
+}
+
+/** Marque une charge payée pour le mois : crée la dépense réelle (montant et date saisis). */
+export async function payChargeAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const month = parseMonth(str(fd, "month"));
+  if (!month) return { error: "Mois invalide." };
+  const errors = new Errors();
+  const amount = amountField(fd, errors);
+  const occurredOn = dayField(fd, errors);
+  if (errors.state) return errors.state;
+  const error = await run(() => payCharge(user.householdId, user.id, str(fd, "id"), month, amount, occurredOn));
+  if (error) return error;
+  done(`/charges?m=${formatMonth(month)}`);
 }

@@ -11,6 +11,8 @@ export class LedgerError extends Error {
 /** Objet inexistant ou d'un autre foyer : toujours traité en 404, sans distinction. */
 export class NotFoundError extends Error {}
 
+export const isCode = (e: unknown, code: string) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === code;
+
 type Db = Prisma.TransactionClient;
 
 export type EntryInput = { accountId: string; kind: "INCOME" | "EXPENSE"; amount: number; occurredOn: Date; note: string | null; categoryId: string | null };
@@ -82,12 +84,15 @@ async function checkCategory(tx: Db, householdId: string, input: EntryInput) {
   if (c.kind !== input.kind) throw new LedgerError("Catégorie incompatible avec le type d’opération.", "categoryId");
 }
 
+/** Création dans une transaction SQL existante (ex. paiement d'une charge fixe). */
+export async function createEntryTx(tx: Db, householdId: string, userId: string, input: EntryInput) {
+  await lockActiveAccounts(tx, householdId, [{ id: input.accountId, field: "accountId" }]);
+  await checkCategory(tx, householdId, input);
+  return tx.transaction.create({ data: { ...input, householdId, createdById: userId } });
+}
+
 export async function createEntry(householdId: string, userId: string, input: EntryInput) {
-  return prisma.$transaction(async (tx) => {
-    await lockActiveAccounts(tx, householdId, [{ id: input.accountId, field: "accountId" }]);
-    await checkCategory(tx, householdId, input);
-    return tx.transaction.create({ data: { ...input, householdId, createdById: userId } });
-  });
+  return prisma.$transaction((tx) => createEntryTx(tx, householdId, userId, input));
 }
 
 export async function getTransaction(householdId: string, id: string) {
@@ -101,6 +106,15 @@ export async function updateEntry(householdId: string, id: string, input: EntryI
     await lockLines(tx, householdId, Prisma.sql`"id" = ${id}`);
     const current = await tx.transaction.findFirst({ where: { id, householdId, kind: { not: "TRANSFER" } } });
     if (!current) throw new NotFoundError();
+    // Dépense réglant une charge fixe : elle doit rester une dépense du mois payé.
+    const payment = await tx.fixedChargePayment.findUnique({ where: { transactionId: id } });
+    if (payment) {
+      if (input.kind !== "EXPENSE") throw new LedgerError("Cette dépense règle une charge fixe : elle doit rester une dépense.", "kind");
+      const m = payment.month;
+      if (input.occurredOn < m || input.occurredOn >= new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) {
+        throw new LedgerError("Cette dépense règle une charge fixe : la date doit rester dans le mois de l’échéance.", "occurredOn");
+      }
+    }
     await lockActiveAccounts(tx, householdId, [
       { id: current.accountId, field: "accountId" },
       { id: input.accountId, field: "accountId" },

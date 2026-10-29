@@ -52,11 +52,13 @@ model Household {
   timezone  String   @default("Europe/Paris")
   createdAt DateTime @default(now())
 
-  users        User[]
-  accounts     Account[]
-  transactions Transaction[]
-  categories   Category[]
-  budgetLines  BudgetLine[]
+  users         User[]
+  accounts      Account[]
+  transactions  Transaction[]
+  categories    Category[]
+  budgetLines   BudgetLine[]
+  fixedCharges  FixedCharge[]
+  fixedPayments FixedChargePayment[]
 }
 
 model User {
@@ -96,6 +98,7 @@ model Account {
 
   household    Household     @relation(fields: [householdId], references: [id])
   transactions Transaction[]
+  fixedCharges FixedCharge[]
 
   @@index([householdId])
 }
@@ -115,10 +118,11 @@ model Transaction {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
-  household Household @relation(fields: [householdId], references: [id])
-  account   Account   @relation(fields: [accountId], references: [id])
-  createdBy User      @relation(fields: [createdById], references: [id])
-  category  Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  household    Household           @relation(fields: [householdId], references: [id])
+  account      Account             @relation(fields: [accountId], references: [id])
+  createdBy    User                @relation(fields: [createdById], references: [id])
+  category     Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  fixedPayment FixedChargePayment?
 
   @@unique([transferId, transferSide])
   @@index([accountId, occurredOn])
@@ -145,6 +149,7 @@ model Category {
   children     Category[]    @relation("CategoryTree")
   transactions Transaction[]
   budgetLines  BudgetLine[]
+  fixedCharges FixedCharge[]
 
   @@index([householdId])
   @@index([parentId])
@@ -163,5 +168,43 @@ model BudgetLine {
   category  Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@unique([categoryId, month])
+  @@index([householdId, month])
+}
+
+// Charge fixe mensuelle : s'applique au mois M si startMonth <= M <= endMonth (endMonth vide = sans fin).
+model FixedCharge {
+  id          String    @id @default(cuid())
+  householdId String
+  name        String
+  amount      Int // centimes, > 0 (CHECK SQL)
+  dueDay      Int // 1–31 (CHECK SQL) ; échéance = min(jour, dernier jour du mois)
+  accountId   String
+  categoryId  String
+  startMonth  DateTime  @db.Date // 1er du mois (CHECK SQL)
+  endMonth    DateTime? @db.Date // 1er du mois, >= startMonth (CHECK SQL)
+  createdAt   DateTime  @default(now())
+
+  household Household            @relation(fields: [householdId], references: [id])
+  account   Account              @relation(fields: [accountId], references: [id])
+  category  Category             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  payments  FixedChargePayment[]
+
+  @@index([householdId])
+}
+
+// Paiement d'une charge pour un mois : lié à la dépense créée ; supprimer la dépense supprime le paiement.
+model FixedChargePayment {
+  id            String   @id @default(cuid())
+  householdId   String
+  fixedChargeId String
+  month         DateTime @db.Date // 1er du mois (CHECK SQL)
+  transactionId String   @unique
+  createdAt     DateTime @default(now())
+
+  household   Household   @relation(fields: [householdId], references: [id])
+  fixedCharge FixedCharge @relation(fields: [fixedChargeId], references: [id], onDelete: Cascade)
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@unique([fixedChargeId, month])
   @@index([householdId, month])
 }

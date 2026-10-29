@@ -1,6 +1,6 @@
 import { Prisma, type CarryOver, type CategoryKind } from "@prisma/client";
 import { prisma } from "./db";
-import { LedgerError, NotFoundError } from "./ledger";
+import { isCode, LedgerError, NotFoundError } from "./ledger";
 import { parseCents } from "./money";
 
 type Db = Prisma.TransactionClient;
@@ -60,8 +60,6 @@ export async function addDefaultCategories(householdId: string) {
   }
 }
 
-const isCode = (e: unknown, code: string) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === code;
-
 async function uniqueName<T>(fn: () => Promise<T>) {
   try {
     return await fn();
@@ -113,12 +111,15 @@ export async function updateCategory(householdId: string, id: string, input: Cat
 /** Refusée s'il reste des sous-catégories ; les opérations rattachées passent « Sans catégorie » (FK SET NULL). */
 export async function deleteCategory(householdId: string, id: string) {
   const hasChildren = new LedgerError("Supprimez d’abord ses sous-catégories.");
+  const hasCharges = new LedgerError("Cette catégorie est utilisée par une charge fixe.");
   if (await prisma.category.count({ where: { parentId: id, householdId } })) throw hasChildren;
+  if (await prisma.fixedCharge.count({ where: { categoryId: id, householdId } })) throw hasCharges;
   try {
     const { count } = await prisma.category.deleteMany({ where: { id, householdId } });
     if (!count) throw new NotFoundError();
   } catch (e) {
-    if (isCode(e, "P2003")) throw hasChildren; // sous-catégorie créée entre-temps (FK RESTRICT)
+    // Sous-catégorie ou charge fixe créée entre-temps (FK RESTRICT).
+    if (isCode(e, "P2003")) throw (await prisma.fixedCharge.count({ where: { categoryId: id, householdId } })) ? hasCharges : hasChildren;
     throw e;
   }
 }

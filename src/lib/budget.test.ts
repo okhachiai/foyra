@@ -90,6 +90,7 @@ describe("budget mensuel", () => {
     ];
     expect(summarize(rows)).toEqual({
       incomePlanned: 300000, incomeActual: 250000, expensePlanned: 135000, expenseActual: 110000, remainingToPay: 25000, restToLive: 165000,
+      fixedTotal: 0, fixedPaid: 0, fixedRemaining: 0, variableActual: 110000,
     });
     const over = summarize([{ id: "c", kind: "EXPENSE", label: "Courses", planned: 40000, actual: 50000 }]);
     expect(over.remainingToPay).toBe(0);
