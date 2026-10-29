@@ -11,7 +11,7 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-import { fullScope, getAccess, getScope, setAccess } from "./access";
+import { fullScope, getScope, setAccess } from "./access";
 import {
   changePassword, checkCredentials, createMember, findSession, SESSION_COOKIE, setDisabled, setRole, setupHousehold, startSession,
 } from "./auth";
@@ -61,7 +61,7 @@ describe("gestion des membres", () => {
     await setDisabled(hh, adminId, bobId, true);
     await setDisabled(hh, adminId, bobId, false);
     expect(await checkCredentials("bob@x.fr", "password1")).not.toBeNull();
-    expect((await getScope({ id: bobId, role: "MEMBER", householdId: hh })).read).toEqual([acc]);
+    expect((await getScope({ id: bobId, householdId: hh })).read).toEqual([acc]);
   });
 
   it("Dernier admin : se rétrograder ou être désactivé est refusé", async () => {
@@ -79,14 +79,15 @@ describe("gestion des membres", () => {
     expect((await prisma.user.findUniqueOrThrow({ where: { id: adminId } })).role).toBe("MEMBER");
   });
 
-  it("Deux admins : A rétrograde B → membre sans accès aux comptes", async () => {
+  it("Rôle et accès indépendants : promu admin, B ne voit aucun compte de plus ; rétrogradé, il garde ses accès explicites", async () => {
     const acc = (await createAccount(fullScope(hh), adminId, { name: "Courant", kind: "CHECKING", initialBalance: 0 })).id;
     await setRole(hh, adminId, bobId, "ADMIN");
-    await prisma.accountAccess.create({ data: { userId: bobId, accountId: acc, level: "WRITE" } }); // ancienne ligne
+    expect((await getScope({ id: bobId, householdId: hh })).read).toEqual([]);
+    await prisma.accountAccess.create({ data: { userId: bobId, accountId: acc, level: "WRITE" } });
     await setRole(hh, adminId, bobId, "MEMBER");
     const bob = await prisma.user.findUniqueOrThrow({ where: { id: bobId } });
     expect(bob.role).toBe("MEMBER");
-    expect((await getScope(bob)).read).toEqual([]);
+    expect((await getScope(bob)).write).toEqual([acc]);
   });
 
   it("Rétrograder soi-même autorisé s'il reste un autre admin actif", async () => {
@@ -141,14 +142,9 @@ describe("gestion des membres", () => {
   });
 
   it("Hors foyer : id inconnu → NotFoundError", async () => {
-    await expect(getAccess(hh, "inconnu")).rejects.toBeInstanceOf(NotFoundError);
     await expect(setRole(hh, adminId, "inconnu", "ADMIN")).rejects.toBeInstanceOf(NotFoundError);
     await expect(setDisabled(hh, adminId, "inconnu", true)).rejects.toBeInstanceOf(NotFoundError);
     await expect(setRole("autre-foyer", adminId, bobId, "ADMIN")).rejects.toBeInstanceOf(NotFoundError);
-  });
-
-  it("getAccess charge aussi un admin du foyer", async () => {
-    expect((await getAccess(hh, adminId)).member.role).toBe("ADMIN");
   });
 });
 

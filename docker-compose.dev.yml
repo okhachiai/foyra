@@ -1,0 +1,16 @@
+# Développement local uniquement : sources montées, rechargement à chaud avec `next dev`.
+# La production (make deploy-remote, docker-compose.yml seul) ne charge jamais ce fichier.
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    restart: "no"
+    environment:
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    entrypoint: []
+    command: sh -c "npx prisma generate && npx prisma migrate deploy && npm run dev"

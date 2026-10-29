@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { createMemberAction } from "../actions";
 import { ActionForm, Field } from "../form";
+import { SettingsNav } from "../nav";
 
 export default async function MembersPage() {
   const admin = await requireAdmin();
@@ -10,6 +11,8 @@ export default async function MembersPage() {
   return (
     <>
       <h1>Membres du foyer</h1>
+      <SettingsNav admin />
+      <p className="muted">Administrateurs : gestion des membres et du catalogue de catégories. Les accès aux comptes sont donnés par les gestionnaires de chaque compte.</p>
       <ul className="list">
         {members.map((m) => (
           <li key={m.id}>

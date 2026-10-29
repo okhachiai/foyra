@@ -9,21 +9,21 @@ export { dueDate };
 type Db = Prisma.TransactionClient;
 
 export type ChargeInput = {
-  name: string; amount: number; dueDay: number; accountId: string; categoryId: string; startMonth: Date; endMonth: Date | null;
+  kind: "INCOME" | "EXPENSE"; active: boolean; name: string; amount: number; dueDay: number; accountId: string; categoryId: string; startMonth: Date; endMonth: Date | null;
 };
 
-/** La charge s'applique au mois si début ≤ mois ≤ dernier mois (vide = sans fin). */
-export const appliesTo = (charge: { startMonth: Date; endMonth: Date | null }, month: Date) =>
-  charge.startMonth <= month && (!charge.endMonth || month <= charge.endMonth);
+/** La récurrence s'applique au mois si elle est active et début ≤ mois ≤ dernier mois (vide = sans fin). */
+export const appliesTo = (charge: { active: boolean; startMonth: Date; endMonth: Date | null }, month: Date) =>
+  charge.active && charge.startMonth <= month && (!charge.endMonth || month <= charge.endMonth);
 
-/** Catégorie de dépense du foyer, compte du foyer modifiable et non archivé ; FOR SHARE : ni l'un ni l'autre ne change avant l'écriture. */
+/** Catégorie du foyer du même sens, compte du foyer modifiable et non archivé ; FOR SHARE : ni l'un ni l'autre ne change avant l'écriture. */
 export async function checkRefs(tx: Db, scope: Scope, input: ChargeInput) {
   const householdId = scope.householdId;
   if (input.endMonth && input.endMonth < input.startMonth) throw new LedgerError("Le dernier mois doit être après le mois de début.", "endMonth");
   const [c] = await tx.$queryRaw<{ kind: string }[]>`
     SELECT "kind"::text FROM "Category" WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
   if (!c) throw new NotFoundError();
-  if (c.kind !== "EXPENSE") throw new LedgerError("Choisissez une catégorie de dépense.", "categoryId");
+  if (c.kind !== input.kind) throw new LedgerError(input.kind === "EXPENSE" ? "Choisissez une catégorie de dépense." : "Choisissez une catégorie de revenu.", "categoryId");
   assertWritable(scope, input.accountId, "accountId");
   const [a] = await tx.$queryRaw<{ archivedAt: Date | null }[]>`
     SELECT "archivedAt" FROM "Account" WHERE "id" = ${input.accountId} AND "householdId" = ${householdId} FOR SHARE`;
@@ -93,7 +93,7 @@ export function loanRow(charge: { dueDay: number; startMonth: Date; loan: LoanWi
  */
 export async function listMonthCharges(scope: Scope, month: Date) {
   const charges = await prisma.fixedCharge.findMany({
-    where: { householdId: scope.householdId, accountId: readable(scope), startMonth: { lte: month }, OR: [{ endMonth: null }, { endMonth: { gte: month } }] },
+    where: { householdId: scope.householdId, accountId: readable(scope), active: true, startMonth: { lte: month }, OR: [{ endMonth: null }, { endMonth: { gte: month } }] },
     include: {
       account: { select: { name: true } },
       category: { select: { name: true, parent: { select: { name: true } } } },
@@ -108,7 +108,9 @@ export async function listMonthCharges(scope: Scope, month: Date) {
     // Mois déjà payé mais sans échéance (crédit soldé depuis) : la charge payée reste comptée.
     if (row === undefined && !payment) return [];
     const amount = row === null ? c.amount : row?.total ?? payment!.transaction.amount;
-    return [{ ...c, amount, loanId: loan?.id ?? null, due: dueDate(c, month), payment }];
+    // Crédit : échéance n sur N (durée initiale) et date de 1ʳᵉ échéance.
+    const installment = loan && row ? { n: row.n, of: loan.termMonths, firstDue: dueDate(c, c.startMonth) } : null;
+    return [{ ...c, amount, loanId: loan?.id ?? null, due: dueDate(c, month), payment, installment }];
   });
 }
 
@@ -128,7 +130,7 @@ export async function payCharge(scope: Scope, userId: string, id: string, month:
       }
       if (await tx.fixedChargePayment.count({ where: { fixedChargeId: id, month } })) throw new LedgerError(ALREADY_PAID);
       const t = await createEntryTx(tx, scope, userId, {
-        accountId: charge.accountId, kind: "EXPENSE", amount, occurredOn, note: charge.name, categoryId: charge.categoryId,
+        accountId: charge.accountId, kind: charge.kind, amount, occurredOn, note: charge.name, categoryId: charge.categoryId,
       });
       return tx.fixedChargePayment.create({ data: { householdId: scope.householdId, fixedChargeId: id, month, transactionId: t.id } });
     });

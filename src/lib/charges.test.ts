@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
-import { getBudget, parseMonth, savePlanned } from "./budget";
-import { deleteCategory } from "./categories";
+import { parseMonth } from "./budget";
 import { appliesTo, createCharge, deleteCharge, dueDate, listMonthCharges, payCharge, updateCharge, type ChargeInput } from "./charges";
 import { fullScope } from "./access";
 import { prisma } from "./db";
@@ -14,7 +13,7 @@ const oct = parseMonth("2026-10")!;
 const nov = parseMonth("2026-11")!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(fullScope(hh), { name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, ...over });
+  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, ...over });
 const pay = (id: string, amount: number, day: string, month = nov) => payCharge(fullScope(hh), user, id, month, amount, parseDay(day)!);
 
 beforeEach(async () => {
@@ -32,7 +31,7 @@ describe("charges fixes", () => {
     await expect(charge({ amount: 0 })).rejects.toThrow(); // CHECK SQL (l'action refuse « 0 »/« abc » via parseCents)
     await expect(charge({ dueDay: 32 })).rejects.toThrow();
     await expect(charge({ dueDay: 0 })).rejects.toThrow();
-    await expect(charge({ categoryId: await byName("Salaires") })).rejects.toMatchObject({ field: "categoryId" });
+    await expect(charge({ categoryId: await byName("Salaire 1") })).rejects.toMatchObject({ field: "categoryId" });
     const old = (await prisma.account.create({ data: { householdId: hh, name: "Vieux", kind: "CHECKING", archivedAt: new Date() } })).id;
     await expect(charge({ accountId: old })).rejects.toMatchObject({ field: "accountId" });
   });
@@ -79,34 +78,28 @@ describe("charges fixes", () => {
     await expect(updateEntry(fullScope(hh), p.transactionId, { ...base, kind: "INCOME", categoryId: null })).rejects.toMatchObject({ field: "kind" });
   });
 
-  it("Budget : fixes 1 030 dont 80 à payer ; variables 150 ; restant à payer 330", async () => {
-    const loyer = await charge();
-    await charge({ name: "Assurance", amount: 8000, categoryId: await byName("Habitation") });
-    const courses = await byName("Courses");
-    await savePlanned(hh, nov, new Map([[loyer.categoryId, 95000], [courses, 40000], [await byName("Habitation"), 0]]));
-    await pay(loyer.id, 95000, "2026-11-05");
-    await createEntry(fullScope(hh), user, { accountId: courant, kind: "EXPENSE", amount: 15000, occurredOn: parseDay("2026-11-10")!, note: null, categoryId: courses });
-    const { totals } = await getBudget(fullScope(hh), nov);
-    expect(totals).toMatchObject({ fixedTotal: 103000, fixedRemaining: 8000, fixedPaid: 95000, variableActual: 15000, remainingToPay: 33000 });
+  it("Revenu récurrent : catégorie de revenu exigée, « reçu » crée un revenu ; aucune opération sans action", async () => {
+    await expect(charge({ kind: "INCOME" })).rejects.toMatchObject({ field: "categoryId" });
+    const salaire = await charge({ kind: "INCOME", name: "Salaire", amount: 250000, categoryId: await byName("Salaire 1") });
+    expect(await prisma.transaction.count()).toBe(0); // indicative : rien n'est payé automatiquement
+    await pay(salaire.id, 250000, "2026-11-28");
+    expect(await prisma.transaction.findFirstOrThrow()).toMatchObject({ kind: "INCOME", amount: 250000 });
   });
 
-  it("Exclusion : charge d'une catégorie désactivée listée sur /charges, hors totaux du budget", async () => {
-    await prisma.category.updateMany({ where: { name: "Loisirs" }, data: { enabled: false } });
-    await charge({ name: "Club", amount: 3000, categoryId: await byName("Loisirs") });
+  it("Désactivée : absente des échéances du mois ; réactivée : de retour", async () => {
+    const c = await charge();
+    await updateCharge(fullScope(hh), c.id, { ...c, kind: "EXPENSE", active: false });
+    expect(await listMonthCharges(fullScope(hh), nov)).toEqual([]);
+    expect(appliesTo({ ...c, active: false }, nov)).toBe(false);
+    await expect(pay(c.id, 95000, "2026-11-05")).rejects.toBeInstanceOf(LedgerError);
+    await updateCharge(fullScope(hh), c.id, { ...c, kind: "EXPENSE", active: true });
     expect(await listMonthCharges(fullScope(hh), nov)).toHaveLength(1);
-    expect((await getBudget(fullScope(hh), nov)).totals).toMatchObject({ fixedTotal: 0, remainingToPay: 0 });
   });
 
-  it("Supprimer charge : dépenses conservées, comptées comme variables", async () => {
+  it("Supprimer : opérations déjà enregistrées conservées", async () => {
     const c = await charge();
     await pay(c.id, 95000, "2026-11-05");
     await deleteCharge(fullScope(hh), c.id);
     expect(await prisma.transaction.count()).toBe(1);
-    expect((await getBudget(fullScope(hh), nov)).totals).toMatchObject({ fixedTotal: 0, variableActual: 95000 });
-  });
-
-  it("Supprimer catégorie utilisée par une charge : refus", async () => {
-    const c = await charge();
-    await expect(deleteCategory(hh, c.categoryId)).rejects.toThrow("Cette catégorie est utilisée par une charge fixe.");
   });
 });

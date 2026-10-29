@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
-import { getBudget, parseMonth } from "./budget";
+import { parseMonth } from "./budget";
 import { getCharge, listMonthCharges, payCharge, updateCharge } from "./charges";
 import { fullScope } from "./access";
 import { prisma } from "./db";
@@ -41,11 +41,19 @@ describe("crédits", () => {
     expect(await prisma.loan.count()).toBe(1);
   });
 
+  it("Crédit simple (taux 0, capital = échéance × nombre) : 3 échéances de 100 €, échéance n/N, absent une fois soldé", async () => {
+    await loan({ name: "Télé", principal: 30000, annualRate: 0, termMonths: 3, payment: 10000 });
+    const months = ["2027-01", "2027-02", "2027-03", "2027-04"].map((m) => parseMonth(m)!);
+    const rows = await Promise.all(months.map((m) => listMonthCharges(fullScope(hh), m)));
+    expect(rows.slice(0, 3).map(([c]) => [c.amount, c.installment?.n, c.installment?.of])).toEqual([[10000, 1, 3], [10000, 2, 3], [10000, 3, 3]]);
+    expect(rows[0][0].installment?.firstDue).toEqual(day("2027-01-05"));
+    expect(rows[3]).toEqual([]);
+  });
+
   it("Budget : janvier 2027 → 468,87 € + 15 € d'assurance à payer ; « Marquer payée » crée la dépense", async () => {
     const l = await loan({ insurance: 1500 });
     const [c] = await listMonthCharges(fullScope(hh), jan);
     expect(c).toMatchObject({ amount: 48387, loanId: l.id, due: day("2027-01-05"), payment: null });
-    expect((await getBudget(fullScope(hh), jan)).totals).toMatchObject({ fixedTotal: 48387, fixedRemaining: 48387 });
     await payCharge(fullScope(hh), user, c.id, jan, c.amount, day("2027-01-05"));
     expect((await listMonthCharges(fullScope(hh), jan))[0].payment?.transaction).toMatchObject({ amount: 48387, categoryId: credit, kind: "EXPENSE" });
   });
@@ -103,7 +111,6 @@ describe("crédits", () => {
     await prepay(fullScope(hh), user, l.id, status.balance, day("2028-01-04"), "REDUCE_TERM");
     const [c] = await listMonthCharges(fullScope(hh), jan28);
     expect(c).toMatchObject({ amount: 46887, payment: { transaction: { amount: 46887 } } });
-    expect((await getBudget(fullScope(hh), jan28)).totals).toMatchObject({ fixedTotal: 46887, fixedRemaining: 0 });
   });
 
   it("Annuler anticipé : supprimer la dépense rétablit l'échéancier initial ; elle ne peut pas devenir une recette", async () => {

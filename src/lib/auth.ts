@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { hash, verify } from "@node-rs/argon2";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Prisma, type Role } from "@prisma/client";
+import { Prisma, type BudgetSource, type Role } from "@prisma/client";
 import { createDefaultCategories } from "./categories";
 import { prisma } from "./db";
 import { LedgerError, NotFoundError } from "./ledger";
@@ -136,11 +136,17 @@ export async function householdExists() {
   return (await prisma.household.count()) > 0;
 }
 
-/** Crée le foyer unique et son admin. Renvoie null si un foyer existe déjà (y compris setup concurrent). */
-export async function setupHousehold(input: { householdName: string; name: string; email: string; password: string }) {
+/**
+ * Premier foyer de l'instance et son admin (assistant /setup). Renvoie null si un foyer existe déjà ou si l'email est pris.
+ * `force` : foyer supplémentaire (tests, script) — chaque foyer reste strictement isolé par householdId.
+ */
+export async function setupHousehold(input: { householdName: string; name: string; email: string; password: string }, { force = false } = {}) {
   const passwordHash = await hashPassword(input.password);
   try {
     return await prisma.$transaction(async (tx) => {
+      // Verrou transactionnel : deux /setup simultanés se sérialisent, le second voit le foyer du premier.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(4242)`;
+      if (!force && (await tx.household.count())) return null;
       const household = await tx.household.create({ data: { name: input.householdName } });
       await createDefaultCategories(tx, household.id);
       return tx.user.create({
@@ -192,8 +198,7 @@ async function updateUser(householdId: string, actorId: string, userId: string, 
       where: { id: userId },
       data: { role, disabledAt: disabled ? (target.disabledAt ?? new Date()) : null },
     });
-    // Rétrogradé : aucun accès aux comptes tant que l'admin n'en donne pas (comme un nouveau membre).
-    if (target.role === "ADMIN" && role === "MEMBER") await tx.accountAccess.deleteMany({ where: { userId } });
+    // Les accès aux comptes sont explicites et indépendants du rôle : ils sont conservés.
     if (disabled) await tx.session.deleteMany({ where: { userId } });
   });
 }
@@ -203,6 +208,15 @@ export const setRole = (householdId: string, actorId: string, userId: string, ro
 
 export const setDisabled = (householdId: string, actorId: string, userId: string, disabled: boolean) =>
   updateUser(householdId, actorId, userId, { disabled });
+
+/** Préférences du foyer (admin) : nom affiché et source des nouveaux budgets. La devise reste l'euro. */
+export async function updateHousehold(householdId: string, data: { name: string; budgetSource: BudgetSource }) {
+  await prisma.household.update({ where: { id: householdId }, data });
+}
+
+export async function updateDisplayName(userId: string, name: string) {
+  await prisma.user.update({ where: { id: userId }, data: { name } });
+}
 
 /** Change son mot de passe (actuel exigé) ; supprime ses autres sessions, garde celle du cookie courant. */
 export async function changePassword(userId: string, current: string, next: string) {

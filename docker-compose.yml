@@ -26,6 +26,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-foyra}:${POSTGRES_PASSWORD:-foyra}@db:5432/${POSTGRES_DB:-foyra}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
     ports:
       - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
 
@@ -41,6 +42,29 @@ services:
       - "127.0.0.1:${DB_TEST_PORT:-5433}:5432"
     tmpfs:
       - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foyra -d foyra_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # Vérification de types + tests Vitest dans Docker : docker compose --profile test run --rm tests
+  # Le code est monté en direct ; node_modules reste celui de l'image (binaires Linux).
+  tests:
+    build:
+      context: .
+      target: dev
+    profiles: [test]
+    depends_on:
+      db-test:
+        condition: service_healthy
+    environment:
+      DATABASE_URL_TEST: postgresql://foyra:foyra@db-test:5432/foyra_test
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - /app/.next
+    command: sh -c "npm run typecheck && npm test"
 
 volumes:
   pgdata:

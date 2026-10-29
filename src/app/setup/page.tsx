@@ -8,8 +8,13 @@ export default async function SetupPage() {
   return (
     <main className="narrow">
       <h1>Bienvenue sur Foyra</h1>
-      <p className="muted">Créez votre foyer et le compte administrateur.</p>
+      <p className="muted">Créez votre foyer et le compte administrateur. Aucun compte bancaire ni donnée n’est créé automatiquement.</p>
       <ActionForm action={setupAction}>
+        {process.env.SETUP_TOKEN && (
+          <Field name="setupToken" label="Jeton d’installation (variable SETUP_TOKEN du serveur)">
+            <input name="setupToken" type="password" required autoComplete="off" />
+          </Field>
+        )}
         <Field name="householdName" label="Nom du foyer"><input name="householdName" required maxLength={100} /></Field>
         <Field name="name" label="Votre prénom"><input name="name" required maxLength={100} autoComplete="given-name" /></Field>
         <Field name="email" label="Email"><input name="email" type="email" required autoComplete="email" /></Field>

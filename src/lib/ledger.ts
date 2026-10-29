@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import type { AccountKind } from "@prisma/client";
-import { assertWritable, readable, writable, type Scope } from "./access";
+import type { AccountKind, AccountSharing } from "@prisma/client";
+import { assertManageable, assertWritable, readable, writable, type Scope } from "./access";
 import { prisma } from "./db";
+import { bigintToCents } from "./money";
 
 /** Erreur métier affichable (optionnellement rattachée à un champ du formulaire). */
 export class LedgerError extends Error {
@@ -19,6 +20,8 @@ type Db = Prisma.TransactionClient;
 
 export type EntryInput = { accountId: string; kind: "INCOME" | "EXPENSE"; amount: number; occurredOn: Date; note: string | null; categoryId: string | null };
 export type TransferInput = { fromAccountId: string; toAccountId: string; amount: number; occurredOn: Date; note: string | null };
+/** Clé d'idempotence facultative (formulaires) : rejouer la même clé renvoie l'opération déjà créée. */
+type Idempotent = { idempotencyKey?: string | null };
 
 const SIGNED_AMOUNT = Prisma.sql`CASE WHEN t."kind" = 'INCOME' OR t."transferSide" = 'IN' THEN t."amount" ELSE -t."amount" END`;
 
@@ -31,7 +34,7 @@ async function balances(scope: Scope, db: Db = prisma, accountId?: string) {
       ${scope.read ? Prisma.sql`AND a."id" = ANY(${scope.read})` : Prisma.empty}
       ${accountId ? Prisma.sql`AND a."id" = ${accountId}` : Prisma.empty}
     GROUP BY a."id"`;
-  return new Map(rows.map((r) => [r.id, Number(r.balance)]));
+  return new Map(rows.map((r) => [r.id, bigintToCents(r.balance)]));
 }
 
 export async function accountBalance(scope: Scope, accountId: string, db: Db = prisma) {
@@ -68,19 +71,20 @@ export function writableAccounts(scope: Scope, keep?: string) {
   });
 }
 
-type AccountData = { kind: AccountKind; name: string; initialBalance: number };
+type AccountData = { kind: AccountKind; name: string; notes?: string };
 
-/** Crée un compte ; un membre (portée restreinte) reçoit l'écriture dessus, les autres membres rien. */
-export function createAccount(scope: Scope, userId: string, data: AccountData) {
+/** Crée un compte : son créateur en est gestionnaire ; partage par défaut limité aux membres sélectionnés. */
+export function createAccount(scope: Scope, userId: string, data: AccountData & { initialBalance: number; sharing?: AccountSharing }) {
   return prisma.$transaction(async (tx) => {
     const account = await tx.account.create({ data: { ...data, householdId: scope.householdId } });
-    if (scope.write) await tx.accountAccess.create({ data: { userId, accountId: account.id, level: "WRITE" } });
+    await tx.accountAccess.create({ data: { userId, accountId: account.id, level: "MANAGE" } });
     return account;
   });
 }
 
+/** Nom, type et notes ; le solde initial reste celui fixé à la création. */
 export async function updateAccount(scope: Scope, id: string, data: AccountData) {
-  assertWritable(scope, id);
+  assertManageable(scope, id);
   const { count } = await prisma.account.updateMany({ where: { id, householdId: scope.householdId, archivedAt: null }, data });
   if (!count) throw new LedgerError("Compte introuvable ou archivé.");
 }
@@ -106,24 +110,45 @@ const lockLines = (tx: Db, householdId: string, where: Prisma.Sql) =>
 
 // --- Recettes / dépenses ---
 
-/** La catégorie doit être du foyer et du même sens ; FOR SHARE : elle ne peut pas disparaître avant l'écriture. */
-async function checkCategory(tx: Db, householdId: string, input: EntryInput) {
+/**
+ * La catégorie doit être du foyer, du même sens et non archivée (sauf si l'opération l'avait déjà) ;
+ * FOR SHARE : elle ne peut pas disparaître avant l'écriture.
+ */
+async function checkCategory(tx: Db, householdId: string, input: EntryInput, current?: string | null) {
   if (!input.categoryId) return;
-  const [c] = await tx.$queryRaw<{ kind: string }[]>`
-    SELECT "kind"::text FROM "Category" WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
+  const [c] = await tx.$queryRaw<{ kind: string; archived: boolean }[]>`
+    SELECT "kind"::text, "archivedAt" IS NOT NULL AS archived FROM "Category"
+    WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
   if (!c) throw new NotFoundError();
   if (c.kind !== input.kind) throw new LedgerError("Catégorie incompatible avec le type d’opération.", "categoryId");
+  if (c.archived && input.categoryId !== current) throw new LedgerError("Cette catégorie est archivée.", "categoryId");
 }
 
-/** Création dans une transaction SQL existante (ex. paiement d'une charge fixe). */
-export async function createEntryTx(tx: Db, scope: Scope, userId: string, input: EntryInput) {
+/** Création dans une transaction SQL existante (ex. paiement d'une récurrence). */
+export async function createEntryTx(tx: Db, scope: Scope, userId: string, input: EntryInput & Idempotent) {
   await lockActiveAccounts(tx, scope, [{ id: input.accountId, field: "accountId" }]);
   await checkCategory(tx, scope.householdId, input);
   return tx.transaction.create({ data: { ...input, householdId: scope.householdId, createdById: userId } });
 }
 
-export async function createEntry(scope: Scope, userId: string, input: EntryInput) {
-  return prisma.$transaction((tx) => createEntryTx(tx, scope, userId, input));
+/** Écrit ; si la clé existe déjà (double clic, nouvelle tentative), renvoie l'opération déjà enregistrée au lieu d'un doublon. */
+async function replay<T>(scope: Scope, key: string | null | undefined, write: () => Promise<T>, existing: (id: string, transferId: string | null) => T | PromiseLike<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (e) {
+    if (!key || !isCode(e, "P2002")) throw e;
+    const t = await prisma.transaction.findFirst({ where: { householdId: scope.householdId, idempotencyKey: key, accountId: readable(scope) } });
+    if (!t) throw e;
+    return existing(t.id, t.transferId);
+  }
+}
+
+export async function createEntry(scope: Scope, userId: string, input: EntryInput & Idempotent) {
+  return replay(
+    scope, input.idempotencyKey,
+    () => prisma.$transaction((tx) => createEntryTx(tx, scope, userId, input)),
+    (id) => prisma.transaction.findUniqueOrThrow({ where: { id } }),
+  );
 }
 
 /** Opération d'un compte lisible. */
@@ -139,13 +164,13 @@ export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
     await lockLines(tx, householdId, Prisma.sql`"id" = ${id}`);
     const current = await tx.transaction.findFirst({ where: { id, householdId, accountId: readable(scope), kind: { not: "TRANSFER" } } });
     if (!current) throw new NotFoundError();
-    // Dépense réglant une charge fixe : elle doit rester une dépense du mois payé.
+    // Opération réglant une récurrence : même sens, dans le mois de l'échéance.
     const payment = await tx.fixedChargePayment.findUnique({ where: { transactionId: id } });
     if (payment) {
-      if (input.kind !== "EXPENSE") throw new LedgerError("Cette dépense règle une charge fixe : elle doit rester une dépense.", "kind");
+      if (input.kind !== current.kind) throw new LedgerError("Cette opération règle une récurrence : son type ne peut pas changer.", "kind");
       const m = payment.month;
       if (input.occurredOn < m || input.occurredOn >= new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) {
-        throw new LedgerError("Cette dépense règle une charge fixe : la date doit rester dans le mois de l’échéance.", "occurredOn");
+        throw new LedgerError("Cette opération règle une récurrence : la date doit rester dans le mois de l’échéance.", "occurredOn");
       }
     }
     // Dépense d'un remboursement anticipé : montant et date contrôlés à la saisie, donc figés.
@@ -159,7 +184,7 @@ export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
       { id: current.accountId, field: "accountId" },
       { id: input.accountId, field: "accountId" },
     ]);
-    await checkCategory(tx, householdId, input);
+    await checkCategory(tx, householdId, input, current.categoryId);
     return tx.transaction.update({ where: { id }, data: input });
   });
 }
@@ -189,16 +214,23 @@ const lockTransferAccounts = (tx: Db, scope: Scope, input: TransferInput) =>
     { id: input.toAccountId, field: "toAccountId" },
   ]);
 
-export async function createTransfer(scope: Scope, userId: string, input: TransferInput) {
+/** Débit de la source et crédit de la destination dans une seule transaction SQL : les deux lignes ou aucune. */
+export async function createTransfer(scope: Scope, userId: string, input: TransferInput & Idempotent) {
   checkDistinct(input);
   const transferId = randomUUID();
   const common = { householdId: scope.householdId, createdById: userId, kind: "TRANSFER" as const, amount: input.amount, occurredOn: input.occurredOn, note: input.note, transferId };
-  await prisma.$transaction(async (tx) => {
-    await lockTransferAccounts(tx, scope, input);
-    await tx.transaction.create({ data: { ...common, accountId: input.fromAccountId, transferSide: "OUT" } });
-    await tx.transaction.create({ data: { ...common, accountId: input.toAccountId, transferSide: "IN" } });
-  });
-  return transferId;
+  return replay(
+    scope, input.idempotencyKey,
+    async () => {
+      await prisma.$transaction(async (tx) => {
+        await lockTransferAccounts(tx, scope, input);
+        await tx.transaction.create({ data: { ...common, accountId: input.fromAccountId, transferSide: "OUT", idempotencyKey: input.idempotencyKey } });
+        await tx.transaction.create({ data: { ...common, accountId: input.toAccountId, transferSide: "IN" } });
+      });
+      return transferId;
+    },
+    (_, existing) => existing!,
+  );
 }
 
 /** Les deux lignes d'un virement du foyer, [OUT, IN] ; au moins un des deux comptes doit être lisible. */
@@ -245,8 +277,9 @@ async function deleteTransferTx(tx: Db, scope: Scope, transferId: string) {
 
 // --- Comptes ---
 
-/** Archive un compte : refusé si le solde n'est pas exactement 0. L'historique est conservé. */
+/** Archive un compte (gestionnaire) : refusé si le solde n'est pas exactement 0. Opérations et historique conservés. */
 export async function archiveAccount(scope: Scope, accountId: string) {
+  assertManageable(scope, accountId);
   await prisma.$transaction(async (tx) => {
     await lockActiveAccounts(tx, scope, [{ id: accountId, field: "accountId" }]);
     if ((await accountBalance(scope, accountId, tx)) !== 0) {
@@ -254,6 +287,35 @@ export async function archiveAccount(scope: Scope, accountId: string) {
     }
     await tx.account.update({ where: { id: accountId }, data: { archivedAt: new Date() } });
   });
+}
+
+/**
+ * Supprime définitivement un compte (gestionnaire) et ses recettes / dépenses.
+ * Refusé s'il porte des virements (l'autre compte serait modifié) ou des récurrences / crédits.
+ */
+export async function deleteAccount(scope: Scope, accountId: string) {
+  assertManageable(scope, accountId);
+  const householdId = scope.householdId;
+  await prisma.$transaction(async (tx) => {
+    // FOR UPDATE : aucune saisie ne peut s'ajouter pendant la suppression.
+    const [a] = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Account" WHERE "id" = ${accountId} AND "householdId" = ${householdId} FOR UPDATE`;
+    if (!a) throw new NotFoundError();
+    if (await tx.fixedCharge.count({ where: { householdId, accountId } })) {
+      throw new LedgerError("Des récurrences ou crédits utilisent ce compte : supprimez-les d’abord, ou archivez le compte.");
+    }
+    if (await tx.transaction.count({ where: { householdId, accountId, transferId: { not: null } } })) {
+      throw new LedgerError("Ce compte a des virements : supprimez-les d’abord, ou archivez le compte.");
+    }
+    await tx.transaction.deleteMany({ where: { householdId, accountId } });
+    await tx.account.deleteMany({ where: { householdId, id: accountId } });
+  });
+}
+
+/** Réactive un compte archivé (gestionnaire). */
+export async function unarchiveAccount(scope: Scope, accountId: string) {
+  assertManageable(scope, accountId);
+  const { count } = await prisma.account.updateMany({ where: { id: accountId, householdId: scope.householdId }, data: { archivedAt: null } });
+  if (!count) throw new NotFoundError();
 }
 
 // --- Dates d'opération (jour calendaire, sans heure) ---

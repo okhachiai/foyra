@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { canWrite, getScope, readable } from "@/lib/access";
+import { canManage, canWrite, getScope, readable } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { accountBalance, formatDay } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
-import { archiveAccountAction } from "../../actions";
+import { archiveAccountAction, deleteAccountAction } from "../../actions";
 import { ActionForm } from "../../form";
 import { KIND_LABELS } from "../kinds";
 import { loadAccount } from "./load";
@@ -43,28 +43,51 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   // Saisie et modification : compte actif et modifiable par l'utilisateur.
   const active = !account.archivedAt && canWrite(scope, account.id);
+  const manager = canManage(scope, account.id);
+  const access = manager ? "Gestion" : canWrite(scope, account.id) ? "Écriture" : "Lecture";
 
   return (
     <>
       <p><Link href="/accounts">← Comptes</Link></p>
       <h1>{account.name}</h1>
-      <p className="muted">{KIND_LABELS[account.kind]}{account.archivedAt && " · archivé"}</p>
+      <p className="muted">
+        {KIND_LABELS[account.kind]}{account.archivedAt && " · archivé"} · {account.sharing === "HOUSEHOLD" ? "partagé avec tout le foyer" : "membres sélectionnés"} · votre accès : {access}
+      </p>
+      {account.notes && <p className="whitespace-pre-line">{account.notes}</p>}
       <section className="total">
         <span className="muted">Solde</span>
         <strong className={balance < 0 ? "neg" : undefined}>{formatCents(balance, currency)}</strong>
       </section>
 
-      {active && (
-        <div className="actions">
-          <Link href={`/accounts/${account.id}/entries/new`} className="button">Dépense / recette</Link>
-          <Link href={`/accounts/${account.id}/transfers/new`} className="button secondary">Virement</Link>
-          <Link href={`/accounts/${account.id}/edit`} className="button secondary">Modifier</Link>
-          <ActionForm action={archiveAccountAction} className="inline" confirm="Archiver ce compte ? Plus aucune saisie ne sera possible.">
+      <div className="actions">
+        {active && (
+          <>
+            <Link href={`/accounts/${account.id}/entries/new`} className="button">Dépense / revenu</Link>
+            <Link href={`/accounts/${account.id}/transfers/new`} className="button secondary">Virement</Link>
+          </>
+        )}
+        {manager && !account.archivedAt && <Link href={`/accounts/${account.id}/edit`} className="button secondary">Modifier</Link>}
+        {manager && <Link href={`/accounts/${account.id}/partage`} className="button secondary">Partage</Link>}
+        {manager && (
+          <ActionForm
+            action={archiveAccountAction} className="inline"
+            confirm={account.archivedAt ? undefined : "Archiver ce compte ? Ses opérations sont conservées ; plus aucune saisie ne sera possible jusqu’à sa réactivation."}
+          >
             <input type="hidden" name="id" value={account.id} />
-            <button type="submit" className="secondary">Archiver</button>
+            <input type="hidden" name="restore" value={account.archivedAt ? "1" : "0"} />
+            <button type="submit" className="secondary">{account.archivedAt ? "Réactiver" : "Archiver"}</button>
           </ActionForm>
-        </div>
-      )}
+        )}
+        {manager && (
+          <ActionForm
+            action={deleteAccountAction} className="inline"
+            confirm="Supprimer définitivement ce compte et toutes ses opérations ? Cette action est irréversible."
+          >
+            <input type="hidden" name="id" value={account.id} />
+            <button type="submit" className="danger">Supprimer</button>
+          </ActionForm>
+        )}
+      </div>
 
       <h2>Historique</h2>
       {rows.length === 0 && <p className="muted">Aucune opération.</p>}
@@ -74,7 +97,7 @@ export default async function AccountPage({ params, searchParams }: { params: Pr
           const label =
             t.kind === "TRANSFER"
               ? `Virement ${t.transferSide === "OUT" ? "vers" : "depuis"} ${otherName.get(t.transferId) ?? "compte non partagé"}`
-              : t.kind === "INCOME" ? "Recette" : "Dépense";
+              : t.kind === "INCOME" ? "Revenu" : "Dépense";
           const content = (
             <>
               <span>

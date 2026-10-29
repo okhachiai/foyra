@@ -19,6 +19,15 @@ export function parseCents(input: string, { allowSigned = false } = {}): number 
   return sign * cents || 0;
 }
 
+/**
+ * Somme SQL (bigint) → centimes en number. Refuse au-delà de Number.MAX_SAFE_INTEGER plutôt que d'arrondir
+ * silencieusement ; les valeurs transmises aux composants client restent ainsi sérialisables et exactes.
+ */
+export function bigintToCents(v: bigint): number {
+  if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < -BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError("Montant hors limites");
+  return Number(v);
+}
+
 /** 123456 → « 1 234,56 € » (séparateur de milliers U+202F, format fr-FR). */
 export function formatCents(cents: number, currency = "EUR"): string {
   return new Intl.NumberFormat("fr-FR", { style: "currency", currency }).format(cents / 100);

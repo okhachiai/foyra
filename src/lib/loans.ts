@@ -23,7 +23,7 @@ function chargeOf(i: LoanInput): ChargeInput {
   const dueDay = i.firstDue.getUTCDate();
   const [first] = buildSchedule({ ...loanTerms(i), dueDay, startMonth }, []).rows;
   return {
-    name: i.name, amount: first?.total ?? 0, dueDay, accountId: i.accountId, categoryId: i.categoryId, startMonth,
+    kind: "EXPENSE", active: true, name: i.name, amount: first?.total ?? 0, dueDay, accountId: i.accountId, categoryId: i.categoryId, startMonth,
     endMonth: new Date(Date.UTC(startMonth.getUTCFullYear(), startMonth.getUTCMonth() + i.termMonths - 1, 1)),
   };
 }

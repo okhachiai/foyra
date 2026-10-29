@@ -1,0 +1,5 @@
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+/** Fusion de classes Tailwind (convention shadcn/ui). */
+export const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs));

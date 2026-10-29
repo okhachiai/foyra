@@ -1,18 +1,13 @@
-import type { CarryOver, Category, CategoryKind } from "@prisma/client";
+import type { Category, CategoryKind } from "@prisma/client";
 import { centsToInput } from "@/lib/money";
 import { createCategoryAction, updateCategoryAction } from "../actions";
 import { ActionForm, Field } from "../form";
 
 export const KIND_LABELS: Record<CategoryKind, string> = { EXPENSE: "Dépenses", INCOME: "Revenus" };
 
-const CARRY_OVER_LABELS: Record<CarryOver, string> = {
-  FORECAST: "Repartir du prévisionnel",
-  PREVIOUS: "Reprendre le montant du mois précédent",
-  NONE: "À saisir chaque mois",
-};
-
-/** Création (kind + parent facultatif, figés ensuite) ou modification d'une catégorie. */
+/** Création (sens + parent facultatif, figés ensuite) ou modification d'une catégorie du catalogue. */
 export function CategoryForm({ category, kind, parentId }: { category?: Category; kind?: CategoryKind; parentId?: string }) {
+  const topExpense = category ? category.kind === "EXPENSE" && !category.parentId : kind === "EXPENSE" && !parentId;
   return (
     <ActionForm action={category ? updateCategoryAction : createCategoryAction}>
       {category ? (
@@ -24,21 +19,27 @@ export function CategoryForm({ category, kind, parentId }: { category?: Category
         </>
       )}
       <Field name="name" label="Nom"><input name="name" required maxLength={100} defaultValue={category?.name} /></Field>
-      <Field name="forecastAmount" label="Montant prévisionnel mensuel (facultatif)">
+      {topExpense && (
+        <Field name="fixed" label="Type de charge">
+          <select name="fixed" defaultValue={category?.fixed ? "1" : "0"}>
+            <option value="0">Charge variable (courses, santé…)</option>
+            <option value="1">Charge fixe (factures, abonnements…)</option>
+          </select>
+        </Field>
+      )}
+      <Field name="forecastAmount" label="Montant prévisionnel par défaut">
         <input
           name="forecastAmount" inputMode="decimal" placeholder="0,00" autoComplete="off"
-          defaultValue={category?.forecastAmount != null ? centsToInput(category.forecastAmount) : ""}
+          defaultValue={category ? centsToInput(category.forecastAmount) : ""}
         />
       </Field>
-      <Field name="carryOver" label="Mois suivant">
-        <select name="carryOver" defaultValue={category?.carryOver ?? "FORECAST"}>
-          {Object.entries(CARRY_OVER_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
-        </select>
+      <Field name="sortOrder" label="Ordre d’affichage">
+        <input name="sortOrder" type="number" step={1} defaultValue={category?.sortOrder ?? 0} />
       </Field>
-      <label className="check">
-        <input type="checkbox" name="enabled" defaultChecked={category?.enabled ?? true} />
-        Inclure dans le budget
-      </label>
+      <label className="check"><input type="checkbox" name="enabled" defaultChecked={category?.enabled ?? true} />Inclure dans le budget</label>
+      <label className="check"><input type="checkbox" name="recurring" defaultChecked={category?.recurring ?? true} />Reprendre le mois suivant</label>
+      <label className="check"><input type="checkbox" name="isTemplate" defaultChecked={category?.isTemplate ?? true} />Modèle de budget (utilisée quand un budget part des modèles)</label>
+      <p className="muted m-0 text-sm">Les budgets déjà créés ne sont jamais modifiés par ces réglages.</p>
       <button type="submit">{category ? "Enregistrer" : "Créer la catégorie"}</button>
     </ActionForm>
   );

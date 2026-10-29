@@ -20,9 +20,9 @@ export default async function EditChargePage({ params }: { params: Promise<{ id:
   if (!canWrite(scope, charge.accountId)) {
     return (
       <>
-        <p><Link href="/charges">← Charges fixes</Link></p>
+        <p><Link href="/charges">← Récurrences</Link></p>
         <h1>{charge.name}</h1>
-        <p className="muted">Accès en lecture seule sur le compte de cette charge : elle ne peut pas être modifiée.</p>
+        <p className="muted">Accès en lecture seule sur le compte de cette récurrence : elle ne peut pas être modifiée.</p>
       </>
     );
   }
@@ -34,15 +34,15 @@ export default async function EditChargePage({ params }: { params: Promise<{ id:
 
   return (
     <>
-      <p><Link href="/charges">← Charges fixes</Link></p>
+      <p><Link href="/charges">← Récurrences</Link></p>
       <h1>{charge.name}</h1>
       <ChargeForm charge={charge} accounts={accounts} categories={categories} startMonth="" />
       <ActionForm
         action={deleteChargeAction} className="danger-zone"
-        confirm="Supprimer cette charge ? Les dépenses déjà payées sont conservées (elles deviennent variables)."
+        confirm="Supprimer cette récurrence ? Les opérations déjà enregistrées sont conservées."
       >
         <input type="hidden" name="id" value={charge.id} />
-        <p className="muted">Pour arrêter la charge sans perdre son suivi, renseignez plutôt son dernier mois.</p>
+        <p className="muted">Pour l’arrêter sans perdre son suivi, désactivez-la ou renseignez son dernier mois.</p>
         <button type="submit" className="danger">Supprimer</button>
       </ActionForm>
     </>

@@ -1,15 +1,15 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
-import { fullScope, getAccess, getScope, READ_ONLY, setAccess, type Scope } from "./access";
+import { fullScope, getScope, getSharing, NOT_MANAGER, READ_ONLY, setAccess, setSharing, type Scope } from "./access";
 import { createMember, setupHousehold } from "./auth";
-import { getBudget, parseMonth } from "./budget";
+import { createBudget, getBudget, parseMonth } from "./budget";
 import { getCalendar } from "./calendar";
 import { createCharge, deleteCharge, getCharge, listMonthCharges, payCharge, updateCharge } from "./charges";
 import { getDashboard } from "./dashboard";
 import { prisma } from "./db";
 import {
   accountBalance, archiveAccount, createAccount, createEntry, createTransfer, deleteTransaction, getAccount, getTransaction,
-  householdTotal, listAccounts, NotFoundError, parseDay, updateAccount, updateEntry, writableAccounts,
+  householdTotal, LedgerError, listAccounts, NotFoundError, parseDay, unarchiveAccount, updateAccount, updateEntry, writableAccounts,
 } from "./ledger";
 import { createLoan, deleteLoan, getLoan, listLoans, prepay } from "./loans";
 
@@ -23,12 +23,12 @@ const nov = parseMonth("2026-11")!;
 const today = parseDay("2026-11-10")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
-const member = async () => getScope({ id: memberId, role: "MEMBER", householdId: hh });
+const member = async () => getScope({ id: memberId, householdId: hh });
 const grant = (levels: Record<string, "READ" | "WRITE" | null>) => setAccess(hh, memberId, new Map(Object.entries(levels)));
-const spend = async (scope: Scope, accountId: string, amount: number, cat = "Courses") =>
+const spend = async (scope: Scope, accountId: string, amount: number, cat = "Supermarché") =>
   createEntry(scope, adminId, { accountId, kind: "EXPENSE", amount, occurredOn: day("2026-11-09"), note: null, categoryId: await byName(cat) });
 const charge = async (accountId: string) =>
-  createCharge(admin, { name: "Loyer", amount: 95000, dueDay: 5, accountId, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null });
+  createCharge(admin, { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null });
 const loan = async (accountId: string) =>
   createLoan(admin, {
     name: "Maison", accountId, categoryId: await byName("Loyer"), firstDue: day("2026-11-15"),
@@ -48,12 +48,12 @@ beforeEach(async () => {
 
 describe("accès par compte", () => {
   it("Migration : chaque membre existant reçoit l'écriture sur chaque compte du foyer", async () => {
-    expect(await prisma.accountAccess.count()).toBe(0); // nouveau membre : aucun accès
+    expect(await prisma.accountAccess.count({ where: { userId: memberId } })).toBe(0); // nouveau membre : aucun accès
     const sql = readFileSync(new URL("../../prisma/migrations/20261101000000_account_access/migration.sql", import.meta.url), "utf8");
     await prisma.$executeRawUnsafe(sql.slice(sql.indexOf("INSERT INTO")));
     const s = await member();
     expect(s.write?.sort()).toEqual([courant, epargne].sort());
-    expect(await prisma.accountAccess.count({ where: { userId: adminId } })).toBe(0);
+    expect((await prisma.accountAccess.findMany({ where: { userId: adminId } })).map((a) => a.level)).toEqual(["MANAGE", "MANAGE"]); // créateur
     expect(await householdTotal(s)).toBe(150000);
   });
 
@@ -84,8 +84,8 @@ describe("accès par compte", () => {
     await expect(createEntry(s, memberId, input)).rejects.toThrow(READ_ONLY);
     await expect(updateEntry(s, t.id, input)).rejects.toThrow(READ_ONLY);
     await expect(deleteTransaction(s, t.id)).rejects.toThrow(READ_ONLY);
-    await expect(archiveAccount(s, courant)).rejects.toThrow(READ_ONLY);
-    await expect(updateAccount(s, courant, { name: "X", kind: "CHECKING", initialBalance: 0 })).rejects.toThrow(READ_ONLY);
+    await expect(archiveAccount(s, courant)).rejects.toThrow(NOT_MANAGER);
+    await expect(updateAccount(s, courant, { name: "X", kind: "CHECKING" })).rejects.toThrow(NOT_MANAGER);
     expect(await prisma.transaction.count()).toBe(1);
   });
 
@@ -110,7 +110,8 @@ describe("accès par compte", () => {
     await grant({ [courant]: "READ" });
     await spend(admin, courant, 5000);
     await spend(admin, epargne, 8000);
-    const row = async (s: Scope) => (await getBudget(s, nov)).rows.find((r) => r.label === "Courses")!.actual;
+    await createBudget(hh, nov);
+    const row = async (s: Scope) => (await getBudget(s, nov))!.tree.flatMap((n) => [n, ...n.children]).find((r) => r.label === "Supermarché")!.actual;
     expect(await row(await member())).toBe(5000);
     expect(await row(admin)).toBe(13000);
   });
@@ -124,7 +125,6 @@ describe("accès par compte", () => {
     expect(await listLoans(s, today)).toEqual([]);
     const cal = await getCalendar(s, nov, today);
     expect([cal.days, cal.upcoming]).toEqual([[], []]);
-    expect((await getBudget(s, nov)).totals).toMatchObject({ fixedTotal: 0, fixedRemaining: 0 });
     expect(await getDashboard(s, today)).toMatchObject({ unpaid: [], toPay: 0 });
     await expect(getCharge(s, c.id)).rejects.toBeInstanceOf(NotFoundError);
     await expect(getLoan(s, l.id, today)).rejects.toBeInstanceOf(NotFoundError);
@@ -152,25 +152,57 @@ describe("accès par compte", () => {
     expect(d.transactions).toMatchObject([{ transferSide: "IN", accountId: epargne, otherAccount: null }]);
   });
 
-  it("Nouveau compte : écriture pour le membre créateur, invisible pour les autres membres, visible pour l'admin", async () => {
+  it("Nouveau compte privé : gestion pour le créateur, invisible pour les autres membres ET pour l'admin", async () => {
     const other = (await createMember(hh, { name: "Autre", email: "o@test.fr", password: "password1", role: "MEMBER" }))!.id;
     const perso = await createAccount(await member(), memberId, { name: "Perso", kind: "CASH", initialBalance: 0 });
-    expect((await member()).write).toEqual([perso.id]);
-    const o = await getScope({ id: other, role: "MEMBER", householdId: hh });
-    expect(await listAccounts(o)).toEqual([]);
-    expect((await listAccounts(admin)).map((a) => a.name)).toContain("Perso");
+    expect(await member()).toMatchObject({ read: [perso.id], write: [perso.id], manage: [perso.id] });
+    expect(await listAccounts(await getScope({ id: other, householdId: hh }))).toEqual([]);
+    const adminScope = await getScope({ id: adminId, householdId: hh });
+    expect((await listAccounts(adminScope)).map((a) => a.name)).toEqual(["Courant", "Épargne"]);
+    await expect(getAccount(adminScope, perso.id)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(spend(adminScope, perso.id, 100)).rejects.toBeInstanceOf(NotFoundError);
   });
 
-  it("Réglage admin : écriture → aucun accès ; réglage sur un admin ou hors foyer → introuvable", async () => {
+  it("Partage « tout le foyer » : écriture pour chacun ; gestion réservée aux gestionnaires", async () => {
+    const adminScope = await getScope({ id: adminId, householdId: hh });
+    await setSharing(adminScope, adminId, courant, "HOUSEHOLD", new Map());
+    const s = await member();
+    expect(s).toMatchObject({ read: [courant], write: [courant], manage: [] });
+    await spend(s, courant, 1000);
+    await expect(archiveAccount(s, courant)).rejects.toThrow(NOT_MANAGER);
+    await expect(setSharing(s, memberId, courant, "SELECTED", new Map())).rejects.toThrow(NOT_MANAGER);
+    await expect(getSharing(s, courant)).rejects.toThrow(NOT_MANAGER);
+    // Retour aux membres sélectionnés : le membre perd l'accès, l'admin gestionnaire le garde.
+    await setSharing(adminScope, adminId, courant, "SELECTED", new Map());
+    expect((await member()).read).toEqual([]);
+  });
+
+  it("Partage sélectionné : niveaux explicites ; le gestionnaire ne peut pas se retirer la gestion", async () => {
+    const adminScope = await getScope({ id: adminId, householdId: hh });
+    await setSharing(adminScope, adminId, epargne, "SELECTED", new Map([[memberId, "MANAGE"], [adminId, null]]));
+    expect((await member()).manage).toEqual([epargne]);
+    expect((await getScope({ id: adminId, householdId: hh })).manage).toContain(epargne);
+    const { users } = await getSharing(await member(), epargne);
+    expect(users.map((u) => u.level)).toEqual(["MANAGE", "MANAGE"]);
+    await expect(setSharing(adminScope, adminId, epargne, "SELECTED", new Map([["inconnu", "READ"]]))).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  it("Archivage / réactivation par un gestionnaire, historique conservé", async () => {
+    const t = await spend(admin, courant, 100000); // solde 0
+    const adminScope = await getScope({ id: adminId, householdId: hh });
+    await archiveAccount(adminScope, courant);
+    await expect(spend(adminScope, courant, 1)).rejects.toBeInstanceOf(LedgerError);
+    expect((await getTransaction(adminScope, t.id)).id).toBe(t.id);
+    await unarchiveAccount(adminScope, courant);
+    expect((await getAccount(adminScope, courant)).archivedAt).toBeNull();
+  });
+
+  it("Accès bas niveau : utilisateur ou compte hors foyer → introuvable", async () => {
     await grant({ [courant]: "WRITE" });
     expect((await listAccounts(await member())).map((a) => a.name)).toEqual(["Courant"]);
     await grant({ [courant]: null });
     expect(await listAccounts(await member())).toEqual([]);
-    expect((await getAccess(hh, memberId)).accounts.map((a) => a.level)).toEqual([null, null]);
-    await expect(setAccess(hh, adminId, new Map([[courant, "READ"]]))).rejects.toBeInstanceOf(NotFoundError);
     await expect(setAccess("autre-foyer", memberId, new Map([[courant, "READ"]]))).rejects.toBeInstanceOf(NotFoundError);
-    expect((await getAccess(hh, adminId)).member.id).toBe(adminId); // la page membre charge tout utilisateur du foyer
-    await expect(getAccess("autre-foyer", memberId)).rejects.toBeInstanceOf(NotFoundError);
     await expect(grant({ inexistant: "READ" })).rejects.toBeInstanceOf(NotFoundError);
   });
 });

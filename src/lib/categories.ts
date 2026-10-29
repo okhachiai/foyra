@@ -1,62 +1,61 @@
-import { Prisma, type CarryOver, type CategoryKind } from "@prisma/client";
+import { Prisma, type CategoryKind } from "@prisma/client";
 import { prisma } from "./db";
 import { isCode, LedgerError, NotFoundError } from "./ledger";
 import { parseCents } from "./money";
 
 type Db = Prisma.TransactionClient;
 
-export type CategoryFields = { name: string; forecastAmount: number | null; carryOver: CarryOver; enabled: boolean };
+export type CategoryFields = { name: string; forecastAmount: number; enabled: boolean; recurring: boolean; isTemplate: boolean; sortOrder: number; fixed?: boolean };
 export type CategoryInput = CategoryFields & { kind: CategoryKind; parentId: string | null };
 
-/** Prévisionnel saisi : vide → null (aucun), montant ≥ 0 en centimes, sinon undefined (invalide). */
-export function parseForecast(raw: string): number | null | undefined {
-  if (raw === "") return null;
+/** Montant prévisionnel saisi : vide → 0, montant ≥ 0 en centimes, sinon undefined (invalide). */
+export function parseForecast(raw: string): number | undefined {
+  if (raw === "") return 0;
   const cents = parseCents(raw, { allowSigned: true });
   return cents === null || cents < 0 ? undefined : cents;
 }
 
-/** Catégories créées au setup : [nom, sous-catégories]. Prévisionnel vide, FORECAST, activées. */
+/** Modèles de catégories : [nom, sous-catégories]. Montants à 0, inclus, repris le mois suivant. */
 export const DEFAULT_CATEGORIES: Record<CategoryKind, [string, string[]][]> = {
+  INCOME: [["Revenus", ["Salaire 1", "Salaire 2", "Autres revenus"]]],
   EXPENSE: [
-    ["Loyer", []],
-    ["Factures", ["Électricité", "Gaz", "Eau", "Internet et téléphone"]],
-    ["Assurances", ["Habitation", "Auto", "Santé"]],
-    ["Abonnements", []],
-    ["Courses", []],
-    ["Transports", ["Carburant", "Transports en commun"]],
-    ["Scolarité", []],
-    ["Enfants", []],
-    ["Aides famille à l'étranger", []],
-    ["Santé", []],
-    ["Loisirs", []],
-    ["Divers", []],
-  ],
-  INCOME: [
-    ["Salaires", []],
-    ["Aides et allocations", []],
-    ["Autres revenus", []],
+    ["Logement", ["Loyer", "Charges locatives"]],
+    ["Crédits", ["Mensualités de crédits"]],
+    ["Assurances", ["Habitation", "Voiture", "Mutuelle"]],
+    ["Factures", ["Électricité", "Gaz", "Eau", "Internet", "Téléphones"]],
+    ["Abonnements", ["Streaming", "Logiciels", "Autres"]],
+    ["École et enfants", ["Cantine", "Fournitures", "Activités", "Couches et soins"]],
+    ["Famille au Maroc", ["Envois réguliers", "Frais de transfert"]],
+    ["Alimentation", ["Marché", "Supermarché", "Autres courses"]],
+    ["Transport", ["Carburant", "Transports en commun"]],
+    ["Santé et hygiène", ["Pharmacie", "Hygiène familiale"]],
+    ["Divers et imprévus", []],
   ],
 };
 
+/** Modèles de dépenses classés en charges fixes ; les autres sont variables. */
+export const FIXED_DEFAULTS = new Set(["Logement", "Crédits", "Assurances", "Factures", "Abonnements", "Famille au Maroc"]);
+
+/** Crée les modèles absents (nom insensible à la casse, par parent) ; les catégories existantes ne sont pas modifiées. */
 export async function createDefaultCategories(tx: Db, householdId: string) {
   for (const [kind, list] of Object.entries(DEFAULT_CATEGORIES) as [CategoryKind, [string, string[]][]][]) {
-    for (const [name, subs] of list) {
-      await tx.category.create({
-        data: { householdId, kind, name, children: { create: subs.map((n) => ({ householdId, kind, name: n })) } },
+    for (const [i, [name, subs]] of list.entries()) {
+      const existing = await tx.category.findFirst({ where: { householdId, kind, parentId: null, name: { equals: name, mode: "insensitive" } } });
+      const parent = existing ?? (await tx.category.create({ data: { householdId, kind, name, sortOrder: i + 1, fixed: FIXED_DEFAULTS.has(name) } }));
+      await tx.category.createMany({
+        data: subs.map((n, j) => ({ householdId, kind, name: n, parentId: parent.id, sortOrder: j + 1 })),
+        skipDuplicates: true, // index unique (foyer, parent, lower(nom))
       });
     }
   }
 }
 
-/** Ajoute les défauts si le foyer n'a encore aucune catégorie (instance initialisée avant les catégories). */
+/** Ajoute les modèles manquants (double clic : l'index unique écarte les doublons). */
 export async function addDefaultCategories(householdId: string) {
   try {
-    await prisma.$transaction(async (tx) => {
-      if (await tx.category.count({ where: { householdId } })) return;
-      await createDefaultCategories(tx, householdId);
-    });
+    await prisma.$transaction((tx) => createDefaultCategories(tx, householdId));
   } catch (e) {
-    if (!isCode(e, "P2002")) throw e; // double clic : l'autre requête les a déjà créées
+    if (!isCode(e, "P2002")) throw e;
   }
 }
 
@@ -69,12 +68,15 @@ async function uniqueName<T>(fn: () => Promise<T>) {
   }
 }
 
-/** Catégories de premier niveau du foyer, avec leurs sous-catégories. */
-export function listCategories(householdId: string) {
+const ORDER = [{ sortOrder: "asc" as const }, { name: "asc" as const }];
+
+/** Catégories de premier niveau du foyer avec leurs sous-catégories ; archivées exclues sauf `withArchived`. */
+export function listCategories(householdId: string, { withArchived = false } = {}) {
+  const archived = withArchived ? {} : { archivedAt: null };
   return prisma.category.findMany({
-    where: { householdId, parentId: null },
-    orderBy: { name: "asc" },
-    include: { children: { orderBy: { name: "asc" } } },
+    where: { householdId, parentId: null, ...archived },
+    orderBy: ORDER,
+    include: { children: { where: archived, orderBy: ORDER } },
   });
 }
 
@@ -84,17 +86,18 @@ export async function getCategory(householdId: string, id: string) {
   return c;
 }
 
-/** Une sous-catégorie hérite du sens de son parent, qui doit être une catégorie de premier niveau du foyer. */
+/** Une sous-catégorie hérite du sens de son parent, qui doit être une catégorie active de premier niveau du foyer. */
 export function createCategory(householdId: string, input: CategoryInput) {
   return uniqueName(() =>
     prisma.$transaction(async (tx) => {
       let kind = input.kind;
       if (input.parentId) {
-        // FOR SHARE : le parent ne peut pas être supprimé avant la fin de la création.
-        const [parent] = await tx.$queryRaw<{ kind: CategoryKind; parentId: string | null }[]>`
-          SELECT "kind", "parentId" FROM "Category" WHERE "id" = ${input.parentId} AND "householdId" = ${householdId} FOR SHARE`;
+        // FOR SHARE : le parent ne peut pas changer avant la fin de la création.
+        const [parent] = await tx.$queryRaw<{ kind: CategoryKind; parentId: string | null; archivedAt: Date | null }[]>`
+          SELECT "kind", "parentId", "archivedAt" FROM "Category" WHERE "id" = ${input.parentId} AND "householdId" = ${householdId} FOR SHARE`;
         if (!parent) throw new NotFoundError();
         if (parent.parentId) throw new LedgerError("Une sous-catégorie ne peut pas avoir de sous-catégorie.", "parentId");
+        if (parent.archivedAt) throw new LedgerError("Cette catégorie est archivée.", "parentId");
         kind = parent.kind;
       }
       return tx.category.create({ data: { ...input, kind, householdId } });
@@ -102,24 +105,45 @@ export function createCategory(householdId: string, input: CategoryInput) {
   );
 }
 
-/** Seuls nom, prévisionnel, reconduction et activation sont modifiables. */
+/** Sens et parent sont figés ; les budgets déjà créés ne sont jamais modifiés (copies indépendantes). */
 export async function updateCategory(householdId: string, id: string, input: CategoryFields) {
   const { count } = await uniqueName(() => prisma.category.updateMany({ where: { id, householdId }, data: input }));
   if (!count) throw new NotFoundError();
 }
 
-/** Refusée s'il reste des sous-catégories ; les opérations rattachées passent « Sans catégorie » (FK SET NULL). */
+/**
+ * Archive (ou réactive) une catégorie ; archiver un parent archive ses sous-catégories.
+ * Opérations, récurrences et budgets passés gardent leur catégorie.
+ */
+export async function setCategoryArchived(householdId: string, id: string, archived: boolean) {
+  await prisma.$transaction(async (tx) => {
+    const c = await tx.category.findFirst({ where: { id, householdId }, include: { parent: true } });
+    if (!c) throw new NotFoundError();
+    if (!archived && c.parent?.archivedAt) throw new LedgerError("Réactivez d’abord la catégorie parente.");
+    const archivedAt = archived ? new Date() : null;
+    await tx.category.updateMany({ where: { householdId, OR: [{ id }, ...(archived ? [{ parentId: id }] : [])] }, data: { archivedAt } });
+  });
+}
+
+/**
+ * Supprime définitivement une catégorie et ses sous-catégories ; refusé si une récurrence les utilise.
+ * Opérations et lignes de budget sont conservées, sans catégorie.
+ */
 export async function deleteCategory(householdId: string, id: string) {
-  const hasChildren = new LedgerError("Supprimez d’abord ses sous-catégories.");
-  const hasCharges = new LedgerError("Cette catégorie est utilisée par une charge fixe.");
-  if (await prisma.category.count({ where: { parentId: id, householdId } })) throw hasChildren;
-  if (await prisma.fixedCharge.count({ where: { categoryId: id, householdId } })) throw hasCharges;
   try {
-    const { count } = await prisma.category.deleteMany({ where: { id, householdId } });
-    if (!count) throw new NotFoundError();
+    await prisma.$transaction(async (tx) => {
+      // FOR UPDATE : bloque la création d'une sous-catégorie (FOR SHARE sur le parent) pendant la suppression.
+      const [c] = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "Category" WHERE "id" = ${id} AND "householdId" = ${householdId} FOR UPDATE`;
+      if (!c) throw new NotFoundError();
+      const ids = [id, ...(await tx.category.findMany({ where: { householdId, parentId: id }, select: { id: true } })).map((s) => s.id)];
+      if (await tx.fixedCharge.count({ where: { householdId, categoryId: { in: ids } } })) throw new LedgerError(IN_USE);
+      await tx.category.deleteMany({ where: { householdId, parentId: id } });
+      await tx.category.deleteMany({ where: { householdId, id } });
+    });
   } catch (e) {
-    // Sous-catégorie ou charge fixe créée entre-temps (FK RESTRICT).
-    if (isCode(e, "P2003")) throw (await prisma.fixedCharge.count({ where: { categoryId: id, householdId } })) ? hasCharges : hasChildren;
+    if (isCode(e, "P2003")) throw new LedgerError(IN_USE); // récurrence créée entre-temps
     throw e;
   }
 }
+
+const IN_USE = "Une récurrence utilise cette catégorie : modifiez-la ou supprimez-la d’abord, ou archivez la catégorie.";

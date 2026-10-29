@@ -1,18 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getAccess } from "@/lib/access";
 import { requireAdmin } from "@/lib/auth";
-import { NotFoundError } from "@/lib/ledger";
-import { saveAccessAction, setDisabledAction, setRoleAction } from "../../actions";
+import { prisma } from "@/lib/db";
+import { setDisabledAction, setRoleAction } from "../../actions";
 import { ActionForm, Field } from "../../form";
-import { KIND_LABELS } from "../../accounts/kinds";
 
 export default async function MemberPage({ params }: { params: Promise<{ id: string }> }) {
   const admin = await requireAdmin();
-  const { member, accounts } = await getAccess(admin.householdId, (await params).id).catch((e) => {
-    if (e instanceof NotFoundError) notFound();
-    throw e;
-  });
+  const member = await prisma.user.findFirst({ where: { id: (await params).id, householdId: admin.householdId } });
+  if (!member) notFound();
   const self = member.id === admin.id;
 
   return (
@@ -52,29 +48,11 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
         </>
       )}
 
-      {member.role === "MEMBER" && (
-        <>
-          <h2>Accès aux comptes</h2>
-          <p className="muted">Sans accès, le compte, ses opérations, charges et crédits sont invisibles pour ce membre.</p>
-          {accounts.length === 0 ? (
-            <p className="muted">Aucun compte pour l’instant.</p>
-          ) : (
-            <ActionForm action={saveAccessAction}>
-              <input type="hidden" name="id" value={member.id} />
-              {accounts.map((a) => (
-                <Field key={a.id} name={`access:${a.id}`} label={`${a.name} · ${KIND_LABELS[a.kind]}${a.archivedAt ? " · archivé" : ""}`}>
-                  <select name={`access:${a.id}`} defaultValue={a.level ?? "NONE"}>
-                    <option value="NONE">Aucun accès</option>
-                    <option value="READ">Lecture</option>
-                    <option value="WRITE">Écriture</option>
-                  </select>
-                </Field>
-              ))}
-              <button type="submit">Enregistrer</button>
-            </ActionForm>
-          )}
-        </>
-      )}
+      <h2>Accès aux comptes</h2>
+      <p className="muted">
+        Les accès (lecture, écriture, gestion) se règlent depuis la page de chaque compte, par ses gestionnaires.
+        Le rôle administrateur ne donne aucun accès automatique aux comptes privés des autres membres.
+      </p>
     </>
   );
 }

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
-import { fullScope } from "./access";
+import { fullScope, getScope } from "./access";
 import { prisma } from "./db";
 import {
-  accountBalance, archiveAccount, createEntry, createTransfer, deleteTransaction, getAccount, getTransfer,
+  accountBalance, archiveAccount, createEntry, createTransfer, deleteAccount, deleteTransaction, getAccount, getTransfer,
   householdTotal, LedgerError, NotFoundError, parseDay, todayIn, updateEntry, updateTransfer,
 } from "./ledger";
 
@@ -150,5 +150,62 @@ describe("ledger", () => {
     expect(todayIn("Europe/Paris", new Date("2026-10-28T23:30:00Z"))).toBe("2026-10-29");
     expect(parseDay("2026-02-30")).toBeNull();
     expect(parseDay("29/10/2026")).toBeNull();
+  });
+
+  it("Idempotence : même clé rejouée (double clic, nouvelle tentative) → une seule dépense", async () => {
+    const c = await account("Courant", 10000);
+    const input = { accountId: c, kind: "EXPENSE" as const, amount: 1000, occurredOn: day, note: null, categoryId: null, idempotencyKey: "k-1" };
+    const [a, b] = await Promise.all([createEntry(fullScope(hh), user, input), createEntry(fullScope(hh), user, input)]);
+    const again = await createEntry(fullScope(hh), user, input);
+    expect(new Set([a.id, b.id, again.id]).size).toBe(1);
+    expect(await accountBalance(fullScope(hh), c)).toBe(9000);
+    await createEntry(fullScope(hh), user, { ...input, idempotencyKey: "k-2" });
+    expect(await accountBalance(fullScope(hh), c)).toBe(8000);
+  });
+
+  it("Idempotence d'un virement : deux lignes une seule fois, même identifiant renvoyé", async () => {
+    const c = await account("Courant", 0);
+    const e = await account("Épargne", 0);
+    const input = { fromAccountId: c, toAccountId: e, amount: 5000, occurredOn: day, note: null, idempotencyKey: "t-1" };
+    const ids = await Promise.all([1, 2, 3].map(() => createTransfer(fullScope(hh), user, input)));
+    expect(new Set(ids).size).toBe(1);
+    expect(await prisma.transaction.count()).toBe(2);
+    expect([await accountBalance(fullScope(hh), c), await accountBalance(fullScope(hh), e)]).toEqual([-5000, 5000]);
+  });
+
+  it("Virement : jamais compté comme revenu ni dépense du foyer", async () => {
+    const c = await account("Courant", 0);
+    const e = await account("Épargne", 0);
+    await transfer(c, e, 7000);
+    const kinds = await prisma.transaction.groupBy({ by: ["kind"], _count: true });
+    expect(kinds).toEqual([{ kind: "TRANSFER", _count: 2 }]);
+  });
+
+  it("Isolation entre foyers : un utilisateur d'un autre foyer ne voit ni ne touche rien", async () => {
+    const c = await account("Courant", 10000);
+    const t = await expense(c, 100);
+    const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!;
+    const s = await getScope(other);
+    expect(s.read).toEqual([]);
+    await expect(getAccount(s, c)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(createEntry(s, other.id, { accountId: c, kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null })).rejects.toBeInstanceOf(NotFoundError);
+    await expect(deleteTransaction(s, t.id)).rejects.toBeInstanceOf(NotFoundError);
+    // Même clé d'idempotence dans deux foyers : indépendantes.
+    await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null, idempotencyKey: "same" });
+    const theirs = (await prisma.account.create({ data: { householdId: other.householdId, name: "X", kind: "CASH" } })).id;
+    await createEntry(fullScope(other.householdId), other.id, { accountId: theirs, kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null, idempotencyKey: "same" });
+    expect(await prisma.transaction.count({ where: { idempotencyKey: "same" } })).toBe(2);
+  });
+
+  it("Supprimer un compte : ses opérations partent ; refusé s'il a un virement", async () => {
+    const c = await account("Courant", 1000), e = await account("Épargne", 0);
+    await expense(c, 100);
+    await deleteAccount(fullScope(hh), c);
+    expect(await prisma.account.count({ where: { id: c } })).toBe(0);
+    expect(await prisma.transaction.count({ where: { accountId: c } })).toBe(0);
+
+    const d = await account("Autre", 1000);
+    await transfer(d, e, 100);
+    await expect(deleteAccount(fullScope(hh), d)).rejects.toThrow(LedgerError);
   });
 });

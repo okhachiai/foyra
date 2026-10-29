@@ -6,7 +6,7 @@ import { AccountForm } from "../../account-form";
 
 export default async function EditAccountPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
-  const account = await loadAccount(await getScope(user), (await params).id, "WRITE");
+  const account = await loadAccount(await getScope(user), (await params).id, "MANAGE");
   if (account.archivedAt) notFound();
   return (
     <>

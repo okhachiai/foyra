@@ -4,6 +4,12 @@ import { centsToInput } from "@/lib/money";
 import { createEntryAction, createTransferAction, updateTransactionAction } from "../../actions";
 import { ActionForm, Field } from "../../form";
 
+/**
+ * Clé d'idempotence, tirée à chaque rendu serveur du formulaire : un double clic ou une nouvelle tentative
+ * après erreur renvoie la même clé (aucun doublon) ; après succès, la page est rendue à nouveau avec une clé neuve.
+ */
+const IdempotencyKey = () => <input type="hidden" name="idempotencyKey" value={crypto.randomUUID()} />;
+
 type Values = { id?: string; amount?: number; occurredOn: string; note?: string | null; categoryId?: string | null };
 export type CategoryTree = Awaited<ReturnType<typeof listCategories>>;
 
@@ -14,7 +20,7 @@ function CommonFields({ v }: { v: Values }) {
         <input name="amount" inputMode="decimal" required placeholder="0,00" autoComplete="off" defaultValue={v.amount ? centsToInput(v.amount) : ""} />
       </Field>
       <Field name="occurredOn" label="Date"><input name="occurredOn" type="date" required defaultValue={v.occurredOn} /></Field>
-      <Field name="note" label="Libellé (facultatif)"><input name="note" maxLength={500} defaultValue={v.note ?? ""} /></Field>
+      <Field name="note" label="Note / libellé (facultatif)"><input name="note" maxLength={500} defaultValue={v.note ?? ""} /></Field>
     </>
   );
 }
@@ -45,7 +51,7 @@ export function EntryForm({ accountId, accounts, kind = "EXPENSE", categories, v
 }) {
   return (
     <ActionForm action={v.id ? updateTransactionAction : createEntryAction}>
-      {v.id && <input type="hidden" name="id" value={v.id} />}
+      {v.id ? <input type="hidden" name="id" value={v.id} /> : <IdempotencyKey />}
       {accounts ? (
         <>
           <Field name="accountId" label="Compte">
@@ -62,7 +68,7 @@ export function EntryForm({ accountId, accounts, kind = "EXPENSE", categories, v
       <Field name="kind" label="Type">
         <select name="kind" defaultValue={kind}>
           <option value="EXPENSE">Dépense</option>
-          <option value="INCOME">Recette</option>
+          <option value="INCOME">Revenu</option>
         </select>
       </Field>
       <CategorySelect categories={categories} value={v.categoryId} />
@@ -76,7 +82,7 @@ export function TransferForm({ accounts, from, to, returnTo, v }: { accounts: Ac
   const options = accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>);
   return (
     <ActionForm action={v.id ? updateTransactionAction : createTransferAction}>
-      {v.id && <input type="hidden" name="id" value={v.id} />}
+      {v.id ? <input type="hidden" name="id" value={v.id} /> : <IdempotencyKey />}
       <input type="hidden" name="returnTo" value={returnTo} />
       <Field name="fromAccountId" label="Depuis"><select name="fromAccountId" defaultValue={from}>{options}</select></Field>
       <Field name="toAccountId" label="Vers">

@@ -71,7 +71,8 @@ export async function getCalendar(scope: Scope, month: Date, today: Date) {
   if (month.getTime() === current.getTime()) {
     const accounts = (await listAccounts(scope)).filter((a) => !a.archivedAt);
     forecast = accounts.map((a) => {
-      const unpaid = cur.reduce((s, c) => s + (!c.payment && c.accountId === a.id ? c.amount : 0), 0);
+      // Échéances non réglées du compte : dépenses à payer, revenus à recevoir.
+      const unpaid = cur.reduce((s, c) => s + (!c.payment && c.accountId === a.id ? (c.kind === "EXPENSE" ? c.amount : -c.amount) : 0), 0);
       return { id: a.id, name: a.name, balance: a.balance, unpaid, end: a.balance - unpaid };
     });
   }

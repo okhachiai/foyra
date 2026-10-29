@@ -1,30 +1,21 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { logoutAction } from "../actions";
+import { Nav } from "../nav";
 
-/** En-tête commun aux pages connectées (réutilisé par /tableau-de-bord, /members, /categories, /budget, /charges, /credits, /calendrier et /profil). */
+/** Barre latérale commune aux pages connectées (réutilisée par /tableau-de-bord, /parametres, /members, /categories, /budget, /charges, /credits, /calendrier et /profil). */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   return (
-    <>
-      <header className="top">
+    <div className="app">
+      <aside className="side">
         <Link href="/tableau-de-bord" className="brand">{user.household.name}</Link>
-        <nav>
-          <Link href="/tableau-de-bord">Tableau de bord</Link>
-          <Link href="/accounts">Comptes</Link>
-          <Link href="/budget">Budget</Link>
-          <Link href="/charges">Charges fixes</Link>
-          <Link href="/calendrier">Calendrier</Link>
-          <Link href="/credits">Crédits</Link>
-          <Link href="/categories">Catégories</Link>
-          {user.role === "ADMIN" && <Link href="/members">Membres</Link>}
-          <Link href="/profil">Mon compte</Link>
-          <form action={logoutAction}>
-            <button type="submit" className="link">Déconnexion</button>
-          </form>
-        </nav>
-      </header>
+        <Nav />
+        <form action={logoutAction}>
+          <button type="submit" className="link">Déconnexion</button>
+        </form>
+      </aside>
       <main>{children}</main>
-    </>
+    </div>
   );
 }

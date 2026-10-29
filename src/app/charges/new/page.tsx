@@ -13,8 +13,8 @@ export default async function NewChargePage() {
   ]);
   return (
     <>
-      <p><Link href="/charges">← Charges fixes</Link></p>
-      <h1>Nouvelle charge fixe</h1>
+      <p><Link href="/charges">← Récurrences</Link></p>
+      <h1>Nouvelle récurrence</h1>
       {accounts.length === 0 ? (
         <p className="muted">Créez d’abord un compte (ou demandez l’accès en écriture à un compte).</p>
       ) : (

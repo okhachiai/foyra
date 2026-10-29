@@ -5,3 +5,9 @@ node_modules/
 .DS_Store
 tsconfig.tsbuildinfo
 next-env.d.ts
+.deploy.env
+releases/
+backups/
+.deploy-lock/
+.playwright-mcp/
+.superpowers/

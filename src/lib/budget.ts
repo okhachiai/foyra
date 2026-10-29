@@ -1,135 +1,279 @@
-import type { CarryOver, CategoryKind } from "@prisma/client";
+import type { BudgetStatus, CategoryKind, Prisma } from "@prisma/client";
 import { readable, type Scope } from "./access";
-import { listCategories } from "./categories";
-import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
-import { parseDay } from "./ledger";
+import { isCode, LedgerError, NotFoundError, parseDay } from "./ledger";
+
+type Db = Prisma.TransactionClient;
 
 /** « AAAA-MM » (années 2000–2099) → Date UTC du 1er du mois (colonne @db.Date), ou null si invalide. */
 export const parseMonth = (s: string | undefined) => (s && /^20\d{2}-(0[1-9]|1[0-2])$/.test(s) ? parseDay(`${s}-01`) : null);
 export const formatMonth = (month: Date) => month.toISOString().slice(0, 7);
 export const addMonths = (month: Date, n: number) => new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + n, 1));
 
-type Seed = { id: string; forecastAmount: number | null; carryOver: CarryOver };
+// --- Calculs (purs) ---
 
-/** Montant prévu d'un mois neuf selon la règle de reconduction ; `previous` = ligne la plus récente avant ce mois. */
-export function carriedAmount(c: Seed, previous: { planned: number | null } | undefined): number | null {
-  if (c.carryOver === "NONE") return null;
-  if (c.carryOver === "PREVIOUS" && previous) return previous.planned;
-  return c.forecastAmount;
-}
-
-/** Crée les lignes manquantes du mois (instantané : les lignes existantes ne sont jamais réécrites). */
-export async function ensureMonth(householdId: string, month: Date) {
-  const missing = await prisma.category.findMany({
-    where: { householdId, budgetLines: { none: { month } } },
-    select: { id: true, forecastAmount: true, carryOver: true },
-  });
-  if (!missing.length) return;
-  const previous = await prisma.$queryRaw<{ categoryId: string; planned: number | null }[]>`
-    SELECT DISTINCT ON ("categoryId") "categoryId", "planned" FROM "BudgetLine"
-    WHERE "householdId" = ${householdId} AND "month" < ${month} ORDER BY "categoryId", "month" DESC`;
-  const prev = new Map(previous.map((p) => [p.categoryId, p]));
-  // skipDuplicates + unique (catégorie, mois) : deux ouvertures simultanées ne créent qu'une ligne.
-  await prisma.budgetLine.createMany({
-    data: missing.map((c) => ({ householdId, categoryId: c.id, month, planned: carriedAmount(c, prev.get(c.id)) })),
-    skipDuplicates: true,
-  });
-}
-
-/**
- * `fixed` = Σ charges fixes applicables de la catégorie, `unpaidFixed` = celles non payées ce mois,
- * `fixedActual` = dépenses du mois liées à un paiement de charge.
- */
-export type BudgetRow = {
-  id: string; kind: CategoryKind; label: string; planned: number | null; actual: number;
-  fixed?: number; unpaidFixed?: number; fixedActual?: number;
+export type Item = {
+  id: string; parentId: string | null; categoryId: string | null; kind: CategoryKind;
+  label: string; amount: number; included: boolean; recurring: boolean; sortOrder: number;
+  category?: { fixed: boolean } | null; // charge fixe ou variable : lue sur la catégorie d'une ligne principale
 };
 
-/** Disponible d'une ligne de dépense = prévu (vide = 0) − effectué ; négatif = dépassement. */
-export const available = (r: BudgetRow) => (r.planned ?? 0) - r.actual;
+export type Node = Item & { children: Item[]; total: number };
+
+const byOrder = (a: Item, b: Item) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label, "fr");
 
 /**
- * Totaux du mois (prévu vide = 0). Reste à vivre = fin de mois projetée.
- * Une charge non payée reste due même si le prévu est vide ou dépassé : restant = max(prévu − effectué, non payé).
+ * Arbre d'un budget. Total d'une ligne principale : sans enfants, son propre montant ;
+ * avec enfants, la somme de ses enfants inclus (son montant direct n'est jamais ajouté).
  */
-export function summarize(rows: BudgetRow[]) {
-  const t = {
-    incomePlanned: 0, incomeActual: 0, expensePlanned: 0, expenseActual: 0, remainingToPay: 0, restToLive: 0,
-    fixedTotal: 0, fixedPaid: 0, fixedRemaining: 0, variableActual: 0,
-  };
-  for (const r of rows) {
-    const planned = r.planned ?? 0;
-    if (r.kind === "INCOME") {
-      t.incomePlanned += planned;
-      t.incomeActual += r.actual;
-      t.restToLive += Math.max(planned, r.actual);
-    } else {
-      const unpaid = r.unpaidFixed ?? 0;
-      t.expensePlanned += planned;
-      t.expenseActual += r.actual;
-      t.remainingToPay += Math.max(planned - r.actual, unpaid);
-      t.restToLive -= Math.max(planned, r.actual + unpaid);
-      t.fixedTotal += r.fixed ?? 0;
-      t.fixedRemaining += unpaid;
-      t.variableActual += r.actual - (r.fixedActual ?? 0);
-    }
-  }
-  t.fixedPaid = t.fixedTotal - t.fixedRemaining;
-  return t;
+export function buildTree(items: Item[]): Node[] {
+  return items
+    .filter((i) => !i.parentId)
+    .sort(byOrder)
+    .map((top) => {
+      const children = items.filter((i) => i.parentId === top.id).sort(byOrder);
+      const total = children.length ? children.reduce((s, c) => s + (c.included ? c.amount : 0), 0) : top.amount;
+      return { ...top, children, total };
+    });
 }
 
-/** Budget d'un mois : catégories incluses (prévu + réel des comptes lisibles), totaux, et opérations hors calcul. */
+/**
+ * Totaux prévus : une branche exclue (parent non inclus) ne compte pas, ses enfants non plus.
+ * Dépenses réparties en charges fixes / variables selon la catégorie de la ligne principale (sans catégorie : variable).
+ */
+export function budgetTotals(items: Item[]) {
+  let income = 0, fixed = 0, variable = 0;
+  for (const n of buildTree(items)) {
+    if (!n.included) continue;
+    if (n.kind === "INCOME") income += n.total;
+    else if (n.category?.fixed) fixed += n.total;
+    else variable += n.total;
+  }
+  const expense = fixed + variable;
+  return { income, expense, fixed, variable, remaining: income - expense };
+}
+
+/** Ligne à créer dans un nouveau budget (sans identifiant : chaque mois a ses propres lignes). */
+export type Seed = Omit<Item, "id" | "parentId" | "category"> & { children: Omit<Item, "id" | "parentId" | "category">[] };
+
+/** Valeurs recopiées d'une ligne : jamais son identifiant, son parent ni son budget. */
+const strip = ({ categoryId, kind, label, amount, included, recurring, sortOrder }: Item) => ({ categoryId, kind, label, amount, included, recurring, sortOrder });
+
+/**
+ * Reprise du budget précédent : seules les lignes récurrentes, avec leur structure et leurs valeurs.
+ * Un parent non récurrent revient s'il a au moins un enfant récurrent (la structure est conservée).
+ */
+export function carryOver(items: Item[]): Seed[] {
+  return buildTree(items).flatMap((n) => {
+    const children = n.children.filter((c) => c.recurring).map(strip);
+    if (!n.recurring && !children.length) return [];
+    return [{ ...strip(n), amount: children.length ? 0 : n.amount, children }];
+  });
+}
+
+type TemplateCategory = {
+  id: string; kind: CategoryKind; name: string; forecastAmount: number; enabled: boolean; recurring: boolean;
+  isTemplate: boolean; sortOrder: number; archivedAt: Date | null;
+  children: Omit<TemplateCategory, "children">[];
+};
+
+/** Budget depuis les modèles : catégories actives marquées « modèle », montant par défaut (0 pour un parent avec enfants). */
+export function fromTemplates(categories: TemplateCategory[]): Seed[] {
+  const seed = (c: Omit<TemplateCategory, "children">) => ({
+    categoryId: c.id, kind: c.kind, label: c.name, amount: c.forecastAmount, included: c.enabled, recurring: c.recurring, sortOrder: c.sortOrder,
+  });
+  return categories
+    .filter((c) => c.isTemplate && !c.archivedAt)
+    .map((c) => {
+      const children = c.children.filter((s) => s.isTemplate && !s.archivedAt).map(seed);
+      return { ...seed(c), amount: children.length ? 0 : c.forecastAmount, children };
+    });
+}
+
+// --- Lecture ---
+
+const ITEM_ORDER = [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }];
+
+/**
+ * Budget d'un mois (null s'il n'est pas encore créé : jamais créé implicitement), son arbre, ses totaux prévus,
+ * et le réel par ligne (opérations des comptes lisibles rattachées à la catégorie d'origine).
+ */
 export async function getBudget(scope: Scope, month: Date) {
   const householdId = scope.householdId;
-  const accountId = readable(scope);
-  await ensureMonth(householdId, month);
-  const next = addMonths(month, 1);
-  const [categories, lines, sums, charges, fixedSums] = await Promise.all([
-    listCategories(householdId),
-    prisma.budgetLine.findMany({ where: { householdId, month }, select: { categoryId: true, planned: true } }),
-    prisma.transaction.groupBy({
-      by: ["categoryId", "kind"],
-      where: { householdId, accountId, kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: next } },
-      _sum: { amount: true },
-    }),
-    listMonthCharges(scope, month),
-    prisma.transaction.groupBy({
-      by: ["categoryId"],
-      where: { householdId, accountId, kind: "EXPENSE", occurredOn: { gte: month, lt: next }, fixedPayment: { isNot: null } },
-      _sum: { amount: true },
-    }),
-  ]);
-  const planned = new Map(lines.map((l) => [l.categoryId, l.planned]));
-  const actual = new Map<string, number>();
-  for (const s of sums) if (s.categoryId) actual.set(s.categoryId, s._sum.amount ?? 0);
-  const fixed = new Map<string, { fixed: number; unpaidFixed: number }>();
-  for (const c of charges) {
-    const f = fixed.get(c.categoryId) ?? { fixed: 0, unpaidFixed: 0 };
-    f.fixed += c.amount;
-    if (!c.payment) f.unpaidFixed += c.amount;
-    fixed.set(c.categoryId, f);
-  }
-  const fixedActual = new Map(fixedSums.map((s) => [s.categoryId, s._sum.amount ?? 0]));
-
-  // Incluse = activée et (sans parent ou parent activé). Chaque sous-catégorie a sa propre ligne.
-  const rows: BudgetRow[] = categories.filter((c) => c.enabled).flatMap((c) =>
-    [{ c, label: c.name }, ...c.children.filter((s) => s.enabled).map((s) => ({ c: s, label: `${c.name} › ${s.name}` }))].map(({ c, label }) => ({
-      id: c.id, kind: c.kind, label, planned: planned.get(c.id) ?? null, actual: actual.get(c.id) ?? 0,
-      fixed: fixed.get(c.id)?.fixed ?? 0, unpaidFixed: fixed.get(c.id)?.unpaidFixed ?? 0, fixedActual: fixedActual.get(c.id) ?? 0,
-    })),
-  );
-  const included = new Set(rows.map((r) => r.id));
-  const outside = { INCOME: 0, EXPENSE: 0 };
-  for (const s of sums) if (!s.categoryId || !included.has(s.categoryId)) outside[s.kind as CategoryKind] += s._sum.amount ?? 0;
-
-  return { rows, totals: summarize(rows), outside, charges };
+  const budget = await prisma.budget.findUnique({
+    where: { householdId_month: { householdId, month } },
+    include: { items: { orderBy: ITEM_ORDER, include: { category: { select: { fixed: true } } } } },
+  });
+  if (!budget) return null;
+  const sums = await prisma.transaction.groupBy({
+    by: ["categoryId"],
+    where: { householdId, accountId: readable(scope), kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: addMonths(month, 1) } },
+    _sum: { amount: true },
+  });
+  const real = new Map(sums.map((s) => [s.categoryId, s._sum.amount ?? 0]));
+  const actual = (i: Item) => (i.categoryId ? real.get(i.categoryId) ?? 0 : 0);
+  const tree = buildTree(budget.items).map((n) => ({
+    ...n,
+    actual: actual(n) + n.children.reduce((s, c) => s + actual(c), 0),
+    children: n.children.map((c) => ({ ...c, actual: actual(c) })),
+  }));
+  return { ...budget, tree, totals: budgetTotals(budget.items) };
 }
 
-/** Enregistre les montants prévus du mois ; ids hors foyer ignorés (filtre householdId). */
-export async function savePlanned(householdId: string, month: Date, planned: Map<string, number | null>) {
-  await ensureMonth(householdId, month);
-  await prisma.$transaction(
-    [...planned].map(([categoryId, value]) => prisma.budgetLine.updateMany({ where: { householdId, categoryId, month }, data: { planned: value } })),
-  );
+// --- Écriture ---
+
+/** Crée les lignes d'un budget (parents puis enfants : nouveaux identifiants). */
+async function insertSeeds(tx: Db, householdId: string, budgetId: string, seeds: Seed[]) {
+  for (const { children, ...top } of seeds) {
+    const parent = await tx.budgetItem.create({ data: { ...top, householdId, budgetId } });
+    if (children.length) {
+      await tx.budgetItem.createMany({ data: children.map((c) => ({ ...c, kind: parent.kind, householdId, budgetId, parentId: parent.id })) });
+    }
+  }
+}
+
+/** Lignes de départ d'un nouveau budget selon le réglage du foyer : reprise du dernier budget antérieur, sinon modèles. */
+export async function budgetSeeds(db: Db, householdId: string, month: Date): Promise<Seed[]> {
+  const household = await db.household.findUniqueOrThrow({ where: { id: householdId } });
+  if (household.budgetSource === "PREVIOUS") {
+    const previous = await db.budget.findFirst({ where: { householdId, month: { lt: month } }, orderBy: { month: "desc" }, include: { items: true } });
+    if (previous) return carryOver(previous.items);
+  }
+  return fromTemplates(await db.category.findMany({ where: { householdId, parentId: null }, include: { children: true } }));
+}
+
+export type IncomeLine = { label: string; amount: number; categoryId: string | null };
+
+/** Revenus proposés à la création : lignes de revenu des seeds, à plat (sous-lignes à la place de leur parent). */
+export const incomeLines = (seeds: Seed[]): IncomeLine[] =>
+  seeds.filter((s) => s.kind === "INCOME" && s.included).flatMap((s) => (s.children.length ? s.children.filter((c) => c.included) : [s]))
+    .map(({ label, amount, categoryId }) => ({ label, amount, categoryId }));
+
+/**
+ * Revenus proposés + revenus fixes du mois (charges de type revenu), en tête avec leur montant actuel.
+ * Retirées des lignes proposées : celles du même libellé (reprises du mois précédent) et les lignes à 0 de la même catégorie (modèles vides).
+ */
+export function mergeIncomes(proposed: IncomeLine[], fixed: { name: string; amount: number; categoryId: string }[]): IncomeLine[] {
+  const names = new Set(fixed.map((f) => f.name.toLocaleLowerCase("fr")));
+  const cats = new Set(fixed.map((f) => f.categoryId));
+  return [
+    ...fixed.map((f) => ({ label: f.name, amount: f.amount, categoryId: f.categoryId })),
+    ...proposed.filter((p) => !names.has(p.label.toLocaleLowerCase("fr")) && !(p.amount === 0 && p.categoryId && cats.has(p.categoryId))),
+  ];
+}
+
+/**
+ * Création explicite du budget d'un mois selon le réglage du foyer : reprise des lignes récurrentes
+ * du dernier budget antérieur, sinon (ou à défaut de budget antérieur) modèles de catégories.
+ * `incomes` : revenus saisis à la création, ils remplacent les lignes de revenu reprises (catégories hors foyer ignorées).
+ * Déjà créé (double clic, autre membre) : renvoie l'existant.
+ */
+export async function createBudget(householdId: string, month: Date, incomes?: IncomeLine[]) {
+  const existing = () => prisma.budget.findUniqueOrThrow({ where: { householdId_month: { householdId, month } } });
+  try {
+    return await prisma.$transaction(async (tx) => {
+      let seeds = await budgetSeeds(tx, householdId, month);
+      if (incomes) {
+        const own = new Set((await tx.category.findMany({ where: { householdId, kind: "INCOME" }, select: { id: true } })).map((c) => c.id));
+        seeds = [
+          ...incomes.map((i, sortOrder) => ({
+            ...i, categoryId: i.categoryId && own.has(i.categoryId) ? i.categoryId : null,
+            kind: "INCOME" as const, included: true, recurring: true, sortOrder, children: [],
+          })),
+          ...seeds.filter((s) => s.kind !== "INCOME"),
+        ];
+      }
+      const budget = await tx.budget.create({ data: { householdId, month } });
+      await insertSeeds(tx, householdId, budget.id, seeds);
+      return budget;
+    });
+  } catch (e) {
+    if (isCode(e, "P2002")) return existing();
+    throw e;
+  }
+}
+
+const VALIDATED = "Ce budget est validé : repassez-le en brouillon pour le modifier.";
+
+/** Verrouille le budget du foyer (FOR UPDATE) ; `draft` : refuse s'il est validé. */
+async function lockBudget(tx: Db, householdId: string, budgetId: string, draft = true) {
+  const [b] = await tx.$queryRaw<{ status: BudgetStatus }[]>`
+    SELECT "status" FROM "Budget" WHERE "id" = ${budgetId} AND "householdId" = ${householdId} FOR UPDATE`;
+  if (!b) throw new NotFoundError();
+  if (draft && b.status !== "DRAFT") throw new LedgerError(VALIDATED);
+}
+
+export async function setBudgetStatus(householdId: string, budgetId: string, status: BudgetStatus) {
+  await prisma.$transaction(async (tx) => {
+    await lockBudget(tx, householdId, budgetId, false);
+    await tx.budget.update({ where: { id: budgetId }, data: { status } });
+  });
+}
+
+export type ItemFields = { label: string; amount: number; included: boolean; recurring: boolean };
+
+/**
+ * Ajoute une ligne. Sous-ligne : le parent doit être une ligne principale du même budget ; elle prend son type,
+ * et le montant direct du parent repasse à 0 (son total devient la somme de ses enfants). Elle se place en dernier.
+ */
+export async function addItem(householdId: string, budgetId: string, input: ItemFields & { kind: CategoryKind; parentId: string | null }) {
+  return prisma.$transaction(async (tx) => {
+    await lockBudget(tx, householdId, budgetId);
+    let kind = input.kind;
+    if (input.parentId) {
+      const parent = await tx.budgetItem.findFirst({ where: { id: input.parentId, budgetId, householdId } });
+      if (!parent) throw new NotFoundError();
+      if (parent.parentId) throw new LedgerError("Une sous-catégorie ne peut pas avoir de sous-catégorie.", "parentId");
+      kind = parent.kind;
+      await tx.budgetItem.update({ where: { id: parent.id }, data: { amount: 0 } });
+    }
+    const last = await tx.budgetItem.aggregate({ where: { budgetId, parentId: input.parentId, kind }, _max: { sortOrder: true } });
+    return tx.budgetItem.create({ data: { ...input, kind, householdId, budgetId, sortOrder: (last._max.sortOrder ?? -1) + 1 } });
+  });
+}
+
+/** Enregistre les lignes modifiées ; le montant d'une ligne qui a des enfants reste 0 (total calculé). Ids hors budget ignorés. */
+export async function saveItems(householdId: string, budgetId: string, items: Map<string, ItemFields>) {
+  await prisma.$transaction(async (tx) => {
+    await lockBudget(tx, householdId, budgetId);
+    const parents = new Set(
+      (await tx.budgetItem.findMany({ where: { budgetId, householdId, parentId: { not: null } }, select: { parentId: true } })).map((p) => p.parentId),
+    );
+    for (const [id, data] of items) {
+      await tx.budgetItem.updateMany({ where: { id, budgetId, householdId }, data: parents.has(id) ? { ...data, amount: 0 } : data });
+    }
+  });
+}
+
+/** Retire une ligne ; retirer une ligne principale retire ses sous-lignes (FK en cascade). */
+export async function removeItem(householdId: string, budgetId: string, id: string) {
+  await prisma.$transaction(async (tx) => {
+    await lockBudget(tx, householdId, budgetId);
+    const { count } = await tx.budgetItem.deleteMany({ where: { id, budgetId, householdId } });
+    if (!count) throw new NotFoundError();
+  });
+}
+
+const isFixed = async (tx: Db, categoryId: string | null) =>
+  !!categoryId && !!(await tx.category.findUnique({ where: { id: categoryId }, select: { fixed: true } }))?.fixed;
+
+/** Monte ou descend une ligne parmi ses sœurs (même parent, même type), puis renumérote les sœurs 0…n-1. */
+export async function moveItem(householdId: string, budgetId: string, id: string, dir: "up" | "down") {
+  await prisma.$transaction(async (tx) => {
+    await lockBudget(tx, householdId, budgetId);
+    const item = await tx.budgetItem.findFirst({ where: { id, budgetId, householdId } });
+    if (!item) throw new NotFoundError();
+    // Lignes principales de dépense : on ne se déplace qu'au sein de son groupe (charges fixes ou variables).
+    const fixed = item.parentId || item.kind === "INCOME" ? undefined : await isFixed(tx, item.categoryId);
+    const siblings = (await tx.budgetItem.findMany({ where: { budgetId, parentId: item.parentId, kind: item.kind }, include: { category: { select: { fixed: true } } } }))
+      .filter((s) => fixed === undefined || !!s.category?.fixed === fixed)
+      .sort(byOrder);
+    const from = siblings.findIndex((s) => s.id === id);
+    const to = from + (dir === "up" ? -1 : 1);
+    if (to < 0 || to >= siblings.length) return;
+    [siblings[from], siblings[to]] = [siblings[to], siblings[from]];
+    for (const [i, s] of siblings.entries()) {
+      if (s.sortOrder !== i) await tx.budgetItem.update({ where: { id: s.id }, data: { sortOrder: i } });
+    }
+  });
 }

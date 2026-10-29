@@ -1,6 +1,7 @@
 import { requireUser } from "@/lib/auth";
 import { changePasswordAction } from "../actions";
 import { ActionForm, Field } from "../form";
+import { SettingsNav } from "../nav";
 
 export default async function ProfilePage({ searchParams }: { searchParams: Promise<{ ok?: string }> }) {
   const user = await requireUser();
@@ -8,6 +9,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
   return (
     <>
       <h1>Mon compte</h1>
+      <SettingsNav admin={user.role === "ADMIN"} />
       <p>{user.name}<br /><span className="muted">{user.email} · {user.role === "ADMIN" ? "Admin" : "Membre"}</span></p>
       <h2>Changer le mot de passe</h2>
       {ok && <p role="status">Mot de passe modifié. Vos autres sessions ont été fermées.</p>}

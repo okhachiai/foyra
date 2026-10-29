@@ -22,8 +22,11 @@ export function ActionForm({ action, children, className, confirm }: { action: A
         aria-busy={pending}
         onSubmit={(e) => {
           e.preventDefault();
-          if (confirm && !window.confirm(confirm)) return;
-          const data = new FormData(e.currentTarget, (e.nativeEvent as SubmitEvent).submitter);
+          const submitter = (e.nativeEvent as SubmitEvent).submitter;
+          // Confirmation propre au bouton (data-confirm), sinon celle du formulaire.
+          const ask = submitter?.dataset.confirm ?? confirm;
+          if (ask && !window.confirm(ask)) return;
+          const data = new FormData(e.currentTarget, submitter);
           startTransition(() => formAction(data));
         }}
       >
@@ -45,3 +48,4 @@ export function Field({ name, label, children }: { name: string; label: string; 
     </label>
   );
 }
+

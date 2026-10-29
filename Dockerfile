@@ -12,6 +12,13 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
+# Outillage de développement : dépendances complètes pour la vérification de types et les tests (service `tests`).
+FROM base AS dev
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+RUN npm ci
+COPY . .
+
 # CLI Prisma autonome pour `migrate deploy` au démarrage (le build standalone ne l'embarque pas).
 FROM base AS prisma-cli
 WORKDIR /prisma-cli
