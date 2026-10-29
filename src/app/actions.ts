@@ -367,7 +367,8 @@ export async function payChargeAction(_: FormState, fd: FormData): Promise<FormS
   if (errors.state) return errors.state;
   const error = await run(() => payCharge(user.householdId, user.id, str(fd, "id"), month, amount, occurredOn));
   if (error) return error;
-  done(`/charges?m=${formatMonth(month)}`);
+  // Liste blanche : seule la valeur fixe « calendar » change la page de retour.
+  done(`${str(fd, "back") === "calendar" ? "/calendrier" : "/charges"}?m=${formatMonth(month)}`);
 }
 
 // --- Crédits ---

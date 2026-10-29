@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { logoutAction } from "../actions";
 
-/** En-tête commun aux pages connectées (réutilisé par /members, /categories, /budget, /charges et /credits). */
+/** En-tête commun aux pages connectées (réutilisé par /members, /categories, /budget, /charges, /credits et /calendrier). */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   return (
@@ -13,6 +13,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/accounts">Comptes</Link>
           <Link href="/budget">Budget</Link>
           <Link href="/charges">Charges fixes</Link>
+          <Link href="/calendrier">Calendrier</Link>
           <Link href="/credits">Crédits</Link>
           <Link href="/categories">Catégories</Link>
           {user.role === "ADMIN" && <Link href="/members">Membres</Link>}

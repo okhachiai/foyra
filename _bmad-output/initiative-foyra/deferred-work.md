@@ -25,3 +25,6 @@
 - source_plan: `/Users/oktech/Sites/foyra-project/_bmad-output/initiative-foyra/plan-foyra-socle-comptes-transactions.md`
   summary: Limite de connexion par IP fiable derrière un reverse proxy (réglage de proxy de confiance, ex. TRUST_PROXY).
   evidence: Sans proxy de confiance déclaré, l'en-tête X-Forwarded-For reste contrôlable par le client ; seule la limite par email est garantie.
+- source_plan: `/Users/oktech/Sites/foyra-project/_bmad-output/initiative-foyra/plan-foyra-calendrier.md`
+  summary: Dates importantes libres dans le calendrier (rappels saisis par l’utilisateur : renouvellement, impôts, échéances ponctuelles), avec leur propre modèle.
+  evidence: Le calendrier couvre les échéances des charges fixes et crédits ; des dates libres demandent un nouveau modèle et des écrans de saisie, hors cible du cycle.

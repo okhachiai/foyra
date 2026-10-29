@@ -109,3 +109,7 @@ form:has(small.error) > p.error { display: none; }
 .table-scroll th { font-weight: 500; color: var(--muted); }
 .table-scroll th:first-child, .table-scroll td:first-child { text-align: left; }
 .table-scroll tr:last-child td { border-bottom: 0; }
+
+/* Calendrier : jour courant */
+.today h2 { color: var(--accent); }
+.badge { margin-left: 0.5rem; padding: 0.125rem 0.5rem; font-size: 0.75rem; font-weight: 500; vertical-align: middle; color: var(--accent-text); background: var(--accent); border-radius: 999px; }
