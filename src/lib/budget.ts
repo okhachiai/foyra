@@ -128,8 +128,10 @@ export async function getBudget(scope: Scope, month: Date) {
     where: { householdId, accountId: readable(scope), kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: addMonths(month, 1) } },
     _sum: { amount: true },
   });
-  const actual = (i: Item, top: Item) => sums.reduce((t, s) =>
-    i.categoryId && s.categoryId === i.categoryId && (top.kind === "INCOME" || s.shared === top.shared) ? t + (s._sum.amount ?? 0) : t, 0);
+  const sum = new Map(sums.map((s) => [`${s.categoryId}:${s.shared}`, s._sum.amount ?? 0]));
+  const at = (categoryId: string, shared: boolean) => sum.get(`${categoryId}:${shared}`) ?? 0;
+  const actual = (i: Item, top: Item) =>
+    !i.categoryId ? 0 : top.kind === "INCOME" ? at(i.categoryId, true) + at(i.categoryId, false) : at(i.categoryId, top.shared);
   const tree = buildTree(budget.items).map((n) => ({
     ...n,
     actual: actual(n, n) + n.children.reduce((s, c) => s + actual(c, n), 0),
@@ -233,6 +235,7 @@ export type ItemFields = { label: string; amount: number; included: boolean; rec
 
 const ONE_RESERVE = "Une seule réserve par budget.";
 const RESERVE_TOP = "La réserve doit être une ligne principale de dépense.";
+const RESERVE_INCLUDED = "La réserve doit être une ligne incluse au budget.";
 
 /** Une deuxième réserve (index SQL partiel) → message lisible. */
 async function oneReserve<T>(write: () => Promise<T>) {
@@ -254,6 +257,7 @@ export async function addItem(householdId: string, budgetId: string, input: Item
     await lockBudget(tx, householdId, budgetId);
     let kind = input.kind;
     if (input.reserve && (input.parentId || kind === "INCOME")) throw new LedgerError(RESERVE_TOP);
+    if (input.reserve && !input.included) throw new LedgerError(RESERVE_INCLUDED);
     if (input.parentId) {
       const parent = await tx.budgetItem.findFirst({ where: { id: input.parentId, budgetId, householdId } });
       if (!parent) throw new NotFoundError();
@@ -269,17 +273,19 @@ export async function addItem(householdId: string, budgetId: string, input: Item
 
 /**
  * Enregistre les lignes modifiées ; le montant d'une ligne qui a des enfants reste 0 (total calculé). Ids hors budget ignorés.
- * Sous-lignes : caractère commun du parent (le changer sur le parent l’applique à ses enfants). Réserve : ligne principale de dépense seulement.
+ * Sous-lignes : caractère commun du parent (le changer sur le parent l'applique à ses enfants). Réserve : ligne principale de dépense incluse seulement.
  * Réserves retirées avant d'être posées : la déplacer d'une ligne à l'autre passe en un seul enregistrement.
  */
 export async function saveItems(householdId: string, budgetId: string, items: Map<string, ItemFields>) {
   await oneReserve(() => prisma.$transaction(async (tx) => {
     await lockBudget(tx, householdId, budgetId);
-    const all = await tx.budgetItem.findMany({ where: { budgetId, householdId }, select: { id: true, parentId: true, kind: true } });
+    const all = await tx.budgetItem.findMany({ where: { budgetId, householdId }, select: { id: true, parentId: true, kind: true, included: true, reserve: true } });
     const subs = all.filter((i) => i.parentId);
     const parents = new Set(subs.map((p) => p.parentId));
     const children = new Set(subs.map((c) => c.id));
     if (all.some((i) => items.get(i.id)?.reserve && (i.parentId || i.kind === "INCOME"))) throw new LedgerError(RESERVE_TOP);
+    // Réserve après enregistrement (absente = inchangée) sur une ligne exclue : refusée.
+    if (all.some((i) => { const f = items.get(i.id); return (f?.reserve ?? i.reserve) && !(f?.included ?? i.included); })) throw new LedgerError(RESERVE_INCLUDED);
     const entries = [...items].sort(([, a], [, b]) => Number(!!a.reserve) - Number(!!b.reserve));
     for (const [id, { shared, reserve, ...data }] of entries) {
       const own = children.has(id) ? data : { ...data, shared, reserve, ...(parents.has(id) && { amount: 0 }) };

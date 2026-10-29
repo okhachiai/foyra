@@ -264,6 +264,15 @@ describe("ledger", () => {
     expect(rows.filter((r) => r.kind === "TRANSFER").map((r) => r.shared)).toEqual([false, false]);
   });
 
+  it("Compte devenu commun : ses charges deviennent communes", async () => {
+    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
+    const nov = parseMonth("2026-11")!;
+    const loyer = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name: "Loyer" } })).id;
+    const ch = await createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: c, categoryId: loyer, startMonth: nov, endMonth: null, shared: false });
+    await updateAccount(fullScope(hh), c, { name: "Perso", kind: "CHECKING", ownerId: null }, nov);
+    expect((await prisma.fixedCharge.findUniqueOrThrow({ where: { id: ch.id } })).shared).toBe(true);
+  });
+
   it("Propriétaire inchangé : aucune bascule ; propriétaire d'un autre foyer refusé", async () => {
     const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
     const nov = parseMonth("2026-11")!;

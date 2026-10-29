@@ -243,7 +243,9 @@ model BudgetItem {
   recurring   Boolean      @default(true)
   sortOrder   Int          @default(0)
   shared      Boolean      @default(true) // ligne commune (partagée au prorata)
-  reserve     Boolean      @default(false) // ligne « Réserve imprévus » ; une seule par budget (index SQL partiel)
+  // Une seule réserve par budget : index unique partiel "BudgetItem_one_reserve" écrit à la main (migration 20261105000000_shared_split),
+  // inexprimable en Prisma ; toute migration générée qui le supprime doit être corrigée à la main.
+  reserve     Boolean      @default(false) // ligne « Réserve imprévus »
   createdAt   DateTime     @default(now())
 
   household Household    @relation(fields: [householdId], references: [id])

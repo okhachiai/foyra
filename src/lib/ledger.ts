@@ -116,6 +116,8 @@ export async function updateAccount(scope: Scope, id: string, data: AccountData,
       where: { householdId, accountId: id, kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: next }, fixedPayment: null },
       data: { shared: data.ownerId === null },
     });
+    // Compte commun ⇒ charges communes (règle globale, tous mois confondus).
+    if (data.ownerId === null) await tx.fixedCharge.updateMany({ where: { householdId, accountId: id }, data: { shared: true } });
   });
 }
 

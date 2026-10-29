@@ -13,7 +13,7 @@ export type SplitInput = {
   forecast: PerMember; // charges INCOME du mois sur ses comptes (si income = 0)
   commonIncome: number; // INCOME catégorisées du mois sur comptes communs
   plannedCommon: number; // charges EXPENSE shared du mois + lignes EXPENSE principales incluses shared (total)
-  toCommon: PerMember; // virements OUT de ses comptes vers un compte commun
+  toCommon: PerMember; // virements de ses comptes vers un compte commun, moins ceux d'un compte commun vers les siens
   paidCommon: PerMember; // EXPENSE shared sur ses comptes
   spentPersonal: PerMember; // EXPENSE non shared sur ses comptes
 };
@@ -51,14 +51,17 @@ export function splitMonth(i: SplitInput): Split {
     members: i.members.map((m, k) => {
       const contribution = get(i.toCommon, m.id) + get(i.paidCommon, m.id);
       return {
-        userId: m.id, name: m.name, income: incomes[k], forecast: !get(i.income, m.id) && get(i.forecast, m.id) > 0, shareBp: shares[k],
+        userId: m.id, name: m.name, income: incomes[k], forecast: !get(i.income, m.id) && incomes[k] > 0, shareBp: shares[k],
         due: dues[k], contribution, toTransfer: dues[k] - contribution, personalLeft: incomes[k] - dues[k] - get(i.spentPersonal, m.id),
       };
     }),
   };
 }
 
-/** Entrées du partage, toujours en portée complète du foyer (sinon les chiffres seraient faux). */
+/**
+ * Entrées du partage, toujours en portée complète du foyer (sinon les chiffres seraient faux).
+ * Membres : utilisateurs actifs ; les opérations des comptes d'un propriétaire désactivé sont ignorées.
+ */
 export async function getSplit(householdId: string, month: Date): Promise<Split> {
   const scope = fullScope(householdId);
   const [accounts, users, rows, charges, budget] = await Promise.all([
@@ -75,12 +78,13 @@ export async function getSplit(householdId: string, month: Date): Promise<Split>
   const members = users.filter((u) => accounts.some((a) => a.ownerId === u.id && !a.archivedAt));
   const add = (r: PerMember, id: string | null | undefined, n: number) => { if (id) r[id] = (r[id] ?? 0) + n; };
   const input: SplitInput = { members, income: {}, forecast: {}, commonIncome: 0, plannedCommon: 0, toCommon: {}, paidCommon: {}, spentPersonal: {} };
-  // Virements vers un compte commun : côté IN, indexé par virement.
-  const intoCommon = new Set(rows.filter((t) => t.transferSide === "IN" && owner.get(t.accountId) === null).map((t) => t.transferId));
+  // Côté commun de chaque virement : IN = versé au commun, OUT = repris du commun (déduit de la contribution).
+  const common = new Map(rows.filter((t) => t.transferSide && owner.get(t.accountId) === null).map((t) => [t.transferId, t.transferSide]));
   for (const t of rows) {
     const who = owner.get(t.accountId);
     if (t.kind === "TRANSFER") {
-      if (t.transferSide === "OUT" && who && intoCommon.has(t.transferId)) add(input.toCommon, who, t.amount);
+      const side = common.get(t.transferId);
+      if (who && side && side !== t.transferSide) add(input.toCommon, who, side === "IN" ? t.amount : -t.amount);
     } else if (t.kind === "INCOME") {
       if (t.categoryId === null) continue; // ajustement de solde : pas un revenu
       if (who === null) input.commonIncome += t.amount;
@@ -111,8 +115,8 @@ export async function getVisibleSplit(viewer: { id: string; role: Role; househol
     getSplit(viewer.householdId, month),
     prisma.account.findMany({ where: { householdId: viewer.householdId }, select: { id: true, ownerId: true, archivedAt: true }, orderBy: { createdAt: "asc" } }),
   ]);
-  const common = accounts.find((a) => a.ownerId === null && !a.archivedAt && canWrite(scope, a.id))?.id;
   if (!split.members.length || (!accounts.some((a) => a.ownerId === null && !a.archivedAt) && split.members.length < 2)) return null;
+  const common = accounts.find((a) => a.ownerId === null && !a.archivedAt && canWrite(scope, a.id))?.id;
   const ownedBy: Record<string, string[]> = {};
   for (const a of accounts) if (a.ownerId) (ownedBy[a.ownerId] ??= []).push(a.id);
   const transfer: Record<string, string> = {};

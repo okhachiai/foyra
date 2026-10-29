@@ -79,10 +79,10 @@ describe("gestion des membres", () => {
     expect((await prisma.user.findUniqueOrThrow({ where: { id: adminId } })).role).toBe("MEMBER");
   });
 
-  it("Rôle et accès indépendants : promu admin, B ne voit aucun compte de plus ; rétrogradé, il garde ses accès explicites", async () => {
+  it("Rôle et accès indépendants : promu admin, B voit tout ; rétrogradé, il ne garde que ses accès explicites", async () => {
     const acc = (await createAccount(fullScope(hh), adminId, { name: "Courant", kind: "CHECKING", initialBalance: 0 })).id;
     await setRole(hh, adminId, bobId, "ADMIN");
-    expect((await getScope({ id: bobId, householdId: hh })).read).toEqual([]);
+    expect(await getScope(await prisma.user.findUniqueOrThrow({ where: { id: bobId } }))).toEqual(fullScope(hh));
     await prisma.accountAccess.create({ data: { userId: bobId, accountId: acc, level: "WRITE" } });
     await setRole(hh, adminId, bobId, "MEMBER");
     const bob = await prisma.user.findUniqueOrThrow({ where: { id: bobId } });

@@ -317,7 +317,10 @@ describe("budget mensuel", () => {
     await expect(saveItems(hh, b.id, new Map([[sub.id, { ...fields(divers), reserve: true }]]))).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
     const salaire = await prisma.budgetItem.create({ data: { householdId: hh, budgetId: b.id, kind: "INCOME", label: "Salaire", sortOrder: 99 } });
     await expect(saveItems(hh, b.id, new Map([[salaire.id, { label: "Salaire", amount: 0, included: true, recurring: true, reserve: true }]]))).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
-    await saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), shared: false, reserve: true }], [sub.id, { ...fields(divers), shared: true }]]));
+    await expect(addItem(hh, b.id, { ...cadeaux, parentId: null, included: false, reserve: true })).rejects.toThrow("La réserve doit être une ligne incluse au budget.");
+    await saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), shared: false, reserve: true }], [sub.id, { ...fields(sub), shared: true }]]));
+    // Réserve existante exclue (cases non affichées : réserve inchangée) → refusé.
+    await expect(saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), included: false }]]))).rejects.toThrow("La réserve doit être une ligne incluse au budget.");
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: divers.id } })).toMatchObject({ shared: false, reserve: true });
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: sub.id } })).toMatchObject({ shared: false, reserve: false });
     await expect(saveItems(hh, b.id, new Map([[factures.id, { ...fields(factures), reserve: true }]]))).rejects.toThrow("Une seule réserve par budget.");

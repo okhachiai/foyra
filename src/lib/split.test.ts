@@ -30,6 +30,13 @@ describe("splitMonth", () => {
     expect(s.members.reduce((t, m) => t + m.shareBp, 0)).toBe(10000);
   });
 
+  it("arrondi à 3 membres : somme des dus et des parts exacte", () => {
+    const s = splitMonth(base({ members: [A, B, { id: "c", name: "Chloé" }], income: { a: 100000, b: 100000, c: 100000 }, plannedCommon: 10000 }));
+    expect(s.members.reduce((t, m) => t + m.due, 0)).toBe(10000);
+    expect(s.members.reduce((t, m) => t + m.shareBp, 0)).toBe(10000);
+    expect(s.members.map((m) => m.shareBp)).toEqual([3334, 3333, 3333]);
+  });
+
   it("sans revenu : parts égales", () => {
     const s = splitMonth(base({ plannedCommon: 1001 }));
     expect(s.members.map((m) => m.shareBp)).toEqual([5000, 5000]);
@@ -116,6 +123,31 @@ describe("getSplit", () => {
     expect(b).toMatchObject({ income: 200000, forecast: true, shareBp: 4000, due: 54000, contribution: 50000, toTransfer: 4000, personalLeft: 146000 });
   });
 
+  it("getSplit : contribution nette des virements commun → perso ; comptes d'un membre désactivé ignorés", async () => {
+    const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
+    hh = admin.householdId;
+    const all = fullScope(hh);
+    const bob = (await createMember(hh, { name: "Bob", email: "b@test.fr", password: "password1", role: "MEMBER" }))!;
+    const ex = (await createMember(hh, { name: "Ex", email: "x@test.fr", password: "password1", role: "MEMBER" }))!;
+    const acc = async (name: string, ownerId: string | null) => (await createAccount(all, admin.id, { name, kind: "CHECKING", initialBalance: 0, ownerId })).id;
+    const pa = await acc("Perso A", admin.id);
+    const pb = await acc("Perso B", bob.id);
+    const px = await acc("Perso X", ex.id);
+    const commun = await acc("Commun", null);
+    const transfer = (fromAccountId: string, toAccountId: string, amount: number) =>
+      createTransfer(all, admin.id, { fromAccountId, toAccountId, amount, occurredOn: day("2026-11-03"), note: null });
+    await transfer(pb, commun, 100000);
+    await transfer(commun, pb, 80000); // remboursement : déduit
+    await transfer(commun, pa, 5000); // Alice n'a rien versé : contribution négative
+    await transfer(px, commun, 70000);
+    await createEntry(all, admin.id, { accountId: px, kind: "EXPENSE", amount: 9000, occurredOn: day("2026-11-09"), note: null, categoryId: null, shared: true });
+    await prisma.user.update({ where: { id: ex.id }, data: { disabledAt: new Date() } });
+
+    const s = await getSplit(hh, nov);
+    expect(s.members.map((m) => m.userId)).toEqual([admin.id, bob.id]);
+    expect(s.members.map((m) => m.contribution)).toEqual([-5000, 20000]);
+  });
+
   it("getVisibleSplit : masquage pour un membre, lien de virement si comptes modifiables, null sans membre propriétaire", async () => {
     const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
     hh = admin.householdId;
@@ -136,5 +168,10 @@ describe("getSplit", () => {
     expect(asBob.members[1]).toMatchObject({ userId: bob.id, income: 0 });
     expect(asBob.transfer).toEqual({ [bob.id]: `/accounts/${pb}?virement=${commun}&montant=50000` });
     expect((await getVisibleSplit({ ...bob, householdId: hh }, { ...bobScope, write: [pb] }, nov))!.transfer).toEqual({}); // commun en lecture seule
+    // Bob lit le compte actif d'Alice : revenu visible ; un compte archivé illisible le masque à nouveau.
+    const readAll = { ...bobScope, read: [pa, pb, commun] };
+    expect((await getVisibleSplit({ ...bob, householdId: hh }, readAll, nov))!.members[0].income).toBe(0);
+    await prisma.account.create({ data: { householdId: hh, name: "Ancien", kind: "CHECKING", initialBalance: 0, ownerId: admin.id, archivedAt: new Date() } });
+    expect((await getVisibleSplit({ ...bob, householdId: hh }, readAll, nov))!.members[0]).toMatchObject({ income: null, personalLeft: null });
   });
 });
