@@ -117,4 +117,12 @@ describe("charges fixes", () => {
     const p = await pay(c.id, 95000, "2026-11-05");
     expect((await prisma.transaction.findUniqueOrThrow({ where: { id: p.transactionId } })).shared).toBe(false);
   });
+
+  it("Modifier un paiement de charge commune sur compte perso : reste commun", async () => {
+    await prisma.account.update({ where: { id: courant }, data: { ownerId: user } });
+    const c = await charge({ shared: true });
+    const p = await pay(c.id, 95000, "2026-11-05");
+    const t = await updateEntry(fullScope(hh), p.transactionId, { accountId: courant, kind: "EXPENSE", amount: 90000, occurredOn: parseDay("2026-11-06")!, note: null, categoryId: c.categoryId });
+    expect(t.shared).toBe(true);
+  });
 });

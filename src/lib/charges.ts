@@ -18,9 +18,9 @@ export const appliesTo = (charge: { active: boolean; startMonth: Date; endMonth:
 
 /**
  * Catégorie du foyer du même sens, compte du foyer modifiable et non archivé ; FOR SHARE : ni l'un ni l'autre ne change avant l'écriture.
- * Renvoie `shared` effectif : forcé à true sur un compte commun.
+ * Renvoie `shared` effectif : forcé à true sur un compte commun (undefined : inchangé / défaut).
  */
-export async function checkRefs(tx: Db, scope: Scope, input: ChargeInput) {
+export async function checkRefs(tx: Db, scope: Scope, input: Omit<ChargeInput, "shared"> & { shared?: boolean }) {
   const householdId = scope.householdId;
   if (input.endMonth && input.endMonth < input.startMonth) throw new LedgerError("Le dernier mois doit être après le mois de début.", "endMonth");
   const [c] = await tx.$queryRaw<{ kind: string }[]>`
@@ -32,7 +32,7 @@ export async function checkRefs(tx: Db, scope: Scope, input: ChargeInput) {
     SELECT "archivedAt", "ownerId" FROM "Account" WHERE "id" = ${input.accountId} AND "householdId" = ${householdId} FOR SHARE`;
   if (!a) throw new NotFoundError();
   if (a.archivedAt) throw new LedgerError("Ce compte est archivé : aucune saisie possible.", "accountId");
-  return a.ownerId === null || input.shared;
+  return a.ownerId === null ? true : input.shared;
 }
 
 export function createCharge(scope: Scope, input: ChargeInput) {

@@ -128,8 +128,8 @@ async function lockActiveAccounts(tx: Db, scope: Scope, accounts: { id: string; 
   return rows;
 }
 
-/** Compte commun : toujours commune ; compte personnel : personnelle sauf demande. */
-const sharedOn = (ownerId: string | null, input: EntryInput) => ownerId === null || (input.shared ?? false);
+/** Compte commun : toujours commune ; compte personnel : `input.shared`, sinon `fallback` (personnelle à la création, inchangée à la modification). */
+const sharedOn = (ownerId: string | null, input: EntryInput, fallback: boolean) => ownerId === null || (input.shared ?? fallback);
 
 /** Verrouille des lignes (FOR UPDATE, ordre stable) avant de les relire : elles ne peuvent plus changer de compte. */
 const lockLines = (tx: Db, householdId: string, where: Prisma.Sql) =>
@@ -155,7 +155,7 @@ async function checkCategory(tx: Db, householdId: string, input: EntryInput, cur
 export async function createEntryTx(tx: Db, scope: Scope, userId: string, input: EntryInput & Idempotent) {
   const [a] = await lockActiveAccounts(tx, scope, [{ id: input.accountId, field: "accountId" }]);
   await checkCategory(tx, scope.householdId, input);
-  return tx.transaction.create({ data: { ...input, shared: sharedOn(a.ownerId, input), householdId: scope.householdId, createdById: userId } });
+  return tx.transaction.create({ data: { ...input, shared: sharedOn(a.ownerId, input, false), householdId: scope.householdId, createdById: userId } });
 }
 
 /** Écrit ; si la clé existe déjà (double clic, nouvelle tentative), renvoie l'opération déjà enregistrée au lieu d'un doublon. */
@@ -212,7 +212,7 @@ export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
       { id: input.accountId, field: "accountId" },
     ]);
     await checkCategory(tx, householdId, input, current.categoryId);
-    const shared = sharedOn(rows.find((r) => r.id === input.accountId)!.ownerId, input);
+    const shared = sharedOn(rows.find((r) => r.id === input.accountId)!.ownerId, input, current.shared);
     return tx.transaction.update({ where: { id }, data: { ...input, shared } });
   });
 }

@@ -131,11 +131,14 @@ describe("crédits", () => {
     const l = await loan();
     const c = await getCharge(fullScope(hh), l.fixedChargeId);
     await expect(updateCharge(fullScope(hh), c.id, { ...c, amount: 100 })).rejects.toThrow();
+    // Compte perso, charge personnelle : la modification du crédit ne touche pas `shared`.
+    await prisma.account.update({ where: { id: courant }, data: { ownerId: user } });
+    await prisma.fixedCharge.update({ where: { id: c.id }, data: { shared: false } });
     await updateLoan(fullScope(hh), l.id, {
       name: "Maison", accountId: courant, categoryId: credit, firstDue: day("2027-02-10"),
       principal: 10_000_000, annualRate: 1200, termMonths: 120, payment: null, insurance: 0,
     });
-    expect(await getCharge(fullScope(hh), l.fixedChargeId)).toMatchObject({ dueDay: 10, startMonth: parseMonth("2027-02"), endMonth: parseMonth("2037-01") });
+    expect(await getCharge(fullScope(hh), l.fixedChargeId)).toMatchObject({ dueDay: 10, startMonth: parseMonth("2027-02"), endMonth: parseMonth("2037-01"), shared: false });
     await payCharge(fullScope(hh), user, l.fixedChargeId, parseMonth("2027-02")!, 50000, day("2027-02-10"));
     await prepay(fullScope(hh), user, l.id, 100_000, day("2027-03-01"), "REDUCE_TERM");
     await deleteLoan(fullScope(hh), l.id);

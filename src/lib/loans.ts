@@ -15,7 +15,8 @@ export type LoanInput = {
 const loanTerms = (i: LoanInput) => ({ principal: i.principal, annualRate: i.annualRate, termMonths: i.termMonths, payment: i.payment, insurance: i.insurance });
 
 /** Charge portée par le crédit : jour et mois de la 1ʳᵉ échéance, n mois, montant = 1ʳᵉ échéance totale. */
-function chargeOf(i: LoanInput): ChargeInput {
+/** Sans `shared` : défaut en base à la création, inchangé ensuite (sauf compte commun : forcé). */
+function chargeOf(i: LoanInput): Omit<ChargeInput, "shared"> {
   if (i.payment !== null && i.payment <= firstInterest(i.principal, i.annualRate)) {
     throw new LedgerError("La mensualité ne couvre pas les intérêts.", "payment");
   }
@@ -23,7 +24,7 @@ function chargeOf(i: LoanInput): ChargeInput {
   const dueDay = i.firstDue.getUTCDate();
   const [first] = buildSchedule({ ...loanTerms(i), dueDay, startMonth }, []).rows;
   return {
-    kind: "EXPENSE", active: true, name: i.name, amount: first?.total ?? 0, dueDay, accountId: i.accountId, categoryId: i.categoryId, startMonth, shared: true,
+    kind: "EXPENSE", active: true, name: i.name, amount: first?.total ?? 0, dueDay, accountId: i.accountId, categoryId: i.categoryId, startMonth,
     endMonth: new Date(Date.UTC(startMonth.getUTCFullYear(), startMonth.getUTCMonth() + i.termMonths - 1, 1)),
   };
 }
@@ -32,8 +33,8 @@ export async function createLoan(scope: Scope, input: LoanInput) {
   const charge = chargeOf(input);
   const householdId = scope.householdId;
   return prisma.$transaction(async (tx) => {
-    await checkRefs(tx, scope, charge);
-    const c = await tx.fixedCharge.create({ data: { ...charge, householdId } });
+    const shared = await checkRefs(tx, scope, charge);
+    const c = await tx.fixedCharge.create({ data: { ...charge, shared, householdId } });
     return tx.loan.create({ data: { ...loanTerms(input), householdId, fixedChargeId: c.id } });
   });
 }
@@ -43,8 +44,8 @@ export async function updateLoan(scope: Scope, id: string, input: LoanInput) {
   const charge = chargeOf(input);
   await prisma.$transaction(async (tx) => {
     const loan = await lockWritableLoan(tx, scope, id);
-    await checkRefs(tx, scope, charge);
-    await tx.fixedCharge.update({ where: { id: loan.fixedChargeId }, data: charge });
+    const shared = await checkRefs(tx, scope, charge);
+    await tx.fixedCharge.update({ where: { id: loan.fixedChargeId }, data: { ...charge, shared } });
     await tx.loan.update({ where: { id }, data: loanTerms(input) });
   });
 }
