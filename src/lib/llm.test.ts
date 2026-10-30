@@ -30,6 +30,13 @@ describe("fournisseurs configurés", () => {
     expect(pickProvider("LOCAL")).toBe("CLAUDE");
     expect(pickProvider(null)).toBe("CLAUDE");
   });
+
+  it("pickProvider : seul le local configuré, sans préférence ⇒ LOCAL", () => {
+    vi.stubEnv("LOCAL_LLM_URL", "http://llm");
+    vi.stubEnv("LOCAL_LLM_MODEL", "m");
+    expect(pickProvider(null)).toBe("LOCAL");
+    expect(pickProvider("CLAUDE")).toBe("LOCAL");
+  });
 });
 
 describe("complete", () => {

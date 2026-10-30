@@ -15,11 +15,10 @@ export function configuredProviders(): LlmProvider[] {
   return p;
 }
 
-/** Préférence du foyer si configurée, sinon Claude, sinon rien. */
+/** Préférence du foyer si configurée, sinon le premier configuré (Claude puis local), sinon rien. */
 export function pickProvider(pref: LlmProvider | null): LlmProvider | null {
   const ok = configuredProviders();
-  if (pref && ok.includes(pref)) return pref;
-  return ok.includes("CLAUDE") ? "CLAUDE" : null;
+  return pref && ok.includes(pref) ? pref : (ok[0] ?? null);
 }
 
 /** Tours de conversation : la demande, puis (nouvel essai) la réponse refusée et la correction demandée. */

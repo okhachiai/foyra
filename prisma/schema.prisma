@@ -84,7 +84,7 @@ model Household {
   currency     String       @default("EUR")
   timezone     String       @default("Europe/Paris")
   budgetSource BudgetSource @default(PREVIOUS)
-  llmProvider  LlmProvider? // préférence pour le rapport ; null = Claude si configuré
+  llmProvider  LlmProvider? // préférence pour le rapport ; null = premier fournisseur configuré
   createdAt    DateTime     @default(now())
 
   users         User[]

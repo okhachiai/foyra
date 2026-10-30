@@ -220,7 +220,7 @@ async function ReportView({ user, report, money }: { user: User; report: Report;
                       <td className={`${TD} text-right whitespace-nowrap`}>{money(sum((e) => e.planned))}</td>
                       <td className={`${TD} text-right whitespace-nowrap`}>{money(sum((e) => e.actual))}</td>
                       <td className={`${TD} text-right whitespace-nowrap`}>{money(sum((e) => e.left))}</td>
-                      <td className="py-2 text-right whitespace-nowrap">{money(output.allocations.reduce((s, a) => s + a.amount, 0))}</td>
+                      <td className="py-2 text-right whitespace-nowrap">{money(sum((e) => allocation.get(e.id) ?? 0))}</td>
                     </tr>
                   </tfoot>
                 </table>
