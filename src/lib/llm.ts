@@ -5,6 +5,8 @@ export class LlmError extends Error {}
 
 type Messages = { system: string; user: string; retry?: { previous: string; error: string } };
 
+export const PROVIDER_LABELS: Record<LlmProvider, string> = { CLAUDE: "Claude (Anthropic)", LOCAL: "Modèle local" };
+
 /** Fournisseurs dont les variables d'environnement sont présentes. */
 export function configuredProviders(): LlmProvider[] {
   const p: LlmProvider[] = [];

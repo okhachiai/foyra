@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
+import { configuredProviders, PROVIDER_LABELS } from "@/lib/llm";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { updateHouseholdAction, updateProfileAction } from "../actions";
 import { ActionForm, Field } from "../form";
@@ -16,6 +17,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const user = await requireUser();
   const admin = user.role === "ADMIN";
   const ok = (await searchParams).ok;
+  const providers = configuredProviders();
+  const pref = user.household.llmProvider;
 
   return (
     <>
@@ -58,6 +61,19 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </Field>
               <p className="m-0 text-sm text-muted">
                 Sans budget précédent, les modèles de catégories sont utilisés. Les budgets déjà créés ne changent jamais.
+              </p>
+              {providers.length ? (
+                <Field name="llmProvider" label="Fournisseur du rapport">
+                  <select name="llmProvider" defaultValue={pref && providers.includes(pref) ? pref : ""}>
+                    <option value="">Automatique (premier configuré)</option>
+                    {providers.map((p) => <option key={p} value={p}>{PROVIDER_LABELS[p]}</option>)}
+                  </select>
+                </Field>
+              ) : (
+                <p className="m-0 text-sm text-muted">Aucun fournisseur configuré (ANTHROPIC_API_KEY ou LOCAL_LLM_URL + LOCAL_LLM_MODEL).</p>
+              )}
+              <p className="m-0 text-sm text-muted">
+                En mode Claude, montants, libellés, catégories et prénoms des membres sont envoyés à Anthropic. En mode local, rien ne sort du serveur.
               </p>
               {admin && <button type="submit">Enregistrer</button>}
             </fieldset>

@@ -5,6 +5,7 @@ import type { ChargeStatus } from "@/lib/calendar";
 import { listCategories } from "@/lib/categories";
 import { getDashboard, getDashboardCharts } from "@/lib/dashboard";
 import { formatDay, parseDay, todayIn, writableAccounts } from "@/lib/ledger";
+import { configuredProviders } from "@/lib/llm";
 import { formatCents } from "@/lib/money";
 import { getVisibleSplit } from "@/lib/split";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,8 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Stat } from "@/components/ui/stat";
 import { KIND_LABELS } from "../accounts/kinds";
+import { analyzeAction } from "../actions";
+import { ActionForm } from "../form";
 import { EntryForm } from "../accounts/[id]/tx-forms";
 import { AnalyticsBento } from "./charts";
 
@@ -36,6 +39,11 @@ export default async function DashboardPage() {
   return (
     <>
       <h1>Tableau de bord · {monthLabel(d.month)}</h1>
+      {configuredProviders().length > 0 && (
+        <ActionForm action={analyzeAction} className="form mb-4">
+          <button type="submit">Analyser</button>
+        </ActionForm>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Revenus du mois" value={money(d.income)} note="Opérations enregistrées, hors virements" />

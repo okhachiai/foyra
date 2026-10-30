@@ -4,7 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { AccessLevel, AccountKind, AccountSharing, BudgetSource, CategoryKind, Role } from "@prisma/client";
+import type { AccessLevel, AccountKind, AccountSharing, BudgetSource, CategoryKind, LlmProvider, Role } from "@prisma/client";
 import { getScope, setSharing } from "@/lib/access";
 import {
   changePassword, checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
@@ -18,7 +18,9 @@ import { addDefaultCategories, createCategory, deleteCategory, parseForecast, se
 import { addItem, createBudget, formatMonth, type IncomeLine, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
 import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
 import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/lib/loans";
+import { configuredProviders } from "@/lib/llm";
 import { parseCents } from "@/lib/money";
+import { applyAllocations, applyCategories, generateReport } from "@/lib/report";
 import { itemSignature } from "./budget/signature";
 import type { FormState } from "./form";
 import { itemFlags, ownerField, sharedField, str } from "./form-fields";
@@ -173,6 +175,15 @@ export async function setDisabledAction(_: FormState, fd: FormData): Promise<For
 
 // --- Préférences ---
 
+/** Fournisseur choisi : vide → null (premier configuré) ; seuls les fournisseurs configurés sont acceptés. */
+function providerField(fd: FormData, name: string, errors: Errors): LlmProvider | null {
+  const raw = str(fd, name);
+  if (!raw) return null;
+  const provider = configuredProviders().find((p) => p === raw);
+  if (!provider) errors.add(name, "Fournisseur non configuré.");
+  return provider ?? null;
+}
+
 export async function updateProfileAction(_: FormState, fd: FormData): Promise<FormState> {
   const user = await requireUser();
   const errors = new Errors();
@@ -188,8 +199,10 @@ export async function updateHouseholdAction(_: FormState, fd: FormData): Promise
   const name = requiredField(fd, "householdName", errors);
   const budgetSource = str(fd, "budgetSource") as BudgetSource;
   if (budgetSource !== "PREVIOUS" && budgetSource !== "TEMPLATES") errors.add("budgetSource", "Choix invalide.");
+  // Champ absent (aucun fournisseur configuré) : préférence inchangée.
+  const llmProvider = fd.has("llmProvider") ? providerField(fd, "llmProvider", errors) : undefined;
   if (errors.state) return errors.state;
-  await updateHousehold(admin.householdId, { name, budgetSource });
+  await updateHousehold(admin.householdId, { name, budgetSource, llmProvider });
   done("/parametres?ok=foyer");
 }
 
@@ -640,4 +653,36 @@ export async function prepayLoanAction(_: FormState, fd: FormData): Promise<Form
   const error = await run(() => prepay(scope, user.id, id, amount, occurredOn, mode as "REDUCE_TERM"));
   if (error) return error;
   done(`/credits/${id}`);
+}
+
+// --- Rapports (rien n'est écrit dans le budget ni les opérations sans clic explicite) ---
+
+/** Rapport à la demande (MANUAL) ; `provider` facultatif = essai ponctuel, sinon préférence du foyer. */
+export async function analyzeAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const errors = new Errors();
+  const provider = providerField(fd, "provider", errors) ?? undefined;
+  if (errors.state) return errors.state;
+  let id = "";
+  const error = await run(async () => (id = (await generateReport(user, parseDay(todayIn(user.household.timezone))!, "MANUAL", provider)).id));
+  if (error) return error;
+  done(`/rapports?id=${encodeURIComponent(id)}`);
+}
+
+export async function applyAllocationsAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const id = str(fd, "reportId");
+  let n = 0;
+  const error = await run(async () => (n = await applyAllocations(user, id)));
+  if (error) return error;
+  done(`/rapports?id=${encodeURIComponent(id)}&lignes=${n}`);
+}
+
+export async function applyCategoriesAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const id = str(fd, "reportId");
+  let n = 0;
+  const error = await run(async () => (n = await applyCategories(user, id)));
+  if (error) return error;
+  done(`/rapports?id=${encodeURIComponent(id)}&operations=${n}`);
 }

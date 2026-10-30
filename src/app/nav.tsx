@@ -7,6 +7,7 @@ import { useEffect } from "react";
 const LINKS = [
   ["/tableau-de-bord", "Tableau de bord"],
   ["/budget", "Budget"],
+  ["/rapports", "Rapports"],
   ["/accounts", "Comptes"],
   ["/calendrier", "Calendrier"],
   ["/credits", "Crédits"],

@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { logoutAction } from "../actions";
 import { Nav } from "../nav";
 
-/** Barre latérale commune aux pages connectées (réutilisée par /tableau-de-bord, /parametres, /members, /categories, /budget, /charges, /credits, /calendrier et /profil). */
+/** Barre latérale commune aux pages connectées (réutilisée par /tableau-de-bord, /parametres, /members, /categories, /budget, /rapports, /charges, /credits, /calendrier et /profil). */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   return (
