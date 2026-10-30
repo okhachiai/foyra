@@ -26,7 +26,7 @@ ssh "${ssh_options[@]}" "$REMOTE_HOST" "bash -s -- $remote_args" <<'REMOTE'
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
 root=$1; project=$2; init=$4
-test -d "$root"
+test -d "$root" || { echo "Dossier absent sur le serveur : $root (le créer avec son .env de production)" >&2; exit 1; }
 test -f "$root/.env" || { echo "Le .env de production est absent : $root/.env" >&2; exit 1; }
 docker info >/dev/null
 docker compose version >/dev/null

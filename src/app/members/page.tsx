@@ -12,7 +12,7 @@ export default async function MembersPage() {
     <>
       <h1>Membres du foyer</h1>
       <SettingsNav admin />
-      <p className="muted">Administrateurs : gestion des membres et du catalogue de catégories. Les accès aux comptes sont donnés par les gestionnaires de chaque compte.</p>
+      <p className="muted">Administrateurs : gestion des membres et du catalogue de catégories. Tous les membres voient et saisissent budgets et opérations du foyer.</p>
       <ul className="list">
         {members.map((m) => (
           <li key={m.id}>

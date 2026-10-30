@@ -2,7 +2,6 @@ import Link from "next/link";
 import type { Category, CategoryKind } from "@prisma/client";
 import { requireUser } from "@/lib/auth";
 import { listCategories } from "@/lib/categories";
-import { formatCents } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { addDefaultCategoriesAction } from "../actions";
 import { ActionForm } from "../form";
@@ -12,7 +11,6 @@ import { KIND_LABELS } from "./category-form";
 export default async function CategoriesPage() {
   const user = await requireUser();
   const admin = user.role === "ADMIN";
-  const currency = user.household.currency;
   const categories = await listCategories(user.householdId, { withArchived: true });
 
   const content = (c: Category, label: string, parent?: Category) => (
@@ -26,7 +24,6 @@ export default async function CategoriesPage() {
           {!c.isTemplate && <Badge tone="muted">hors modèle</Badge>}
         </span>
       </span>
-      <span className="amount">{formatCents(c.forecastAmount, currency)}</span>
     </>
   );
   const row = (c: Category, label: string, parent?: Category) => (
@@ -38,7 +35,7 @@ export default async function CategoriesPage() {
       <h1>Catégories</h1>
       <SettingsNav admin={admin} />
       <p className="muted">
-        Catalogue et modèles du budget : montant par défaut, inclusion, reprise et ordre. Modifier une catégorie ne change jamais un budget déjà créé.
+        Catalogue et modèles du budget : inclusion, reprise et ordre. Les montants se saisissent dans le budget du mois. Modifier une catégorie ne change jamais un budget déjà créé.
         {!admin && " Seuls les administrateurs peuvent modifier le catalogue."}
       </p>
       {admin && (

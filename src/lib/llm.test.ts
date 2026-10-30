@@ -106,4 +106,29 @@ describe("complete", () => {
     await expect(complete("CLAUDE", msgs, schema)).rejects.toThrow("Fournisseur LLM injoignable");
     await expect(complete("CLAUDE", msgs, schema)).rejects.toBeInstanceOf(LlmError);
   });
+
+  it("réponse tronquée : LlmError pour les deux fournisseurs", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "k");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ stop_reason: "max_tokens", content: [{ type: "tool_use", input: {} }] })));
+    await expect(complete("CLAUDE", msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse tronquée."));
+    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).max_tokens).toBe(16000);
+    vi.stubEnv("LOCAL_LLM_URL", "http://llm");
+    vi.stubEnv("LOCAL_LLM_MODEL", "m");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ choices: [{ finish_reason: "length", message: { content: "{" } }] })));
+    await expect(complete("LOCAL", msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse tronquée."));
+  });
+
+  it("200 sans content tableau ni choices : réponse vide, jamais TypeError", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "k");
+    vi.stubEnv("LOCAL_LLM_URL", "http://llm");
+    vi.stubEnv("LOCAL_LLM_MODEL", "m");
+    for (const body of [{ content: "texte" }, { content: { type: "tool_use" } }, {}, null]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
+      await expect(complete("CLAUDE", msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse vide"));
+    }
+    for (const body of [{}, { choices: "x" }, { choices: [] }, null]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
+      await expect(complete("LOCAL", msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse vide"));
+    }
+  });
 });

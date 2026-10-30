@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { itemFlags, ownerField, sharedField } from "./form-fields";
+import { itemFlags, sharedField } from "./form-fields";
 
 const fd = (entries: readonly (readonly [string, string])[]) => {
   const f = new FormData();
@@ -15,16 +15,6 @@ describe("champs à trois états", () => {
   ] as const)("sharedField : %s", (_, entries, expected) => {
     expect(sharedField(fd(entries))).toBe(expected);
     expect(sharedField(fd(entries)) ?? true).toBe(expected ?? true); // charges : commune par défaut
-  });
-
-  it.each([
-    ["champ absent", [], undefined],
-    ["inchangé", [["ownerId", "u1"], ["ownerWas", "u1"]], undefined],
-    ["vide (commun)", [["ownerId", ""]], null],
-    ["vide, était u1", [["ownerId", ""], ["ownerWas", "u1"]], null],
-    ["identifiant", [["ownerId", "u2"], ["ownerWas", "u1"]], "u2"],
-  ] as const)("ownerField : %s", (_, entries, expected) => {
-    expect(ownerField(fd(entries))).toBe(expected);
   });
 
   it.each([

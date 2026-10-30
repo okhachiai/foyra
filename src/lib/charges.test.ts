@@ -8,32 +8,27 @@ import { createEntry, deleteTransaction, formatDay, LedgerError, parseDay, updat
 
 let hh: string;
 let user: string;
-let courant: string;
 const oct = parseMonth("2026-10")!;
 const nov = parseMonth("2026-11")!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: courant, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 const pay = (id: string, amount: number, day: string, month = nov) => payCharge(fullScope(hh), user, id, month, amount, parseDay(day)!);
 
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
   const admin = (await setupHousehold({ householdName: "Test", name: "Admin", email: "a@test.fr", password: "password1" }))!;
   hh = admin.householdId;
   user = admin.id;
-  courant = (await prisma.account.create({ data: { householdId: hh, name: "Courant", kind: "CHECKING" } })).id;
 });
 
 describe("charges fixes", () => {
-  it("Créer : active dès le mois de début ; montant, jour, catégorie de revenu, compte archivé refusés", async () => {
+  it("Créer : active dès le mois de début ; jour, catégorie de revenu refusés", async () => {
     await charge();
     expect((await listMonthCharges(fullScope(hh), nov)).map((c) => c.name)).toEqual(["Loyer"]);
-    await expect(charge({ amount: 0 })).rejects.toThrow(); // CHECK SQL (l'action refuse « 0 »/« abc » via parseCents)
     await expect(charge({ dueDay: 32 })).rejects.toThrow();
     await expect(charge({ dueDay: 0 })).rejects.toThrow();
     await expect(charge({ categoryId: await byName("Salaire 1") })).rejects.toMatchObject({ field: "categoryId" });
-    const old = (await prisma.account.create({ data: { householdId: hh, name: "Vieux", kind: "CHECKING", archivedAt: new Date() } })).id;
-    await expect(charge({ accountId: old })).rejects.toMatchObject({ field: "accountId" });
   });
 
   it("Échéance : jour 31 en février 2027 → 28/02/2027", () => {
@@ -58,7 +53,7 @@ describe("charges fixes", () => {
     expect(rejected.reason).toBeInstanceOf(LedgerError);
     expect(rejected.reason.message).toBe("Cette charge est déjà payée pour ce mois.");
     const [listed] = await listMonthCharges(fullScope(hh), nov);
-    expect(listed.payment?.transaction).toMatchObject({ amount: 95000, accountId: courant, categoryId: c.categoryId, kind: "EXPENSE" });
+    expect(listed.payment?.transaction).toMatchObject({ amount: 95000, paidById: user, categoryId: c.categoryId, kind: "EXPENSE" });
     expect(await prisma.transaction.count()).toBe(1);
   });
 
@@ -72,18 +67,16 @@ describe("charges fixes", () => {
   it("Modifier la dépense liée : date hors du mois payé ou passage en recette refusés", async () => {
     const c = await charge();
     const p = await pay(c.id, 95000, "2026-11-05");
-    const base = { accountId: courant, kind: "EXPENSE" as const, amount: 90000, occurredOn: parseDay("2026-11-20")!, note: null, categoryId: c.categoryId };
+    const base = { paidById: user, kind: "EXPENSE" as const, amount: 90000, occurredOn: parseDay("2026-11-20")!, note: null, categoryId: c.categoryId };
     await updateEntry(fullScope(hh), p.transactionId, base); // dans le mois : accepté
     await expect(updateEntry(fullScope(hh), p.transactionId, { ...base, occurredOn: parseDay("2026-12-01")! })).rejects.toMatchObject({ field: "occurredOn" });
     await expect(updateEntry(fullScope(hh), p.transactionId, { ...base, kind: "INCOME", categoryId: null })).rejects.toMatchObject({ field: "kind" });
   });
 
-  it("Revenu récurrent : catégorie de revenu exigée, « reçu » crée un revenu ; aucune opération sans action", async () => {
-    await expect(charge({ kind: "INCOME" })).rejects.toMatchObject({ field: "categoryId" });
-    const salaire = await charge({ kind: "INCOME", name: "Salaire", amount: 250000, categoryId: await byName("Salaire 1") });
-    expect(await prisma.transaction.count()).toBe(0); // indicative : rien n'est payé automatiquement
-    await pay(salaire.id, 250000, "2026-11-28");
-    expect(await prisma.transaction.findFirstOrThrow()).toMatchObject({ kind: "INCOME", amount: 250000 });
+  it("Catégorie de revenu refusée ; récurrence de revenu refusée en base", async () => {
+    await expect(charge({ categoryId: await byName("Salaire 1") })).rejects.toMatchObject({ field: "categoryId" });
+    const c = await charge();
+    await expect(prisma.fixedCharge.update({ where: { id: c.id }, data: { kind: "INCOME" } })).rejects.toThrow();
   });
 
   it("Désactivée : absente des échéances du mois ; réactivée : de retour", async () => {
@@ -103,26 +96,24 @@ describe("charges fixes", () => {
     expect(await prisma.transaction.count()).toBe(1);
   });
 
-  it("Charge sur compte commun : shared forcé à true", async () => {
+  it("Commune ou personnelle : choix conservé à la création et à la modification", async () => {
     const c = await charge({ shared: false });
-    expect(c.shared).toBe(true);
-    await updateCharge(fullScope(hh), c.id, { ...c, shared: false });
+    expect(c.shared).toBe(false);
+    await updateCharge(fullScope(hh), c.id, { ...c, shared: true });
     expect((await prisma.fixedCharge.findUniqueOrThrow({ where: { id: c.id } })).shared).toBe(true);
   });
 
   it("Paiement d'une charge personnelle : opération shared=false", async () => {
-    await prisma.account.update({ where: { id: courant }, data: { ownerId: user } });
     const c = await charge({ shared: false });
     expect(c.shared).toBe(false);
     const p = await pay(c.id, 95000, "2026-11-05");
     expect((await prisma.transaction.findUniqueOrThrow({ where: { id: p.transactionId } })).shared).toBe(false);
   });
 
-  it("Modifier un paiement de charge commune sur compte perso : reste commun", async () => {
-    await prisma.account.update({ where: { id: courant }, data: { ownerId: user } });
+  it("Modifier un paiement de charge commune sans préciser « commune » : reste commun", async () => {
     const c = await charge({ shared: true });
     const p = await pay(c.id, 95000, "2026-11-05");
-    const t = await updateEntry(fullScope(hh), p.transactionId, { accountId: courant, kind: "EXPENSE", amount: 90000, occurredOn: parseDay("2026-11-06")!, note: null, categoryId: c.categoryId });
+    const t = await updateEntry(fullScope(hh), p.transactionId, { paidById: user, kind: "EXPENSE", amount: 90000, occurredOn: parseDay("2026-11-06")!, note: null, categoryId: c.categoryId });
     expect(t.shared).toBe(true);
   });
 });

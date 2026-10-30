@@ -1,4 +1,3 @@
-import type { Account } from "@prisma/client";
 import type { listCategories } from "@/lib/categories";
 import { formatDay } from "@/lib/ledger";
 import type { getLoan } from "@/lib/loans";
@@ -11,9 +10,9 @@ export const monthYear = (d: Date) => new Intl.DateTimeFormat("fr-FR", { month: 
 /** « 3450 » → « 3,45 » */
 export const rateToInput = (rate: number) => (rate / 1000).toString().replace(".", ",");
 
-/** Création ou modification d'un crédit ; `accounts` = comptes proposés, `categories` = arbre du foyer. */
-export function LoanForm({ loan, accounts, categories, firstDue }: {
-  loan?: Awaited<ReturnType<typeof getLoan>>; accounts: Account[]; categories: Awaited<ReturnType<typeof listCategories>>; firstDue: string;
+/** Création ou modification d'un crédit ; `categories` = arbre du foyer. */
+export function LoanForm({ loan, categories, firstDue }: {
+  loan?: Awaited<ReturnType<typeof getLoan>>; categories: Awaited<ReturnType<typeof listCategories>>; firstDue: string;
 }) {
   const c = loan?.fixedCharge;
   // Crédit simple : sans intérêts, capital = échéance × nombre (le capital n'est pas réaffiché).
@@ -44,11 +43,6 @@ export function LoanForm({ loan, accounts, categories, firstDue }: {
         </Field>
         <small className="muted">Avec un capital, le montant de l’échéance est hors assurance ; vide = calculé.</small>
       </details>
-      <Field name="accountId" label="Compte de prélèvement">
-        <select name="accountId" defaultValue={c?.accountId}>
-          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.archivedAt ? " (archivé)" : ""}</option>)}
-        </select>
-      </Field>
       <Field name="categoryId" label="Catégorie">
         <select name="categoryId" defaultValue={c?.categoryId}>
           {categories.filter((k) => k.kind === "EXPENSE").flatMap((k) => [

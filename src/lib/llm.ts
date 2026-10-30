@@ -3,6 +3,8 @@ import type { LlmProvider } from "@prisma/client";
 /** Erreur de fournisseur LLM (HTTP, réseau, réponse inutilisable) ; message affichable. */
 export class LlmError extends Error {}
 
+const EMPTY = "Fournisseur LLM : réponse vide", TRUNCATED = "Fournisseur LLM : réponse tronquée.";
+
 type Messages = { system: string; user: string; retry?: { previous: string; error: string } };
 
 export const PROVIDER_LABELS: Record<LlmProvider, string> = { CLAUDE: "Claude (Anthropic)", LOCAL: "Modèle local" };
@@ -55,15 +57,16 @@ export async function complete(provider: LlmProvider, messages: Messages, schema
       { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "", "anthropic-version": "2023-06-01" },
       {
         model,
-        max_tokens: 4096,
+        max_tokens: 16000,
         system: messages.system,
         messages: turns(messages),
         tools: [{ name: "rapport", description: "Rapport mensuel du budget", input_schema: schema }],
         tool_choice: { type: "tool", name: "rapport" },
       },
     );
-    const block = data?.content?.find((b: { type: string }) => b.type === "tool_use");
-    if (!block) throw new LlmError("Fournisseur LLM : réponse vide");
+    if (data?.stop_reason === "max_tokens") throw new LlmError(TRUNCATED);
+    const block = Array.isArray(data?.content) ? data.content.find((b: { type?: string }) => b?.type === "tool_use") : undefined;
+    if (!block) throw new LlmError(EMPTY);
     return { model, text: JSON.stringify(block.input) };
   }
   const model = process.env.LOCAL_LLM_MODEL ?? "";
@@ -80,7 +83,9 @@ export async function complete(provider: LlmProvider, messages: Messages, schema
       ],
     },
   );
-  const text = data?.choices?.[0]?.message?.content;
-  if (typeof text !== "string") throw new LlmError("Fournisseur LLM : réponse vide");
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
+  if (choice?.finish_reason === "length") throw new LlmError(TRUNCATED);
+  const text = choice?.message?.content;
+  if (typeof text !== "string") throw new LlmError(EMPTY);
   return { model, text };
 }

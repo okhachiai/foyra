@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { canWrite, getScope } from "@/lib/access";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { formatMonth } from "@/lib/budget";
 import { listCategories } from "@/lib/categories";
-import { formatDay, NotFoundError, parseDay, todayIn, writableAccounts } from "@/lib/ledger";
+import { formatDay, NotFoundError, parseDay, todayIn } from "@/lib/ledger";
 import { getLoan } from "@/lib/loans";
 import { formatCents } from "@/lib/money";
 import { deleteLoanAction, prepayLoanAction } from "../../actions";
@@ -23,12 +23,7 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
     throw e;
   });
   const c = loan.fixedCharge;
-  const editable = canWrite(scope, c.accountId);
-  const [accounts, categories] = await Promise.all([
-    // Le compte actuel reste affiché même archivé : l'enregistrement demandera d'en choisir un autre.
-    writableAccounts(scope, c.accountId),
-    listCategories(user.householdId),
-  ]);
+  const categories = await listCategories(user.householdId);
   const money = (cents: number) => formatCents(cents, user.household.currency);
   const { rows } = loan.schedule;
   const paid = new Map(c.payments.map((p) => [p.month.getTime(), p]));
@@ -53,8 +48,7 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
         </dl>
       </section>
 
-      {!editable && <p className="muted">Accès en lecture seule sur le compte de ce crédit.</p>}
-      {editable && <details>
+      <details>
         <summary>Remboursement anticipé</summary>
         <ActionForm action={prepayLoanAction}>
           <input type="hidden" name="id" value={loan.id} />
@@ -73,7 +67,7 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
           <p className="muted"><small>Crée la dépense sur {c.name} : supprimer cette dépense annule le remboursement.</small></p>
           <button type="submit">Enregistrer le remboursement</button>
         </ActionForm>
-      </details>}
+      </details>
 
       {loan.prepayments.length > 0 && (
         <>
@@ -81,23 +75,13 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
           <ul className="list">
             {loan.prepayments.map((p) => (
               <li key={p.id}>
-                {editable ? (
-                  <Link href={`/accounts/${p.transaction.accountId}/transactions/${p.transaction.id}`}>
-                    <span>
-                      {frDay(p.transaction.occurredOn)}
-                      <small className="muted">{p.mode === "REDUCE_TERM" ? "Réduction de durée" : "Réduction de mensualité"} · voir la dépense</small>
-                    </span>
-                    <span className="amount">{money(p.transaction.amount)}</span>
-                  </Link>
-                ) : (
-                  <div>
-                    <span>
-                      {frDay(p.transaction.occurredOn)}
-                      <small className="muted">{p.mode === "REDUCE_TERM" ? "Réduction de durée" : "Réduction de mensualité"}</small>
-                    </span>
-                    <span className="amount">{money(p.transaction.amount)}</span>
-                  </div>
-                )}
+                <Link href={`/operations/${p.transaction.id}`}>
+                  <span>
+                    {frDay(p.transaction.occurredOn)}
+                    <small className="muted">{p.mode === "REDUCE_TERM" ? "Réduction de durée" : "Réduction de mensualité"} · voir la dépense</small>
+                  </span>
+                  <span className="amount">{money(p.transaction.amount)}</span>
+                </Link>
               </li>
             ))}
           </ul>
@@ -129,18 +113,18 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
         </table>
       </div>
 
-      {editable && <details>
+      <details>
         <summary>Modifier le crédit</summary>
-        <LoanForm loan={loan} accounts={accounts} categories={categories} firstDue="" />
-      </details>}
+        <LoanForm loan={loan} categories={categories} firstDue="" />
+      </details>
 
-      {editable && <ActionForm
+      <ActionForm
         action={deleteLoanAction} className="danger-zone"
         confirm="Supprimer ce crédit ? Les dépenses déjà payées et les remboursements anticipés sont conservés comme dépenses."
       >
         <input type="hidden" name="id" value={loan.id} />
         <button type="submit" className="danger">Supprimer</button>
-      </ActionForm>}
+      </ActionForm>
     </>
   );
 }

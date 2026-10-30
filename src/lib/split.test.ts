@@ -1,16 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { fullScope, type Scope } from "./access";
+import { fullScope } from "./access";
 import { createMember, setupHousehold } from "./auth";
 import { addItem, createBudget, parseMonth } from "./budget";
-import { createCharge } from "./charges";
 import { prisma } from "./db";
-import { createAccount, createEntry, createTransfer, parseDay } from "./ledger";
-import { getSplit, getVisibleSplit, splitMonth, visibleSplit, type SplitInput } from "./split";
+import { createEntry, parseDay } from "./ledger";
+import { getSplit, splitMonth, type SplitInput } from "./split";
 
 const A = { id: "a", name: "Alice" };
 const B = { id: "b", name: "Bob" };
 const base = (over: Partial<SplitInput>): SplitInput => ({
-  members: [A, B], income: {}, forecast: {}, commonIncome: 0, plannedCommon: 0, toCommon: {}, paidCommon: {}, spentPersonal: {}, ...over,
+  members: [A, B], income: {}, commonIncome: 0, plannedCommon: 0, paidCommon: {}, spentPersonal: {}, ...over,
 });
 
 describe("splitMonth", () => {
@@ -20,7 +19,7 @@ describe("splitMonth", () => {
     const [a, b] = s.members;
     expect([a.shareBp, b.shareBp]).toEqual([6000, 4000]);
     expect([a.due, b.due]).toEqual([144000, 96000]);
-    expect(a).toMatchObject({ contribution: 11000, toTransfer: 133000, personalLeft: 300000 - 144000 - 5000, forecast: false, income: 300000 });
+    expect(a).toMatchObject({ contribution: 11000, toTransfer: 133000, personalLeft: 300000 - 144000 - 5000, income: 300000 });
     expect(b).toMatchObject({ contribution: 0, toTransfer: 96000, personalLeft: 104000 });
   });
 
@@ -43,30 +42,12 @@ describe("splitMonth", () => {
     expect(s.members.map((m) => m.due)).toEqual([501, 500]); // reliquat au premier à égalité
   });
 
-  it("recettes communes > dépenses : commonNet 0, reste à virer négatif", () => {
-    const s = splitMonth(base({ income: { a: 1000, b: 1000 }, plannedCommon: 5000, commonIncome: 8000, toCommon: { b: 300 } }));
+  it("recettes communes > dépenses : commonNet 0, reste à verser négatif", () => {
+    const s = splitMonth(base({ income: { a: 1000, b: 1000 }, plannedCommon: 5000, commonIncome: 8000, paidCommon: { b: 300 } }));
     expect(s.commonNet).toBe(0);
     expect(s.members[1]).toMatchObject({ due: 0, contribution: 300, toTransfer: -300 });
   });
 
-  it("revenu prévisionnel utilisé tant qu'aucun salaire n'est saisi", () => {
-    const s = splitMonth(base({ income: { a: 300000 }, forecast: { a: 999999, b: 100000 }, plannedCommon: 40000 }));
-    expect(s.members[0]).toMatchObject({ income: 300000, forecast: false, shareBp: 7500, due: 30000 });
-    expect(s.members[1]).toMatchObject({ income: 100000, forecast: true, shareBp: 2500, due: 10000 });
-  });
-
-  it("visibleSplit : membre sans lecture des comptes de l'autre → revenu et reste perso masqués", () => {
-    const s = splitMonth(base({ income: { a: 300000, b: 200000 }, plannedCommon: 1000 }));
-    const scope: Scope = { householdId: "h", read: ["a2", "b1"], write: [], manage: [] };
-    const owned = { a: ["a1", "a2"], b: ["b1"] };
-    const v = visibleSplit(s, { id: "b", role: "MEMBER" }, scope, owned);
-    expect(v.members[0]).toMatchObject({ income: null, personalLeft: null, shareBp: 6000, due: 600, toTransfer: 600 });
-    expect(v.members[1].income).toBe(200000); // soi-même
-    expect(visibleSplit(s, { id: "b", role: "MEMBER" }, { ...scope, read: ["a1", "a2"] }, owned).members[0].income).toBe(300000);
-    // Absent de ownedBy : masqué par défaut.
-    expect(visibleSplit(s, { id: "b", role: "MEMBER" }, { ...scope, read: ["a1", "a2"] }, { b: ["b1"] }).members[0]).toMatchObject({ income: null, personalLeft: null });
-    expect(visibleSplit(s, { id: "b", role: "ADMIN" }, scope, owned).members[0].income).toBe(300000);
-  });
 });
 
 describe("getSplit", () => {
@@ -76,102 +57,45 @@ describe("getSplit", () => {
   const cat = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
 
   beforeEach(async () => {
-    await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
+    await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
   });
 
-  it("getSplit : virement perso → commun compté en contribution ; revenus sans catégorie ignorés, dépenses sans catégorie comptées", async () => {
-    const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
-    hh = admin.householdId;
-    const all = fullScope(hh);
-    const bob = (await createMember(hh, { name: "Bob", email: "b@test.fr", password: "password1", role: "MEMBER" }))!;
-    await createMember(hh, { name: "Sans compte", email: "g@test.fr", password: "password1", role: "MEMBER" });
-    const acc = async (name: string, ownerId: string | null) => (await createAccount(all, admin.id, { name, kind: "CHECKING", initialBalance: 0, ownerId })).id;
-    const pa = await acc("Perso A", admin.id);
-    const pb = await acc("Perso B", bob.id);
-    const commun = await acc("Commun", null);
-    const entry = (accountId: string, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, shared?: boolean, on = "2026-11-09") =>
-      createEntry(all, admin.id, { accountId, kind, amount, occurredOn: day(on), note: null, categoryId, shared });
-
-    await entry(pa, "INCOME", 300000, await cat("Salaire 1"));
-    await entry(pa, "INCOME", 50000, null); // ajustement : ignoré
-    await entry(pa, "EXPENSE", 7000, null); // dépense sans catégorie (perso) : comptée
-    await entry(pa, "EXPENSE", 2000, null, true); // dépense commune sans catégorie : contribution
-    await entry(pa, "INCOME", 99999, await cat("Salaire 1"), undefined, "2026-10-31"); // hors mois
-    await entry(pa, "EXPENSE", 11000, await cat("Supermarché"), true);
-    await entry(pa, "EXPENSE", 5000, await cat("Supermarché"), false);
-    await entry(commun, "INCOME", 20000, await cat("Autres revenus"));
-    await createTransfer(all, admin.id, { fromAccountId: pb, toAccountId: commun, amount: 50000, occurredOn: day("2026-11-03"), note: null });
-    await createTransfer(all, admin.id, { fromAccountId: pa, toAccountId: pb, amount: 1000, occurredOn: day("2026-11-03"), note: null }); // perso → perso
-    const charge = (kind: "INCOME" | "EXPENSE", accountId: string, amount: number, categoryId: string, shared: boolean) =>
-      createCharge(all, { kind, active: true, name: "c", amount, dueDay: 5, accountId, categoryId, startMonth: nov, endMonth: null, shared });
-    await charge("INCOME", pb, 200000, await cat("Salaire 2"), false); // prévisionnel de Bob
-    await charge("EXPENSE", commun, 95000, await cat("Loyer"), true);
-    await charge("EXPENSE", pa, 4000, await cat("Loyer"), false); // perso : hors commun
-    const budget = await createBudget(hh, nov);
-    await prisma.budgetItem.deleteMany({ where: { budgetId: budget.id } });
-    const line = (amount: number, included: boolean, shared: boolean) =>
-      addItem(hh, budget.id, { kind: "EXPENSE", parentId: null, label: "l", amount, included, recurring: false, shared, reserve: false });
-    await line(60000, true, true);
-    await line(30000, true, false);
-    await line(9999, false, true);
-
-    const s = await getSplit(hh, nov);
-    expect(s.members.map((m) => m.userId)).toEqual([admin.id, bob.id]); // ghost : aucun compte
-    expect(s.commonNet).toBe(95000 + 60000 - 20000);
-    const [a, b] = s.members;
-    expect(a).toMatchObject({ income: 300000, forecast: false, shareBp: 6000, due: 81000, contribution: 13000, toTransfer: 68000, personalLeft: 300000 - 81000 - 5000 - 7000 });
-    expect(b).toMatchObject({ income: 200000, forecast: true, shareBp: 4000, due: 54000, contribution: 50000, toTransfer: 4000, personalLeft: 146000 });
-  });
-
-  it("getSplit : contribution nette des virements commun → perso ; comptes d'un membre désactivé ignorés", async () => {
+  it("getSplit : attribution au « payé par » ; recettes communes déduites ; revenus sans catégorie ignorés ; membre désactivé exclu", async () => {
     const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
     hh = admin.householdId;
     const all = fullScope(hh);
     const bob = (await createMember(hh, { name: "Bob", email: "b@test.fr", password: "password1", role: "MEMBER" }))!;
     const ex = (await createMember(hh, { name: "Ex", email: "x@test.fr", password: "password1", role: "MEMBER" }))!;
-    const acc = async (name: string, ownerId: string | null) => (await createAccount(all, admin.id, { name, kind: "CHECKING", initialBalance: 0, ownerId })).id;
-    const pa = await acc("Perso A", admin.id);
-    const pb = await acc("Perso B", bob.id);
-    const px = await acc("Perso X", ex.id);
-    const commun = await acc("Commun", null);
-    const transfer = (fromAccountId: string, toAccountId: string, amount: number) =>
-      createTransfer(all, admin.id, { fromAccountId, toAccountId, amount, occurredOn: day("2026-11-03"), note: null });
-    await transfer(pb, commun, 100000);
-    await transfer(commun, pb, 80000); // remboursement : déduit
-    await transfer(commun, pa, 5000); // Alice n'a rien versé : contribution négative
-    await transfer(px, commun, 70000);
-    await createEntry(all, admin.id, { accountId: px, kind: "EXPENSE", amount: 9000, occurredOn: day("2026-11-09"), note: null, categoryId: null, shared: true });
+    const entry = (paidById: string, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, shared?: boolean, on = "2026-11-09") =>
+      createEntry(all, admin.id, { paidById, kind, amount, occurredOn: day(on), note: null, categoryId, shared });
+
+    await entry(admin.id, "INCOME", 300000, await cat("Salaire 1"));
+    await entry(admin.id, "INCOME", 50000, null); // sans catégorie : ignoré
+    await entry(admin.id, "EXPENSE", 7000, null); // dépense sans catégorie (perso) : comptée
+    await entry(admin.id, "EXPENSE", 2000, null, true); // dépense commune sans catégorie : contribution
+    await entry(admin.id, "INCOME", 99999, await cat("Salaire 1"), undefined, "2026-10-31"); // hors mois
+    await entry(admin.id, "EXPENSE", 11000, await cat("Supermarché"), true);
+    await entry(admin.id, "EXPENSE", 5000, await cat("Supermarché"), false);
+    await entry(admin.id, "INCOME", 20000, await cat("Autres revenus"), true); // recette commune
+    await entry(bob.id, "EXPENSE", 50000, await cat("Loyer"), true); // saisie par Alice, payée par Bob
+    await entry(bob.id, "INCOME", 200000, await cat("Salaire 2"));
+    await entry(ex.id, "EXPENSE", 9000, null, true);
     await prisma.user.update({ where: { id: ex.id }, data: { disabledAt: new Date() } });
+    const budget = await createBudget(hh, nov);
+    await prisma.budgetItem.deleteMany({ where: { budgetId: budget.id } });
+    const line = (amount: number, included: boolean, shared: boolean) =>
+      addItem(hh, budget.id, { kind: "EXPENSE", parentId: null, label: "l", amount, included, recurring: false, shared, reserve: false });
+    await line(95000, true, true); // le prévu commun vient du budget seul
+    await line(4000, true, false); // perso : hors commun
+    await line(60000, true, true);
+    await line(30000, true, false);
+    await line(9999, false, true);
 
     const s = await getSplit(hh, nov);
     expect(s.members.map((m) => m.userId)).toEqual([admin.id, bob.id]);
-    expect(s.members.map((m) => m.contribution)).toEqual([-5000, 20000]);
-  });
-
-  it("getVisibleSplit : masquage pour un membre, lien de virement si comptes modifiables, null sans membre propriétaire", async () => {
-    const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
-    hh = admin.householdId;
-    const all = fullScope(hh);
-    const bob = (await createMember(hh, { name: "Bob", email: "b@test.fr", password: "password1", role: "MEMBER" }))!;
-    const acc = async (name: string, ownerId: string | null) => (await createAccount(all, admin.id, { name, kind: "CHECKING", initialBalance: 0, ownerId })).id;
-    const commun = await acc("Commun", null);
-    expect(await getVisibleSplit(admin, all, nov)).toBeNull(); // réglage par défaut : tout commun
-    const pa = await acc("Perso A", admin.id);
-    const pb = await acc("Perso B", bob.id);
-    await createCharge(all, { kind: "EXPENSE", active: true, name: "Loyer", amount: 100000, dueDay: 5, accountId: commun, categoryId: await cat("Loyer"), startMonth: nov, endMonth: null, shared: true });
-
-    const asAdmin = (await getVisibleSplit(admin, all, nov))!;
-    expect(asAdmin.transfer).toEqual({ [admin.id]: `/accounts/${pa}?virement=${commun}&montant=50000`, [bob.id]: `/accounts/${pb}?virement=${commun}&montant=50000` });
-    const bobScope: Scope = { householdId: hh, read: [pb, commun], write: [pb, commun], manage: [pb] };
-    const asBob = (await getVisibleSplit({ ...bob, householdId: hh }, bobScope, nov))!;
-    expect(asBob.members[0]).toMatchObject({ userId: admin.id, income: null, personalLeft: null, toTransfer: 50000 });
-    expect(asBob.members[1]).toMatchObject({ userId: bob.id, income: 0 });
-    expect(asBob.transfer).toEqual({ [bob.id]: `/accounts/${pb}?virement=${commun}&montant=50000` });
-    expect((await getVisibleSplit({ ...bob, householdId: hh }, { ...bobScope, write: [pb] }, nov))!.transfer).toEqual({}); // commun en lecture seule
-    // Bob lit le compte actif d'Alice : revenu visible ; un compte archivé illisible le masque à nouveau.
-    const readAll = { ...bobScope, read: [pa, pb, commun] };
-    expect((await getVisibleSplit({ ...bob, householdId: hh }, readAll, nov))!.members[0].income).toBe(0);
-    await prisma.account.create({ data: { householdId: hh, name: "Ancien", kind: "CHECKING", initialBalance: 0, ownerId: admin.id, archivedAt: new Date() } });
-    expect((await getVisibleSplit({ ...bob, householdId: hh }, readAll, nov))!.members[0]).toMatchObject({ income: null, personalLeft: null });
+    expect(s.commonNet).toBe(95000 + 60000 - 20000);
+    const [a, b] = s.members;
+    expect(a).toMatchObject({ income: 300000, shareBp: 6000, due: 81000, contribution: 13000, toTransfer: 68000, personalLeft: 300000 - 81000 - 5000 - 7000 });
+    expect(b).toMatchObject({ income: 200000, shareBp: 4000, due: 54000, contribution: 50000, toTransfer: 4000, personalLeft: 146000 });
   });
 });

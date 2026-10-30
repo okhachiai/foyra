@@ -1,5 +1,4 @@
 import type { Category, CategoryKind } from "@prisma/client";
-import { centsToInput } from "@/lib/money";
 import { createCategoryAction, updateCategoryAction } from "../actions";
 import { ActionForm, Field } from "../form";
 
@@ -27,12 +26,6 @@ export function CategoryForm({ category, kind, parentId }: { category?: Category
           </select>
         </Field>
       )}
-      <Field name="forecastAmount" label="Montant prévisionnel par défaut">
-        <input
-          name="forecastAmount" inputMode="decimal" placeholder="0,00" autoComplete="off"
-          defaultValue={category ? centsToInput(category.forecastAmount) : ""}
-        />
-      </Field>
       <Field name="sortOrder" label="Ordre d’affichage">
         <input name="sortOrder" type="number" step={1} defaultValue={category?.sortOrder ?? 0} />
       </Field>

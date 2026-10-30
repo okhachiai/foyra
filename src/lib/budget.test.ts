@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { fullScope } from "./access";
 import { setupHousehold } from "./auth";
 import {
-  addItem, budgetSeeds, budgetTotals, buildTree, envelopes, incomeLines, mergeIncomes, carryOver, createBudget, fromTemplates, getBudget, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type Item,
+  actualTotals, addItem, budgetSeeds, budgetTotals, buildTree, envelopes, incomeLines, carryOver, createBudget, fromTemplates, getBudget, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type Item,
 } from "./budget";
 import { updateCategory } from "./categories";
 import { prisma } from "./db";
-import { accountBalance, createEntry, LedgerError, NotFoundError, parseDay } from "./ledger";
+import { createEntry, LedgerError, NotFoundError, parseDay } from "./ledger";
+import { savingsCategory } from "./savings";
 
 // --- Calculs purs ---
 
@@ -25,7 +26,7 @@ describe("totaux du budget (sans double comptage)", () => {
   it("Parent avec enfants = somme des enfants inclus ; sans enfants = son propre montant", () => {
     const [fac] = buildTree([factures, elec, eau]);
     expect(fac.total).toBe(11000);
-    expect(budgetTotals([salaire, factures, elec, eau, divers])).toEqual({ income: 250000, expense: 16000, fixed: 11000, variable: 5000, remaining: 234000 });
+    expect(budgetTotals([salaire, factures, elec, eau, divers])).toEqual({ income: 250000, expense: 16000, fixed: 11000, savings: 0, variable: 5000, remaining: 234000 });
   });
 
   it("Exclure une sous-ligne la retire du total de son parent", () => {
@@ -33,8 +34,25 @@ describe("totaux du budget (sans double comptage)", () => {
   });
 
   it("Exclure une ligne principale exclut toute sa branche", () => {
-    expect(budgetTotals([salaire, { ...factures, included: false }, elec, eau, divers])).toEqual({ income: 250000, expense: 5000, fixed: 0, variable: 5000, remaining: 245000 });
+    expect(budgetTotals([salaire, { ...factures, included: false }, elec, eau, divers])).toEqual({ income: 250000, expense: 5000, fixed: 0, savings: 0, variable: 5000, remaining: 245000 });
     expect(budgetTotals([{ ...salaire, included: false }]).income).toBe(0);
+  });
+
+  it("Épargne sortie des charges fixes : reste = revenus − fixes − variables − épargne", () => {
+    const t = budgetTotals([
+      item({ kind: "INCOME", amount: 300000 }),
+      item({ amount: 100000, category: { fixed: true } }),
+      item({ amount: 50000, category: { fixed: true, savings: true } }),
+      item({ amount: 80000 }),
+    ]);
+    expect(t).toEqual({ income: 300000, fixed: 100000, savings: 50000, variable: 80000, expense: 230000, remaining: 70000 });
+  });
+
+  it("Épargne = max(prévu, versé)", () => {
+    const items = [item({ kind: "INCOME", amount: 300000 }), item({ amount: 50000, category: { fixed: true, savings: true } })];
+    expect(budgetTotals(items, 150000)).toMatchObject({ savings: 150000, remaining: 150000 });
+    expect(budgetTotals(items, 20000)).toMatchObject({ savings: 50000, remaining: 250000 });
+    expect(budgetTotals([item({ kind: "INCOME", amount: 300000 })], 150000)).toMatchObject({ savings: 150000, remaining: 150000 });
   });
 
   it("Reste négatif possible", () => {
@@ -92,16 +110,16 @@ describe("reprise et modèles (purs)", () => {
     expect(JSON.stringify(seeds)).not.toMatch(/"id"|"parentId"/);
   });
 
-  it("Modèles : catégories actives marquées modèle ; parent avec enfants à 0", () => {
-    const c = (o: object) => ({ id: "x", kind: "EXPENSE" as const, name: "X", forecastAmount: 0, enabled: true, recurring: true, isTemplate: true, sortOrder: 0, archivedAt: null, ...o });
+  it("Modèles : catégories actives marquées modèle ; montants à 0", () => {
+    const c = (o: object) => ({ id: "x", kind: "EXPENSE" as const, name: "X", enabled: true, recurring: true, isTemplate: true, sortOrder: 0, archivedAt: null, ...o });
     const seeds = fromTemplates([
-      { ...c({ id: "a", name: "Logement", forecastAmount: 777 }), children: [c({ id: "a1", name: "Loyer", forecastAmount: 90000 }), c({ id: "a2", name: "Old", archivedAt: new Date() })] },
+      { ...c({ id: "a", name: "Logement" }), children: [c({ id: "a1", name: "Loyer" }), c({ id: "a2", name: "Old", archivedAt: new Date() })] },
       { ...c({ id: "b", name: "Hors modèle", isTemplate: false }), children: [] },
-      { ...c({ id: "d", name: "Divers", forecastAmount: 1000, enabled: false }), children: [] },
+      { ...c({ id: "d", name: "Divers", enabled: false }), children: [] },
     ]);
     expect(seeds.map((s) => [s.label, s.amount, s.included, s.children.map((k) => k.label)])).toEqual([
       ["Logement", 0, true, ["Loyer"]],
-      ["Divers", 1000, false, []],
+      ["Divers", 0, false, []],
     ]);
   });
 });
@@ -117,35 +135,43 @@ const find = async (budgetId: string, label: string) => (await items(budgetId)).
 const fields = (i: Item, o: Partial<Item> = {}) => ({ label: i.label, amount: i.amount, included: i.included, recurring: i.recurring, ...o });
 
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
   const admin = (await setupHousehold({ householdName: "Test", name: "Admin", email: "a@test.fr", password: "password1" }))!;
   hh = admin.householdId;
   user = admin.id;
 });
 
-describe("revenus proposés à la création", () => {
-  it("Revenus fixes en tête ; même libellé ou ligne à 0 de même catégorie retirés ; autres conservés", () => {
-    const proposed = [
-      { label: "salaire", amount: 200000, categoryId: "sal" }, // repris du mois précédent
-      { label: "Salaires", amount: 0, categoryId: "sal" }, // modèle vide
-      { label: "Allocations", amount: 0, categoryId: "sal" }, // même catégorie mais montant 0 → retiré aussi
-      { label: "Loyer perçu", amount: 50000, categoryId: "loc" },
-    ];
-    expect(mergeIncomes(proposed, [{ name: "Salaire", amount: 250000, categoryId: "sal" }])).toEqual([
-      { label: "Salaire", amount: 250000, categoryId: "sal" },
-      { label: "Loyer perçu", amount: 50000, categoryId: "loc" },
-    ]);
-    expect(mergeIncomes(proposed, [])).toEqual(proposed);
-  });
-});
-
 describe("budget mensuel", () => {
+  it("Reste réel : opérations du mois par groupe (sous-catégorie → parent, sans catégorie → variable), autres mois exclus", async () => {
+    const cat = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name } })).id;
+    const op = (kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, d = "2026-11-09") =>
+      createEntry(fullScope(hh), user, { paidById: user, kind, amount, occurredOn: parseDay(d)!, note: null, categoryId });
+    await op("INCOME", 300000, await cat("Salaire 1"));
+    await op("EXPENSE", 90000, await cat("Loyer"));
+    await op("EXPENSE", 4000, await cat("Marché"));
+    await op("EXPENSE", 1000, null);
+    await op("EXPENSE", 50000, await savingsCategory(hh));
+    await op("EXPENSE", 99900, null, "2026-10-31");
+    expect(await actualTotals(hh, nov)).toEqual({ income: 300000, fixed: 90000, variable: 5000, savings: 50000, expense: 145000, remaining: 155000 });
+  });
+
   it("Jamais créé implicitement ; création explicite depuis les modèles (aucun budget antérieur), montants à 0", async () => {
     expect(await getBudget(fullScope(hh), nov)).toBeNull();
     const b = await createBudget(hh, nov);
     const got = (await getBudget(fullScope(hh), nov))!;
     expect(got).toMatchObject({ id: b.id, status: "DRAFT", totals: { income: 0, expense: 0, remaining: 0 } });
     expect(got.tree.find((t) => t.label === "Factures")!.children.map((c) => c.label)).toEqual(["Électricité", "Gaz", "Eau", "Internet", "Téléphones"]);
+  });
+
+  it("Ligne ajoutée : rattachée à une catégorie (existante de même nom, sinon créée) pour suivre son réel", async () => {
+    const b = await createBudget(hh, nov);
+    const abos = await addItem(hh, b.id, { kind: "EXPENSE", parentId: null, label: "Abonnements", amount: 0, included: true, recurring: true });
+    const cookido = await addItem(hh, b.id, { kind: "EXPENSE", parentId: abos.id, label: "Cookido", amount: 600, included: true, recurring: true });
+    const cat = await prisma.category.findUniqueOrThrow({ where: { id: cookido.categoryId! } });
+    expect(cat).toMatchObject({ name: "Cookido", parentId: abos.categoryId, kind: "EXPENSE", isTemplate: false });
+    const factures = await find(b.id, "Factures");
+    const gaz = await addItem(hh, b.id, { kind: "EXPENSE", parentId: factures.id, label: "gaz", amount: 0, included: true, recurring: true });
+    expect(gaz.categoryId).toBe((await find(b.id, "Gaz")).categoryId);
   });
 
   it("Revenus saisis à la création : remplacent les revenus proposés ; catégorie hors foyer ignorée", async () => {
@@ -189,18 +215,17 @@ describe("budget mensuel", () => {
     const nv = await createBudget(hh, nov);
     const novLoyer = await find(nv.id, "Loyer");
     await saveItems(hh, nv.id, new Map([[novLoyer.id, fields(novLoyer, { amount: 99000, label: "Loyer révisé" })]]));
-    await updateCategory(hh, octLoyer.categoryId!, { name: "Loyer renommé", forecastAmount: 123400, enabled: false, recurring: false, isTemplate: true, sortOrder: 1 });
+    await updateCategory(hh, octLoyer.categoryId!, { name: "Loyer renommé", enabled: false, recurring: false, isTemplate: true, sortOrder: 1 });
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: octLoyer.id } })).toMatchObject({ label: "Loyer", amount: 90000, included: true });
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: novLoyer.id } })).toMatchObject({ label: "Loyer révisé", amount: 99000 });
   });
 
-  it("Réglage « modèles » : ignore le budget précédent et reprend les montants par défaut", async () => {
+  it("Réglage « modèles » : ignore le budget précédent, montants à 0 (saisis dans le budget)", async () => {
     const o = await createBudget(hh, oct);
     const loyer = await find(o.id, "Loyer");
     await saveItems(hh, o.id, new Map([[loyer.id, fields(loyer, { amount: 95000 })]]));
-    await prisma.category.updateMany({ where: { name: "Loyer" }, data: { forecastAmount: 80000 } });
     await prisma.household.update({ where: { id: hh }, data: { budgetSource: "TEMPLATES" } });
-    expect((await find((await createBudget(hh, nov)).id, "Loyer")).amount).toBe(80000);
+    expect((await find((await createBudget(hh, nov)).id, "Loyer")).amount).toBe(0);
   });
 
   it("Sous-ligne : type du parent, montant direct du parent remis à 0 ; pas de 3e niveau (application et SQL)", async () => {
@@ -267,15 +292,13 @@ describe("budget mensuel", () => {
     expect((await find(b.id, "Loyer")).amount).toBe(1);
   });
 
-  it("Le budget ne crée aucune opération et ne touche aucun solde ; le réel vient des opérations", async () => {
-    const acc = (await prisma.account.create({ data: { householdId: hh, name: "Courant", kind: "CHECKING", initialBalance: 10000 } })).id;
+  it("Le budget ne crée aucune opération ; le réel vient des opérations", async () => {
     const b = await createBudget(hh, nov);
     const marche = await find(b.id, "Marché");
     await saveItems(hh, b.id, new Map([[marche.id, fields(marche, { amount: 40000 })]]));
     await setBudgetStatus(hh, b.id, "VALIDATED");
     expect(await prisma.transaction.count()).toBe(0);
-    expect(await accountBalance(fullScope(hh), acc)).toBe(10000);
-    await createEntry(fullScope(hh), user, { accountId: acc, kind: "EXPENSE", amount: 1250, occurredOn: parseDay("2026-11-03")!, note: null, categoryId: marche.categoryId });
+    await createEntry(fullScope(hh), user, { paidById: user, shared: true, kind: "EXPENSE", amount: 1250, occurredOn: parseDay("2026-11-03")!, note: null, categoryId: marche.categoryId });
     const tree = (await getBudget(fullScope(hh), nov))!.tree;
     const alimentation = tree.find((t) => t.label === "Alimentation")!;
     expect(alimentation.children.find((c) => c.label === "Marché")!.actual).toBe(1250);
@@ -283,18 +306,16 @@ describe("budget mensuel", () => {
   });
 
   it("réel : courses perso ne débordent pas l'enveloppe commune ; revenu perso compté sur la ligne de revenu", async () => {
-    const common = (await prisma.account.create({ data: { householdId: hh, name: "Joint", kind: "CHECKING" } })).id;
-    const perso = (await prisma.account.create({ data: { householdId: hh, name: "Perso", kind: "CHECKING", ownerId: user } })).id;
     const incomeCat = (await prisma.category.findFirst({ where: { householdId: hh, kind: "INCOME" } }))!.id;
     const b = await createBudget(hh, nov, [{ label: "Salaire", amount: 250000, categoryId: incomeCat }]);
     const marche = await find(b.id, "Marché");
     const day = parseDay("2026-11-03")!;
-    const entry = (accountId: string, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null) =>
-      createEntry(fullScope(hh), user, { accountId, kind, amount, occurredOn: day, note: null, categoryId });
-    await entry(common, "EXPENSE", 1000, marche.categoryId);
-    await entry(perso, "EXPENSE", 500, marche.categoryId); // personnelle par défaut
-    await entry(perso, "INCOME", 200000, incomeCat);
-    await entry(common, "INCOME", 3000, incomeCat);
+    const entry = (shared: boolean, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null) =>
+      createEntry(fullScope(hh), user, { paidById: user, shared, kind, amount, occurredOn: day, note: null, categoryId });
+    await entry(true, "EXPENSE", 1000, marche.categoryId);
+    await entry(false, "EXPENSE", 500, marche.categoryId);
+    await entry(false, "INCOME", 200000, incomeCat);
+    await entry(true, "INCOME", 3000, incomeCat);
     const tree = (await getBudget(fullScope(hh), nov))!.tree;
     const alimentation = tree.find((t) => t.label === "Alimentation")!;
     expect(alimentation.children.find((c) => c.label === "Marché")!.actual).toBe(1000);

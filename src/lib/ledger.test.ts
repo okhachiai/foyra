@@ -1,29 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMember, setupHousehold } from "./auth";
-import { fullScope, getScope } from "./access";
+import { fullScope } from "./access";
 import { prisma } from "./db";
 import { parseMonth } from "./budget";
 import { createCharge, payCharge } from "./charges";
-import {
-  accountBalance, adjustBalance, archiveAccount, createAccount, createEntry, createTransfer, deleteAccount, deleteTransaction, getAccount, getTransfer,
-  householdTotal, LedgerError, NotFoundError, parseDay, todayIn, updateAccount, updateEntry, updateTransfer,
-} from "./ledger";
+import { createEntry, deleteTransaction, LedgerError, monthNet, NotFoundError, parseDay, todayIn, updateEntry } from "./ledger";
 
 async function resetDb() {
-  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Account", "Session", "User", "Household" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Session", "User", "Household" CASCADE`);
 }
 
 let hh: string;
 let user: string;
 const day = parseDay("2026-10-29")!;
 
-async function account(name: string, initialBalance: number) {
-  return (await prisma.account.create({ data: { householdId: hh, name, kind: "CHECKING", initialBalance } })).id;
-}
-const expense = (accountId: string, amount: number) =>
-  createEntry(fullScope(hh), user, { accountId, kind: "EXPENSE", amount, occurredOn: day, note: null, categoryId: null });
-const transfer = (fromAccountId: string, toAccountId: string, amount: number) =>
-  createTransfer(fullScope(hh), user, { fromAccountId, toAccountId, amount, occurredOn: day, note: null });
+const oct = parseMonth("2026-10")!;
+const entry = (kind: "INCOME" | "EXPENSE", amount: number, extra: object = {}) =>
+  createEntry(fullScope(hh), user, { kind, amount, occurredOn: day, note: null, categoryId: null, paidById: user, ...extra });
+const expense = (amount: number) => entry("EXPENSE", amount);
 
 beforeEach(async () => {
   await resetDb();
@@ -33,119 +27,33 @@ beforeEach(async () => {
 });
 
 describe("ledger", () => {
-  it("Dépense : 1 000,00 − 45,50 = 954,50", async () => {
-    const c = await account("Courant", 100000);
-    await expense(c, 4550);
-    expect(await accountBalance(fullScope(hh), c)).toBe(95450);
+  it("Net du mois : recettes − dépenses du mois seulement", async () => {
+    await entry("INCOME", 100000);
+    await expense(4550);
+    await entry("EXPENSE", 999, { occurredOn: parseDay("2026-11-01")! });
+    expect(await monthNet(fullScope(hh), oct)).toBe(95450);
+    expect(await monthNet(fullScope(hh), parseMonth("2026-11")!)).toBe(-999);
   });
 
   it("Montant ≤ 0 refusé par la contrainte CHECK en base", async () => {
-    const c = await account("Courant", 0);
-    await expect(expense(c, 0)).rejects.toThrow();
-    await expect(expense(c, -100)).rejects.toThrow();
+    await expect(expense(0)).rejects.toThrow();
+    await expect(expense(-100)).rejects.toThrow();
     expect(await prisma.transaction.count()).toBe(0);
   });
 
-  it("Découvert : 10 € − 30 € = −20 €", async () => {
-    const c = await account("Courant", 1000);
-    await expense(c, 3000);
-    expect(await accountBalance(fullScope(hh), c)).toBe(-2000);
-  });
-
-  it("Virement : 200 € du courant vers l'épargne, total inchangé", async () => {
-    const c = await account("Courant", 95450);
-    const e = await account("Épargne", 0);
-    const before = await householdTotal(fullScope(hh));
-    await transfer(c, e, 20000);
-    expect(await accountBalance(fullScope(hh), c)).toBe(75450);
-    expect(await accountBalance(fullScope(hh), e)).toBe(20000);
-    expect(await householdTotal(fullScope(hh))).toBe(before);
-  });
-
-  it("Virement vers le même compte refusé", async () => {
-    const c = await account("Courant", 0);
-    await expect(transfer(c, c, 100)).rejects.toBeInstanceOf(LedgerError);
-  });
-
-  it("Virement en échec : compte cible invalide → aucune ligne", async () => {
-    const c = await account("Courant", 1000);
-    await expect(transfer(c, "inexistant", 100)).rejects.toBeInstanceOf(NotFoundError);
-    expect(await prisma.transaction.count()).toBe(0);
-  });
-
-  it("Virement en échec : la 2ᵉ insertion échoue en base → rollback complet", async () => {
-    const c = await account("Courant", 1000);
-    const e = await account("Épargne", 0);
-    // Un trigger fait échouer l'insertion du côté IN (après celle du côté OUT).
-    await prisma.$executeRawUnsafe(`CREATE FUNCTION fail_in() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$ LANGUAGE plpgsql`);
-    await prisma.$executeRawUnsafe(`CREATE TRIGGER fail_in BEFORE INSERT ON "Transaction" FOR EACH ROW WHEN (NEW."transferSide" = 'IN') EXECUTE FUNCTION fail_in()`);
-    try {
-      await expect(transfer(c, e, 100)).rejects.toThrow(/boom/);
-      expect(await prisma.transaction.count()).toBe(0);
-    } finally {
-      await prisma.$executeRawUnsafe(`DROP TRIGGER fail_in ON "Transaction"; `);
-      await prisma.$executeRawUnsafe(`DROP FUNCTION fail_in`);
-    }
-  });
-
-  it("Modifier un virement 200 → 150 : les deux côtés suivent", async () => {
-    const c = await account("Courant", 0);
-    const e = await account("Épargne", 0);
-    const id = await transfer(c, e, 20000);
-    await updateTransfer(fullScope(hh), id, { fromAccountId: c, toAccountId: e, amount: 15000, occurredOn: day, note: "x" });
-    const t = await getTransfer(fullScope(hh), id);
-    expect([t.out.amount, t.in.amount]).toEqual([15000, 15000]);
-    expect(await accountBalance(fullScope(hh), c)).toBe(-15000);
-    expect(await accountBalance(fullScope(hh), e)).toBe(15000);
-  });
-
-  it("Supprimer un virement depuis un des comptes supprime les deux côtés", async () => {
-    const c = await account("Courant", 0);
-    const e = await account("Épargne", 0);
-    const id = await transfer(c, e, 20000);
-    const inSide = (await getTransfer(fullScope(hh), id)).in;
-    await deleteTransaction(fullScope(hh), inSide.id);
-    expect(await prisma.transaction.count()).toBe(0);
-    expect(await accountBalance(fullScope(hh), c)).toBe(0);
-  });
-
-  it("Modifier une dépense 45,50 → 50,00 : solde recalculé", async () => {
-    const c = await account("Courant", 100000);
-    const t = await expense(c, 4550);
-    await updateEntry(fullScope(hh), t.id, { accountId: c, kind: "EXPENSE", amount: 5000, occurredOn: day, note: null, categoryId: null });
-    expect(await accountBalance(fullScope(hh), c)).toBe(95000);
-  });
-
-  it("Archiver : refusé si solde ≠ 0, accepté à 0, masqué du total, historique conservé", async () => {
-    const c = await account("Courant", 1000);
-    const other = await account("Autre", 500);
-    await expect(archiveAccount(fullScope(hh), c)).rejects.toBeInstanceOf(LedgerError);
-    await expense(c, 1000);
-    await archiveAccount(fullScope(hh), c);
-    expect((await getAccount(fullScope(hh), c)).archivedAt).not.toBeNull();
-    expect(await householdTotal(fullScope(hh))).toBe(500);
-    expect(await prisma.transaction.count({ where: { accountId: c } })).toBe(1);
-    expect(other).toBeTruthy();
-  });
-
-  it("Saisie sur archivé : dépense et virement refusés", async () => {
-    const c = await account("Courant", 0);
-    const e = await account("Épargne", 1000);
-    await archiveAccount(fullScope(hh), c);
-    await expect(expense(c, 100)).rejects.toBeInstanceOf(LedgerError);
-    await expect(transfer(e, c, 100)).rejects.toBeInstanceOf(LedgerError);
-    await expect(transfer(c, e, 100)).rejects.toBeInstanceOf(LedgerError);
-    expect(await prisma.transaction.count()).toBe(0);
+  it("Modifier une dépense 45,50 → 50,00 : net recalculé", async () => {
+    const t = await expense(4550);
+    await updateEntry(fullScope(hh), t.id, { kind: "EXPENSE", amount: 5000, occurredOn: day, note: null, categoryId: null, paidById: user });
+    expect(await monthNet(fullScope(hh), oct)).toBe(-5000);
   });
 
   it("Hors foyer : id inexistant ou mauvais foyer → NotFound", async () => {
-    const c = await account("Courant", 0);
-    await expect(getAccount(fullScope(hh), "inexistant")).rejects.toBeInstanceOf(NotFoundError);
-    await expect(getAccount(fullScope("autre-foyer"), c)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(accountBalance(fullScope("autre-foyer"), c)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(createEntry(fullScope("autre-foyer"), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null })).rejects.toBeInstanceOf(NotFoundError);
-    const t = await expense(c, 100);
+    const t = await expense(100);
+    await expect(updateEntry(fullScope("autre-foyer"), t.id, { kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null, paidById: user }))
+      .rejects.toBeInstanceOf(NotFoundError);
     await expect(deleteTransaction(fullScope("autre-foyer"), t.id)).rejects.toBeInstanceOf(NotFoundError);
+    await deleteTransaction(fullScope(hh), t.id);
+    expect(await prisma.transaction.count()).toBe(0);
   });
 
   it("Date d'opération : jour du fuseau du foyer", () => {
@@ -155,152 +63,49 @@ describe("ledger", () => {
   });
 
   it("Idempotence : même clé rejouée (double clic, nouvelle tentative) → une seule dépense", async () => {
-    const c = await account("Courant", 10000);
-    const input = { accountId: c, kind: "EXPENSE" as const, amount: 1000, occurredOn: day, note: null, categoryId: null, idempotencyKey: "k-1" };
+    const input = { kind: "EXPENSE" as const, amount: 1000, occurredOn: day, note: null, categoryId: null, paidById: user, idempotencyKey: "k-1" };
     const [a, b] = await Promise.all([createEntry(fullScope(hh), user, input), createEntry(fullScope(hh), user, input)]);
     const again = await createEntry(fullScope(hh), user, input);
     expect(new Set([a.id, b.id, again.id]).size).toBe(1);
-    expect(await accountBalance(fullScope(hh), c)).toBe(9000);
     await createEntry(fullScope(hh), user, { ...input, idempotencyKey: "k-2" });
-    expect(await accountBalance(fullScope(hh), c)).toBe(8000);
+    expect(await monthNet(fullScope(hh), oct)).toBe(-2000);
   });
 
-  it("Idempotence d'un virement : deux lignes une seule fois, même identifiant renvoyé", async () => {
-    const c = await account("Courant", 0);
-    const e = await account("Épargne", 0);
-    const input = { fromAccountId: c, toAccountId: e, amount: 5000, occurredOn: day, note: null, idempotencyKey: "t-1" };
-    const ids = await Promise.all([1, 2, 3].map(() => createTransfer(fullScope(hh), user, input)));
-    expect(new Set(ids).size).toBe(1);
-    expect(await prisma.transaction.count()).toBe(2);
-    expect([await accountBalance(fullScope(hh), c), await accountBalance(fullScope(hh), e)]).toEqual([-5000, 5000]);
-  });
-
-  it("Virement : jamais compté comme revenu ni dépense du foyer", async () => {
-    const c = await account("Courant", 0);
-    const e = await account("Épargne", 0);
-    await transfer(c, e, 7000);
-    const kinds = await prisma.transaction.groupBy({ by: ["kind"], _count: true });
-    expect(kinds).toEqual([{ kind: "TRANSFER", _count: 2 }]);
-  });
-
-  it("Isolation entre foyers : un utilisateur d'un autre foyer ne voit ni ne touche rien", async () => {
-    const c = await account("Courant", 10000);
-    const t = await expense(c, 100);
+  it("Isolation entre foyers : payeur d'un autre foyer refusé ; même clé d'idempotence indépendante", async () => {
     const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!;
-    const s = await getScope(other);
-    expect(s.read).toBeNull(); // admin : portée complète, mais limitée à son propre foyer
-    await expect(getAccount(s, c)).rejects.toBeInstanceOf(NotFoundError);
-    await expect(createEntry(s, other.id, { accountId: c, kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null })).rejects.toBeInstanceOf(NotFoundError);
-    await expect(deleteTransaction(s, t.id)).rejects.toBeInstanceOf(NotFoundError);
-    // Même clé d'idempotence dans deux foyers : indépendantes.
-    await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null, idempotencyKey: "same" });
-    const theirs = (await prisma.account.create({ data: { householdId: other.householdId, name: "X", kind: "CASH" } })).id;
-    await createEntry(fullScope(other.householdId), other.id, { accountId: theirs, kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null, idempotencyKey: "same" });
+    await expect(entry("EXPENSE", 1, { paidById: other.id })).rejects.toMatchObject({ field: "paidById" });
+    await entry("EXPENSE", 1, { idempotencyKey: "same" });
+    await createEntry(fullScope(other.householdId), other.id, { kind: "EXPENSE", amount: 1, occurredOn: day, note: null, categoryId: null, paidById: other.id, idempotencyKey: "same" });
     expect(await prisma.transaction.count({ where: { idempotencyKey: "same" } })).toBe(2);
   });
 
-  it("Supprimer un compte : ses opérations partent ; refusé s'il a un virement", async () => {
-    const c = await account("Courant", 1000), e = await account("Épargne", 0);
-    await expense(c, 100);
-    await deleteAccount(fullScope(hh), c);
-    expect(await prisma.account.count({ where: { id: c } })).toBe(0);
-    expect(await prisma.transaction.count({ where: { accountId: c } })).toBe(0);
-
-    const d = await account("Autre", 1000);
-    await transfer(d, e, 100);
-    await expect(deleteAccount(fullScope(hh), d)).rejects.toThrow(LedgerError);
+  it("Payé par : membre actif à la saisie ; un payeur désactivé reste accepté s'il était déjà choisi", async () => {
+    const m = (await createMember(hh, { name: "M", email: "m@test.fr", password: "password1", role: "MEMBER" }))!.id;
+    const t = await entry("EXPENSE", 100, { paidById: m });
+    expect(t.paidById).toBe(m);
+    await prisma.user.update({ where: { id: m }, data: { disabledAt: new Date() } });
+    await expect(entry("EXPENSE", 100, { paidById: m })).rejects.toBeInstanceOf(LedgerError);
+    const u = await updateEntry(fullScope(hh), t.id, { kind: "EXPENSE", amount: 200, occurredOn: day, note: null, categoryId: null, paidById: m });
+    expect(u.amount).toBe(200);
   });
 
-  it("Compte créé : propriétaire = créateur par défaut, null si commun", async () => {
-    const perso = await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 });
-    expect(perso.ownerId).toBe(user);
-    const joint = await createAccount(fullScope(hh), user, { name: "Joint", kind: "CHECKING", initialBalance: 0, ownerId: null });
-    expect(joint.ownerId).toBeNull();
-    const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!;
-    await expect(createAccount(fullScope(hh), user, { name: "X", kind: "CHECKING", initialBalance: 0, ownerId: other.id })).rejects.toBeInstanceOf(NotFoundError);
-  });
-
-  it("Dépense sur compte commun : toujours commune, même avec shared=false", async () => {
-    const c = await account("Joint", 0);
-    const t = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null, shared: false });
+  it("Commune : personnelle par défaut, commune si demandé, inchangée si non précisée à la modification", async () => {
+    expect((await expense(100)).shared).toBe(false);
+    const t = await entry("EXPENSE", 100, { shared: true });
     expect(t.shared).toBe(true);
-    const u = await updateEntry(fullScope(hh), t.id, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null, shared: false });
+    const u = await updateEntry(fullScope(hh), t.id, { kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null, paidById: user });
     expect(u.shared).toBe(true);
   });
 
-  it("Dépense sur compte perso : personnelle par défaut, commune si demandé", async () => {
-    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
-    expect((await expense(c, 100)).shared).toBe(false);
-    const t = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: day, note: null, categoryId: null, shared: true });
-    expect(t.shared).toBe(true);
-  });
-
-  it("Changer le propriétaire : opérations du mois en cours basculent, mois précédent et paiements de charge inchangés", async () => {
-    const c = await account("Joint", 0);
-    const nov = parseMonth("2026-11")!;
-    const entry = (d: string) => createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: parseDay(d)!, note: null, categoryId: null });
-    const oct = await entry("2026-10-15");
-    const nv = await entry("2026-11-15");
+  it("Paiement de charge : type et mois figés ; supprimer la dépense supprime le paiement", async () => {
     const loyer = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name: "Loyer" } })).id;
-    const ch = await createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: c, categoryId: loyer, startMonth: nov, endMonth: null, shared: true });
-    const p = await payCharge(fullScope(hh), user, ch.id, nov, 95000, parseDay("2026-11-05")!);
-    await updateAccount(fullScope(hh), c, { name: "Joint", kind: "CHECKING", ownerId: user }, nov);
-    const shared = async (id: string) => (await prisma.transaction.findUniqueOrThrow({ where: { id } })).shared;
-    expect([await shared(nv.id), await shared(oct.id), await shared(p.transactionId)]).toEqual([false, true, true]);
-    expect((await getAccount(fullScope(hh), c)).ownerId).toBe(user);
-  });
-
-  it("Changer le propriétaire : perso → commun, recettes et dépenses du mois deviennent communes, virements inchangés", async () => {
-    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
-    const e = await account("Épargne", 0);
-    const nov = parseMonth("2026-11")!, d = parseDay("2026-11-10")!;
-    const dep = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: d, note: null, categoryId: null });
-    const rec = await createEntry(fullScope(hh), user, { accountId: c, kind: "INCOME", amount: 100, occurredOn: d, note: null, categoryId: null });
-    const tid = await createTransfer(fullScope(hh), user, { fromAccountId: c, toAccountId: e, amount: 50, occurredOn: d, note: null });
-    await prisma.transaction.updateMany({ where: { transferId: tid }, data: { shared: false } });
-    await updateAccount(fullScope(hh), c, { name: "Perso", kind: "CHECKING", ownerId: null }, nov);
-    const rows = await prisma.transaction.findMany({ where: { OR: [{ id: { in: [dep.id, rec.id] } }, { transferId: tid }] } });
-    expect(rows.filter((r) => r.kind !== "TRANSFER").map((r) => r.shared)).toEqual([true, true]);
-    expect(rows.filter((r) => r.kind === "TRANSFER").map((r) => r.shared)).toEqual([false, false]);
-  });
-
-  it("Compte devenu commun : ses charges deviennent communes", async () => {
-    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
-    const nov = parseMonth("2026-11")!;
-    const loyer = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name: "Loyer" } })).id;
-    const ch = await createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", amount: 95000, dueDay: 5, accountId: c, categoryId: loyer, startMonth: nov, endMonth: null, shared: false });
-    await updateAccount(fullScope(hh), c, { name: "Perso", kind: "CHECKING", ownerId: null }, nov);
-    expect((await prisma.fixedCharge.findUniqueOrThrow({ where: { id: ch.id } })).shared).toBe(true);
-  });
-
-  it("Propriétaire inchangé : aucune bascule ; propriétaire d'un autre foyer refusé", async () => {
-    const c = (await createAccount(fullScope(hh), user, { name: "Perso", kind: "CHECKING", initialBalance: 0 })).id;
-    const nov = parseMonth("2026-11")!;
-    const t = await createEntry(fullScope(hh), user, { accountId: c, kind: "EXPENSE", amount: 100, occurredOn: parseDay("2026-11-10")!, note: null, categoryId: null, shared: true });
-    await updateAccount(fullScope(hh), c, { name: "Perso 2", kind: "CHECKING", ownerId: user }, nov);
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: t.id } })).shared).toBe(true);
-    const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!;
-    await expect(updateAccount(fullScope(hh), c, { name: "Perso", kind: "CHECKING", ownerId: other.id }, nov)).rejects.toBeInstanceOf(NotFoundError);
-  });
-
-  it("Attribution : un membre ne peut créer un compte qu'à son nom ou commun ; membre désactivé refusé", async () => {
-    const m1 = (await createMember(hh, { name: "M1", email: "m1@test.fr", password: "password1", role: "MEMBER" }))!.id;
-    const m2 = (await createMember(hh, { name: "M2", email: "m2@test.fr", password: "password1", role: "MEMBER" }))!.id;
-    const s = await getScope({ id: m1, householdId: hh });
-    const data = { name: "X", kind: "CHECKING" as const, initialBalance: 0 };
-    await expect(createAccount(s, m1, { ...data, ownerId: m2 })).rejects.toMatchObject({ field: "ownerId" });
-    expect((await createAccount(s, m1, data)).ownerId).toBe(m1);
-    expect((await createAccount(s, m1, { ...data, ownerId: null })).ownerId).toBeNull();
-    await prisma.user.update({ where: { id: m2 }, data: { disabledAt: new Date() } });
-    await expect(createAccount(fullScope(hh), user, { ...data, ownerId: m2 })).rejects.toBeInstanceOf(NotFoundError);
-  });
-
-  it("ajuster le solde : crée l'écart, rien si égal", async () => {
-    const c = await account("Courant", 100000);
-    const t = await adjustBalance(fullScope(hh), user, c, 95000, day);
-    expect(t).toMatchObject({ kind: "EXPENSE", amount: 5000, note: "Ajustement de solde", categoryId: null });
-    expect(await accountBalance(fullScope(hh), c)).toBe(95000);
-    expect(await adjustBalance(fullScope(hh), user, c, 95000, day)).toBeNull();
-    expect((await adjustBalance(fullScope(hh), user, c, 96000, day))!.kind).toBe("INCOME");
+    const ch = await createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: loyer, startMonth: oct, endMonth: null, shared: true });
+    const p = await payCharge(fullScope(hh), user, ch.id, oct, 95000, parseDay("2026-10-05")!);
+    const t = await prisma.transaction.findUniqueOrThrow({ where: { id: p.transactionId } });
+    expect(t).toMatchObject({ paidById: user, shared: true });
+    const base = { kind: "EXPENSE" as const, amount: 95000, occurredOn: parseDay("2026-10-05")!, note: null, categoryId: loyer, paidById: user };
+    await expect(updateEntry(fullScope(hh), t.id, { ...base, occurredOn: parseDay("2026-11-05")! })).rejects.toMatchObject({ field: "occurredOn" });
+    await deleteTransaction(fullScope(hh), t.id);
+    expect(await prisma.fixedChargePayment.count()).toBe(0);
   });
 });

@@ -171,6 +171,7 @@ summary:hover { color: var(--heading); }
   .ab-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); }
   .ab-grid .w5 { grid-column: span 5; }
   .ab-grid .w7 { grid-column: span 7; }
+  .ab-grid .w12 { grid-column: span 12; }
 }
 .ab-card {
   position: relative; min-width: 0; overflow: hidden; display: flex; flex-direction: column;
@@ -273,8 +274,6 @@ button.ab-period:hover { background: rgba(255, 255, 255, 0.05); transform: none;
 .field > span { font-size: 0.875rem; font-weight: 500; color: var(--text); }
 .check { display: flex; align-items: center; gap: 0.5rem; font-weight: 500; }
 .check input { width: 1.25rem; height: 1.25rem; min-height: 0; margin: 0; accent-color: var(--accent); }
-/* Case « commune » sans objet quand le compte choisi est commun (forcé côté serveur). */
-form:has(option[data-common]:checked) .shared-check { display: none; }
 input, select {
   width: 100%; font: inherit; font-size: 16px; /* 16px : pas de zoom automatique sur iOS */
   padding: 0.625rem 0.875rem; color: var(--heading); background: rgba(255, 255, 255, 0.03);
@@ -333,3 +332,9 @@ form:has(small.error) > p.error { display: none; }
   *, ::before, ::after { transition: none !important; }
 }
 }
+
+/* Angles droits partout : hors couche, l'emporte sur les styles maison et les utilitaires rounded-*. */
+*, *::before, *::after { border-radius: 0 !important; }
+
+/* L'attribut hidden doit gagner sur les display maison (button { display: inline-flex }…). */
+[hidden] { display: none !important; }

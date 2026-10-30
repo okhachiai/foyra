@@ -11,12 +11,11 @@ vi.mock("next/headers", () => ({
   }),
 }));
 
-import { fullScope, getScope, setAccess } from "./access";
 import {
   changePassword, checkCredentials, createMember, findSession, SESSION_COOKIE, setDisabled, setRole, setupHousehold, startSession,
 } from "./auth";
 import { prisma } from "./db";
-import { createAccount, LedgerError, NotFoundError } from "./ledger";
+import { LedgerError, NotFoundError } from "./ledger";
 
 let hh: string;
 let adminId: string;
@@ -32,7 +31,7 @@ const message = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e.mess
 
 beforeEach(async () => {
   jar.clear();
-  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
   const a = (await setupHousehold({ householdName: "Test", name: "Admin", email: "a@test.fr", password: "password1" }))!;
   hh = a.householdId;
   adminId = a.id;
@@ -55,13 +54,10 @@ describe("gestion des membres", () => {
     expect(await prisma.session.count({ where: { userId: bobId } })).toBe(0);
   });
 
-  it("Réactiver : connexion avec son mot de passe, accès aux comptes intacts", async () => {
-    const acc = (await createAccount(fullScope(hh), adminId, { name: "Courant", kind: "CHECKING", initialBalance: 0 })).id;
-    await setAccess(hh, bobId, new Map([[acc, "READ"]]));
+  it("Réactiver : connexion avec son mot de passe", async () => {
     await setDisabled(hh, adminId, bobId, true);
     await setDisabled(hh, adminId, bobId, false);
     expect(await checkCredentials("bob@x.fr", "password1")).not.toBeNull();
-    expect((await getScope({ id: bobId, householdId: hh })).read).toEqual([acc]);
   });
 
   it("Dernier admin : se rétrograder ou être désactivé est refusé", async () => {
@@ -77,17 +73,6 @@ describe("gestion des membres", () => {
     await setRole(hh, adminId, adminId, "MEMBER");
     expect(await message(setRole(hh, c, c, "MEMBER"))).toBe("Le foyer doit garder au moins un admin actif.");
     expect((await prisma.user.findUniqueOrThrow({ where: { id: adminId } })).role).toBe("MEMBER");
-  });
-
-  it("Rôle et accès indépendants : promu admin, B voit tout ; rétrogradé, il ne garde que ses accès explicites", async () => {
-    const acc = (await createAccount(fullScope(hh), adminId, { name: "Courant", kind: "CHECKING", initialBalance: 0 })).id;
-    await setRole(hh, adminId, bobId, "ADMIN");
-    expect(await getScope(await prisma.user.findUniqueOrThrow({ where: { id: bobId } }))).toEqual(fullScope(hh));
-    await prisma.accountAccess.create({ data: { userId: bobId, accountId: acc, level: "WRITE" } });
-    await setRole(hh, adminId, bobId, "MEMBER");
-    const bob = await prisma.user.findUniqueOrThrow({ where: { id: bobId } });
-    expect(bob.role).toBe("MEMBER");
-    expect((await getScope(bob)).write).toEqual([acc]);
   });
 
   it("Rétrograder soi-même autorisé s'il reste un autre admin actif", async () => {

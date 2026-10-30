@@ -48,7 +48,7 @@ services:
       REPORT_CRON: ${REPORT_CRON:-0 20 * * *}
     command: >-
       sh -c 'apk add --no-cache tzdata >/dev/null &&
-      echo "$$REPORT_CRON wget -qO- --header \"Authorization: Bearer $$CRON_TOKEN\" --post-data \"\" http://app:3000/api/reports/daily" > /etc/crontabs/root &&
+      echo "$$REPORT_CRON wget -O- --header \"Authorization: Bearer $$CRON_TOKEN\" --post-data \"\" http://app:3000/api/reports/daily 2>&1" > /etc/crontabs/root &&
       crond -f -l 8'
 
   # Base jetable pour `npm test` : docker compose --profile test up -d db-test

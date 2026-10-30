@@ -1,7 +1,8 @@
 import { Prisma } from "@prisma/client";
-import { assertWritable, readable, type Scope } from "./access";
+import type { Scope } from "./access";
 import { prisma } from "./db";
 import { buildSchedule, dueDate } from "./amortization";
+import { buildTree, type Item } from "./budget";
 import { createEntryTx, isCode, LedgerError, NotFoundError } from "./ledger";
 
 export { dueDate };
@@ -9,68 +10,48 @@ export { dueDate };
 type Db = Prisma.TransactionClient;
 
 export type ChargeInput = {
-  kind: "INCOME" | "EXPENSE"; active: boolean; name: string; amount: number; dueDay: number; accountId: string; categoryId: string; startMonth: Date; endMonth: Date | null; shared: boolean;
+  kind: "INCOME" | "EXPENSE"; active: boolean; name: string; dueDay: number; categoryId: string; startMonth: Date; endMonth: Date | null; shared: boolean;
 };
 
 /** La récurrence s'applique au mois si elle est active et début ≤ mois ≤ dernier mois (vide = sans fin). */
 export const appliesTo = (charge: { active: boolean; startMonth: Date; endMonth: Date | null }, month: Date) =>
   charge.active && charge.startMonth <= month && (!charge.endMonth || month <= charge.endMonth);
 
-/**
- * Catégorie du foyer du même sens, compte du foyer modifiable et non archivé ; FOR SHARE : ni l'un ni l'autre ne change avant l'écriture.
- * Renvoie `shared` effectif : forcé à true sur un compte commun (undefined : inchangé / défaut).
- */
-export async function checkRefs(tx: Db, scope: Scope, input: Omit<ChargeInput, "shared"> & { shared?: boolean }) {
+/** Période cohérente et catégorie de dépense du foyer ; FOR SHARE : la catégorie ne change pas avant l'écriture. */
+export async function checkRefs(tx: Db, scope: Scope, input: Omit<ChargeInput, "shared">) {
   const householdId = scope.householdId;
   if (input.endMonth && input.endMonth < input.startMonth) throw new LedgerError("Le dernier mois doit être après le mois de début.", "endMonth");
   const [c] = await tx.$queryRaw<{ kind: string }[]>`
     SELECT "kind"::text FROM "Category" WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
   if (!c) throw new NotFoundError();
-  if (c.kind !== input.kind) throw new LedgerError(input.kind === "EXPENSE" ? "Choisissez une catégorie de dépense." : "Choisissez une catégorie de revenu.", "categoryId");
-  assertWritable(scope, input.accountId, "accountId");
-  const [a] = await tx.$queryRaw<{ archivedAt: Date | null; ownerId: string | null }[]>`
-    SELECT "archivedAt", "ownerId" FROM "Account" WHERE "id" = ${input.accountId} AND "householdId" = ${householdId} FOR SHARE`;
-  if (!a) throw new NotFoundError();
-  if (a.archivedAt) throw new LedgerError("Ce compte est archivé : aucune saisie possible.", "accountId");
-  return a.ownerId === null ? true : input.shared;
+  if (c.kind !== "EXPENSE") throw new LedgerError("Choisissez une catégorie de dépense.", "categoryId");
 }
 
 export function createCharge(scope: Scope, input: ChargeInput) {
   return prisma.$transaction(async (tx) => {
-    const shared = await checkRefs(tx, scope, input);
-    return tx.fixedCharge.create({ data: { ...input, shared, householdId: scope.householdId } });
+    await checkRefs(tx, scope, input);
+    return tx.fixedCharge.create({ data: { ...input, householdId: scope.householdId } });
   });
-}
-
-/** Charge d'un compte lisible, verrouillée ; son compte actuel doit être modifiable. */
-async function lockWritableCharge(tx: Db, scope: Scope, id: string) {
-  const [c] = await tx.$queryRaw<{ accountId: string }[]>`
-    SELECT "accountId" FROM "FixedCharge" WHERE "id" = ${id} AND "householdId" = ${scope.householdId} FOR UPDATE`;
-  if (!c) throw new NotFoundError();
-  assertWritable(scope, c.accountId);
 }
 
 export async function updateCharge(scope: Scope, id: string, input: ChargeInput) {
   await prisma.$transaction(async (tx) => {
-    await lockWritableCharge(tx, scope, id);
-    const shared = await checkRefs(tx, scope, input);
+    await checkRefs(tx, scope, input);
     // Charge portée par un crédit : modifiable seulement via le crédit.
-    const { count } = await tx.fixedCharge.updateMany({ where: { id, householdId: scope.householdId, loan: null }, data: { ...input, shared } });
+    const { count } = await tx.fixedCharge.updateMany({ where: { id, householdId: scope.householdId, loan: null }, data: input });
     if (!count) throw new NotFoundError();
   });
 }
 
 /** Supprime la charge et ses paiements ; les dépenses créées restent (elles deviennent variables). */
 export async function deleteCharge(scope: Scope, id: string) {
-  await prisma.$transaction(async (tx) => {
-    await lockWritableCharge(tx, scope, id);
-    await tx.fixedCharge.deleteMany({ where: { id, householdId: scope.householdId } });
-  });
+  const { count } = await prisma.fixedCharge.deleteMany({ where: { id, householdId: scope.householdId } });
+  if (!count) throw new NotFoundError();
 }
 
 export async function getCharge(scope: Scope, id: string) {
   const c = await prisma.fixedCharge.findFirst({
-    where: { id, householdId: scope.householdId, accountId: readable(scope) },
+    where: { id, householdId: scope.householdId },
     include: { loan: { select: { id: true } } },
   });
   if (!c) throw new NotFoundError();
@@ -92,14 +73,27 @@ export function loanRow(charge: { dueDay: number; startMonth: Date; loan: LoanWi
 }
 
 /**
+ * Montant prévu d'une récurrence : ligne incluse du budget de même catégorie (de même libellé si plusieurs) ; null sans ligne.
+ * Une ligne avec sous-lignes vaut leur total.
+ */
+export function plannedAmount(items: Item[], charge: { categoryId: string; name: string }) {
+  const lines = buildTree(items).filter((n) => n.included)
+    .flatMap((n) => [n, ...n.children.filter((c) => c.included).map((c) => ({ ...c, total: c.amount }))])
+    .filter((l) => l.categoryId === charge.categoryId);
+  const name = charge.name.trim().toLowerCase();
+  return (lines.find((l) => l.label.trim().toLowerCase() === name) ?? lines[0])?.total ?? null;
+}
+
+/**
  * Charges applicables au mois, triées par échéance, avec leur paiement du mois (et sa dépense) s'il existe.
- * Charge-crédit : montant = échéance du mois (assurance incluse) ; absente si le crédit n'a pas d'échéance ce mois.
+ * Montant : ligne du budget du mois (`budgeted` faux et 0 sans budget ni ligne) ;
+ * charge-crédit : échéance du mois (assurance incluse), absente si le crédit n'a pas d'échéance ce mois.
  */
 export async function listMonthCharges(scope: Scope, month: Date) {
+  const budget = await prisma.budget.findUnique({ where: { householdId_month: { householdId: scope.householdId, month } }, include: { items: true } });
   const charges = await prisma.fixedCharge.findMany({
-    where: { householdId: scope.householdId, accountId: readable(scope), active: true, startMonth: { lte: month }, OR: [{ endMonth: null }, { endMonth: { gte: month } }] },
+    where: { householdId: scope.householdId, active: true, startMonth: { lte: month }, OR: [{ endMonth: null }, { endMonth: { gte: month } }] },
     include: {
-      account: { select: { name: true } },
       category: { select: { name: true, parent: { select: { name: true } } } },
       payments: { where: { month }, include: { transaction: true } },
       loan: LOAN_INCLUDE,
@@ -111,30 +105,30 @@ export async function listMonthCharges(scope: Scope, month: Date) {
     const row = loan ? loanRow({ ...c, loan }, month) : null;
     // Mois déjà payé mais sans échéance (crédit soldé depuis) : la charge payée reste comptée.
     if (row === undefined && !payment) return [];
-    const amount = row === null ? c.amount : row?.total ?? payment!.transaction.amount;
+    const planned = row === null ? plannedAmount(budget?.items ?? [], c) : row?.total ?? payment!.transaction.amount;
+    const amount = planned ?? 0, budgeted = planned !== null;
     // Crédit : échéance n sur N (durée initiale) et date de 1ʳᵉ échéance.
     const installment = loan && row ? { n: row.n, of: loan.termMonths, firstDue: dueDate(c, c.startMonth) } : null;
-    return [{ ...c, amount, loanId: loan?.id ?? null, due: dueDate(c, month), payment, installment }];
+    return [{ ...c, amount, budgeted, loanId: loan?.id ?? null, due: dueDate(c, month), payment, installment }];
   });
 }
 
 const ALREADY_PAID = "Cette charge est déjà payée pour ce mois.";
 
-/** Marque la charge payée pour le mois : crée la dépense et le paiement dans une seule transaction SQL. */
+/** Marque la charge payée pour le mois (payée par `userId`) : crée la dépense et le paiement dans une seule transaction SQL. */
 export async function payCharge(scope: Scope, userId: string, id: string, month: Date, amount: number, occurredOn: Date) {
   const next = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1));
   if (occurredOn < month || occurredOn >= next) throw new LedgerError("La date doit être dans le mois de l’échéance.", "occurredOn");
   try {
     return await prisma.$transaction(async (tx) => {
-      const charge = await tx.fixedCharge.findFirst({ where: { id, householdId: scope.householdId, accountId: readable(scope) }, include: { loan: LOAN_INCLUDE } });
+      const charge = await tx.fixedCharge.findFirst({ where: { id, householdId: scope.householdId }, include: { loan: LOAN_INCLUDE } });
       if (!charge) throw new NotFoundError();
-      assertWritable(scope, charge.accountId);
       if (!appliesTo(charge, month) || (charge.loan && !loanRow({ ...charge, loan: charge.loan }, month))) {
         throw new LedgerError("Cette charge ne s’applique pas à ce mois.");
       }
       if (await tx.fixedChargePayment.count({ where: { fixedChargeId: id, month } })) throw new LedgerError(ALREADY_PAID);
       const t = await createEntryTx(tx, scope, userId, {
-        accountId: charge.accountId, kind: charge.kind, amount, occurredOn, note: charge.name, categoryId: charge.categoryId, shared: charge.shared,
+        kind: charge.kind, amount, occurredOn, note: charge.name, categoryId: charge.categoryId, paidById: userId, shared: charge.shared,
       });
       return tx.fixedChargePayment.create({ data: { householdId: scope.householdId, fixedChargeId: id, month, transactionId: t.id } });
     });

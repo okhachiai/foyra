@@ -7,8 +7,9 @@ import { useEffect } from "react";
 const LINKS = [
   ["/tableau-de-bord", "Tableau de bord"],
   ["/budget", "Budget"],
+  ["/epargne", "Épargne"],
   ["/rapports", "Rapports"],
-  ["/accounts", "Comptes"],
+  ["/operations", "Opérations"],
   ["/calendrier", "Calendrier"],
   ["/credits", "Crédits"],
   ["/parametres", "Paramètres"],
@@ -17,7 +18,6 @@ const LINKS = [
 /** Pages rattachées à « Paramètres » dans la navigation. */
 export const SETTINGS = [
   ["/parametres", "Général"],
-  ["/accounts", "Comptes"],
   ["/categories", "Catégories"],
   ["/charges", "Récurrences"],
   ["/members", "Membres"],
@@ -28,7 +28,7 @@ const isActive = (path: string, href: string) => path === href || path.startsWit
 
 export function Nav() {
   const path = usePathname();
-  const settings = SETTINGS.some(([href]) => href !== "/accounts" && isActive(path, href));
+  const settings = SETTINGS.some(([href]) => isActive(path, href));
   return (
     <nav aria-label="Navigation principale">
       {LINKS.map(([href, label]) => (

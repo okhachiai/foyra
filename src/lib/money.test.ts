@@ -15,7 +15,7 @@ describe("parseCents (saisie montant)", () => {
     expect(parseCents(input)).toBeNull(),
   );
 
-  it("accepte 0 et les négatifs pour un solde initial", () => {
+  it("allowSigned : accepte 0 et les négatifs", () => {
     expect(parseCents("-20", { allowSigned: true })).toBe(-2000);
     expect(parseCents("0", { allowSigned: true })).toBe(0);
     expect(parseCents("-0", { allowSigned: true })).toBe(0);

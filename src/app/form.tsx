@@ -49,10 +49,7 @@ export function Field({ name, label, children }: { name: string; label: string; 
   );
 }
 
-/**
- * Case « commune » ; `sharedField` signale qu'elle était affichée (absente = choix laissé au serveur).
- * Masquée en CSS quand le compte choisi est commun (`option[data-common]`, cf. globals.css) : le serveur la force alors.
- */
+/** Case « commune » ; `sharedField` signale qu'elle était affichée (absente = choix laissé au serveur). */
 export function SharedCheck({ label, checked }: { label: string; checked: boolean }) {
   return (
     <label className="check shared-check">

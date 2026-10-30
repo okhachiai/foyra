@@ -4,16 +4,13 @@ import { timingSafeEqual } from "node:crypto";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import type { AccessLevel, AccountKind, AccountSharing, BudgetSource, CategoryKind, LlmProvider, Role } from "@prisma/client";
-import { getScope, setSharing } from "@/lib/access";
+import type { BudgetSource, CategoryKind, LlmProvider, Role } from "@prisma/client";
+import { getScope } from "@/lib/access";
 import {
   changePassword, checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
   recordLoginFailure, requireAdmin, requireUser, setDisabled, setRole, setupHousehold, startSession, updateDisplayName, updateHousehold,
 } from "@/lib/auth";
-import {
-  adjustBalance, archiveAccount, createAccount, createEntry, deleteAccount, createTransfer, deleteTransaction, getTransaction, LedgerError, NotFoundError,
-  parseDay, todayIn, unarchiveAccount, updateAccount, updateEntry, updateTransfer, type EntryInput, type TransferInput,
-} from "@/lib/ledger";
+import { createEntry, deleteTransaction, LedgerError, NotFoundError, parseDay, todayIn, updateEntry, type EntryInput } from "@/lib/ledger";
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, setCategoryArchived, updateCategory, type CategoryFields } from "@/lib/categories";
 import { addItem, createBudget, formatMonth, type IncomeLine, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
 import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
@@ -21,11 +18,11 @@ import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/li
 import { configuredProviders } from "@/lib/llm";
 import { parseCents } from "@/lib/money";
 import { applyAllocations, applyCategories, generateReport } from "@/lib/report";
+import { addSaving } from "@/lib/savings";
 import { itemSignature } from "./budget/signature";
 import type { FormState } from "./form";
-import { itemFlags, ownerField, sharedField, str } from "./form-fields";
+import { itemFlags, sharedField, str } from "./form-fields";
 
-const ACCOUNT_KINDS: AccountKind[] = ["CHECKING", "SAVINGS", "CASH", "OTHER"];
 const AMOUNT_ERROR = "Montant invalide : nombre supérieur à 0, 2 décimales au plus (ex. 12,50).";
 
 /** Erreurs de validation accumulées champ par champ. */
@@ -84,7 +81,7 @@ function requiredField(fd: FormData, name: string, errors: Errors) {
   return value;
 }
 
-/** Utilisateur connecté et sa portée (comptes lisibles / modifiables). */
+/** Utilisateur connecté et sa portée (le foyer). */
 async function requireScope() {
   const user = await requireUser();
   return { user, scope: await getScope(user) };
@@ -221,107 +218,17 @@ export async function changePasswordAction(_: FormState, fd: FormData): Promise<
   done("/profil?ok=1");
 }
 
-// --- Comptes ---
-
-function accountFields(fd: FormData, errors: Errors) {
-  const kind = str(fd, "kind") as AccountKind;
-  if (!ACCOUNT_KINDS.includes(kind)) errors.add("kind", "Type de compte invalide.");
-  // Propriétaire inchangé : à la création, le créateur.
-  return { kind, name: requiredField(fd, "name", errors), notes: str(fd, "notes").slice(0, 1000), ownerId: ownerField(fd) };
-}
-
-function sharingField(fd: FormData) {
-  return (str(fd, "sharing") === "HOUSEHOLD" ? "HOUSEHOLD" : "SELECTED") as AccountSharing;
-}
-
-export async function createAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
-  const errors = new Errors();
-  const data = accountFields(fd, errors);
-  const raw = str(fd, "initialBalance");
-  const initialBalance = raw === "" ? 0 : parseCents(raw, { allowSigned: true });
-  if (initialBalance === null) errors.add("initialBalance", "Montant invalide (ex. 1 234,56 ou -20), 2 décimales au plus.");
-  if (errors.state) return errors.state;
-  let id = "";
-  const error = await run(async () => (id = (await createAccount(scope, user.id, { ...data, initialBalance: initialBalance!, sharing: sharingField(fd) })).id));
-  if (error) return error;
-  done(`/accounts/${id}`);
-}
-
-const ACCESS_LEVELS: AccessLevel[] = ["READ", "WRITE", "MANAGE"];
-
-/** Partage d'un compte : mode + un champ `access:<userId>` = NONE | READ | WRITE | MANAGE par utilisateur. */
-export async function saveSharingAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
-  const id = str(fd, "id");
-  const levels = new Map<string, AccessLevel | null>();
-  for (const [key, value] of fd) {
-    if (!key.startsWith("access:")) continue;
-    const level = String(value);
-    if (level !== "NONE" && !ACCESS_LEVELS.includes(level as AccessLevel)) return { error: "Niveau d’accès invalide." };
-    levels.set(key.slice("access:".length), level === "NONE" ? null : (level as AccessLevel));
-  }
-  const error = await run(() => setSharing(scope, user.id, id, sharingField(fd), levels));
-  if (error) return error;
-  done(`/accounts/${id}`);
-}
-
-export async function updateAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
-  const id = str(fd, "id");
-  const errors = new Errors();
-  const data = accountFields(fd, errors);
-  if (errors.state) return errors.state;
-  const month = parseMonth(todayIn(user.household.timezone).slice(0, 7))!;
-  const error = await run(() => updateAccount(scope, id, data, month));
-  if (error) return error;
-  done(`/accounts/${id}`);
-}
-
-/** Ajuste le solde au montant saisi (opération d'écart datée du jour) ; rien si déjà égal. */
-export async function adjustBalanceAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
-  const id = str(fd, "id");
-  const target = parseCents(str(fd, "target"), { allowSigned: true });
-  if (target === null) return { fields: { target: "Montant invalide (ex. 1 234,56 ou -20), 2 décimales au plus." } };
-  const error = await run(() => adjustBalance(scope, user.id, id, target, parseDay(todayIn(user.household.timezone))!));
-  if (error) return error;
-  done(`/accounts/${id}`);
-}
-
-export async function archiveAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
-  const id = str(fd, "id");
-  const restore = str(fd, "restore") === "1";
-  const error = await run(() => (restore ? unarchiveAccount(scope, id) : archiveAccount(scope, id)));
-  if (error) return error;
-  done(`/accounts/${id}`);
-}
-
-export async function deleteAccountAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
-  const error = await run(() => deleteAccount(scope, str(fd, "id")));
-  if (error) return error;
-  done("/accounts");
-}
-
-// --- Recettes, dépenses, virements ---
+// --- Recettes, dépenses ---
 
 function entryFields(fd: FormData, errors: Errors): EntryInput {
   const kind = str(fd, "kind");
   if (kind !== "INCOME" && kind !== "EXPENSE") errors.add("kind", "Choisissez dépense ou recette.");
+  const paidById = str(fd, "paidById");
+  if (!paidById) errors.add("paidById", "Champ obligatoire.");
   return {
-    accountId: str(fd, "accountId"), kind: kind as EntryInput["kind"], amount: amountField(fd, errors), occurredOn: dayField(fd, errors),
-    note: noteField(fd), categoryId: str(fd, "categoryId") || null,
-    shared: sharedField(fd), // case non affichée (compte commun) : valeur laissée au serveur
+    kind: kind as EntryInput["kind"], amount: amountField(fd, errors), occurredOn: dayField(fd, errors),
+    note: noteField(fd), categoryId: str(fd, "categoryId") || null, paidById, shared: sharedField(fd),
   };
-}
-
-function transferFields(fd: FormData, errors: Errors): TransferInput {
-  const fromAccountId = str(fd, "fromAccountId"), toAccountId = str(fd, "toAccountId");
-  if (!fromAccountId) errors.add("fromAccountId", "Champ obligatoire.");
-  if (!toAccountId) errors.add("toAccountId", "Champ obligatoire.");
-  return { fromAccountId, toAccountId, amount: amountField(fd, errors), occurredOn: dayField(fd, errors), note: noteField(fd) };
 }
 
 /** Clé générée par le formulaire (une par affichage) : rejouer la soumission ne crée pas de doublon. */
@@ -334,56 +241,48 @@ export async function createEntryAction(_: FormState, fd: FormData): Promise<For
   if (errors.state) return errors.state;
   const error = await run(() => createEntry(scope, user.id, { ...input, idempotencyKey: idempotencyKey(fd) }));
   if (error) return error;
-  // Liste blanche : seule la valeur fixe « dashboard » change la page de retour.
-  done(str(fd, "back") === "dashboard" ? "/tableau-de-bord" : `/accounts/${input.accountId}`);
+  // Liste blanche : seules les valeurs fixes « dashboard » et « budget » changent la page de retour.
+  const back = str(fd, "back");
+  done(back === "dashboard" ? "/tableau-de-bord" : `/${back === "budget" ? "budget" : "operations"}?m=${formatMonth(input.occurredOn)}`);
 }
 
-export async function createTransferAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
-  const errors = new Errors();
-  const input = transferFields(fd, errors);
-  if (errors.state) return errors.state;
-  const error = await run(() => createTransfer(scope, user.id, { ...input, idempotencyKey: idempotencyKey(fd) }));
-  if (error) return error;
-  done(`/accounts/${str(fd, "returnTo") || input.fromAccountId}`);
-}
-
-/** Modifie une transaction : un virement est toujours modifié des deux côtés. */
 export async function updateTransactionAction(_: FormState, fd: FormData): Promise<FormState> {
   const { scope } = await requireScope();
-  const id = str(fd, "id");
   const errors = new Errors();
-  const error = await run(async () => {
-    const t = await getTransaction(scope, id);
-    if (t.transferId) {
-      const input = transferFields(fd, errors);
-      if (!errors.state) await updateTransfer(scope, t.transferId, input);
-    } else {
-      const input = entryFields(fd, errors);
-      if (!errors.state) await updateEntry(scope, id, input);
-    }
-  });
+  const input = entryFields(fd, errors);
   if (errors.state) return errors.state;
+  const error = await run(() => updateEntry(scope, str(fd, "id"), input));
   if (error) return error;
-  done(`/accounts/${str(fd, "returnTo")}`);
+  done(`/operations?m=${formatMonth(input.occurredOn)}`);
 }
 
 export async function deleteTransactionAction(_: FormState, fd: FormData): Promise<FormState> {
   const { scope } = await requireScope();
   const error = await run(() => deleteTransaction(scope, str(fd, "id")));
   if (error) return error;
-  done(`/accounts/${str(fd, "returnTo")}`);
+  done("/operations");
+}
+
+/** Versement d'épargne : dépense de la catégorie d'épargne (déduite des revenus), commune sauf case décochée. */
+export async function addSavingAction(_: FormState, fd: FormData): Promise<FormState> {
+  const { user, scope } = await requireScope();
+  const errors = new Errors();
+  const amount = amountField(fd, errors), occurredOn = dayField(fd, errors);
+  const paidById = str(fd, "paidById");
+  if (!paidById) errors.add("paidById", "Champ obligatoire.");
+  if (errors.state) return errors.state;
+  const error = await run(() => addSaving(scope, user.id, { amount, occurredOn, paidById, note: noteField(fd), shared: sharedField(fd), idempotencyKey: idempotencyKey(fd) }));
+  if (error) return error;
+  done(`/epargne?m=${formatMonth(occurredOn)}`);
 }
 
 // --- Catégories (catalogue réservé aux admins) ---
 
 function categoryFields(fd: FormData, errors: Errors): CategoryFields {
-  const forecastAmount = parseForecast(str(fd, "forecastAmount"));
-  if (forecastAmount === undefined) errors.add("forecastAmount", "Montant invalide : 0 ou plus, 2 décimales au plus (ex. 150 ou 12,50).");
   const sortOrder = Number(str(fd, "sortOrder") || "0");
   if (!Number.isInteger(sortOrder) || Math.abs(sortOrder) > 100_000) errors.add("sortOrder", "Ordre invalide : nombre entier.");
   return {
-    name: requiredField(fd, "name", errors), forecastAmount: forecastAmount ?? 0, sortOrder,
+    name: requiredField(fd, "name", errors), sortOrder,
     enabled: fd.get("enabled") === "on", recurring: fd.get("recurring") === "on", isTemplate: fd.get("isTemplate") === "on",
     fixed: fd.has("fixed") ? fd.get("fixed") === "1" : undefined, // champ affiché seulement pour une dépense de premier niveau
   };
@@ -431,7 +330,7 @@ export async function addDefaultCategoriesAction(): Promise<FormState> {
   done("/categories");
 }
 
-// --- Budget mensuel (aucune opération, aucun solde n'est modifié ici) ---
+// --- Budget mensuel (aucune opération n'est modifiée ici) ---
 
 const BUDGET_AMOUNT = "Montant invalide : 0 ou plus, 2 décimales au plus (ex. 150 ou 12,50).";
 
@@ -516,15 +415,11 @@ function chargeFields(fd: FormData, errors: Errors): ChargeInput {
   const rawEnd = str(fd, "endMonth");
   const endMonth = rawEnd ? parseMonth(rawEnd) : null;
   if (rawEnd && !endMonth) errors.add("endMonth", "Mois invalide.");
-  const accountId = str(fd, "accountId");
-  if (!accountId) errors.add("accountId", "Champ obligatoire.");
   const categoryId = str(fd, "categoryId");
   if (!categoryId) errors.add("categoryId", "Champ obligatoire.");
-  const kind = str(fd, "kind");
-  if (kind !== "INCOME" && kind !== "EXPENSE") errors.add("kind", "Choisissez revenu ou dépense.");
   return {
-    kind: kind as CategoryKind, active: fd.get("active") === "on",
-    name: requiredField(fd, "name", errors), amount: amountField(fd, errors), dueDay, accountId, categoryId,
+    kind: "EXPENSE", active: fd.get("active") === "on",
+    name: requiredField(fd, "name", errors), dueDay, categoryId,
     startMonth: startMonth ?? new Date(0), endMonth, shared: sharedField(fd) ?? true,
   };
 }
@@ -556,7 +451,7 @@ export async function deleteChargeAction(_: FormState, fd: FormData): Promise<Fo
   done("/charges");
 }
 
-/** Marque une charge payée pour le mois : crée la dépense réelle (montant et date saisis). */
+/** Marque une charge payée pour le mois : crée la dépense réelle (montant et date saisis, payée par l'utilisateur). */
 export async function payChargeAction(_: FormState, fd: FormData): Promise<FormState> {
   const { user, scope } = await requireScope();
   const month = parseMonth(str(fd, "month"));
@@ -600,12 +495,10 @@ function loanFields(fd: FormData, errors: Errors): LoanInput {
   if (annualRate < 0 || annualRate > 50_000) errors.add("annualRate", "Taux invalide : entre 0 et 50 %, 3 décimales au plus (ex. 3,45).");
   const firstDue = parseDay(str(fd, "firstDue"));
   if (!firstDue) errors.add("firstDue", "Date invalide.");
-  const accountId = str(fd, "accountId");
-  if (!accountId) errors.add("accountId", "Champ obligatoire.");
   const categoryId = str(fd, "categoryId");
   if (!categoryId) errors.add("categoryId", "Champ obligatoire.");
   return {
-    name: requiredField(fd, "name", errors), accountId, categoryId, firstDue: firstDue ?? new Date(0),
+    name: requiredField(fd, "name", errors), categoryId, firstDue: firstDue ?? new Date(0),
     principal: principal ?? 0, annualRate, termMonths,
     payment, insurance: optionalCents(fd, "insurance", errors, 0, true)!,
   };
@@ -640,7 +533,7 @@ export async function deleteLoanAction(_: FormState, fd: FormData): Promise<Form
   done("/credits");
 }
 
-/** Remboursement anticipé : crée la dépense réelle (compte et catégorie du crédit). */
+/** Remboursement anticipé : crée la dépense réelle (catégorie du crédit, payée par l'utilisateur). */
 export async function prepayLoanAction(_: FormState, fd: FormData): Promise<FormState> {
   const { user, scope } = await requireScope();
   const id = str(fd, "id");
@@ -673,7 +566,7 @@ export async function applyAllocationsAction(_: FormState, fd: FormData): Promis
   const user = await requireUser();
   const id = str(fd, "reportId");
   let n = 0;
-  const error = await run(async () => (n = await applyAllocations(user, id)));
+  const error = await run(async () => (n = await applyAllocations(user, id, parseDay(todayIn(user.household.timezone))!)));
   if (error) return error;
   done(`/rapports?id=${encodeURIComponent(id)}&lignes=${n}`);
 }

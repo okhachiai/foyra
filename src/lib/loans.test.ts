@@ -9,30 +9,28 @@ import { createLoan, deleteLoan, getLoan, listLoans, prepay, updateLoan, type Lo
 
 let hh: string;
 let user: string;
-let courant: string;
 let credit: string;
 const jan = parseMonth("2027-01")!;
 const day = (s: string) => parseDay(s)!;
 const loan = (over: Partial<LoanInput> = {}) =>
   createLoan(fullScope(hh), {
-    name: "Maison", accountId: courant, categoryId: credit, firstDue: day("2027-01-05"),
+    name: "Maison", categoryId: credit, firstDue: day("2027-01-05"),
     principal: 10_000_000, annualRate: 1200, termMonths: 240, payment: null, insurance: 0, ...over,
   });
 
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Account", "Session", "User", "Household" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
   const admin = (await setupHousehold({ householdName: "Test", name: "Admin", email: "a@test.fr", password: "password1" }))!;
   hh = admin.householdId;
   user = admin.id;
-  courant = (await prisma.account.create({ data: { householdId: hh, name: "Courant", kind: "CHECKING" } })).id;
   credit = (await prisma.category.create({ data: { householdId: hh, name: "Crédit", kind: "EXPENSE" } })).id;
 });
 
 describe("crédits", () => {
-  it("Créer : charge 468,87 € le 5, de 01/2027 à 12/2046 ; contraintes SQL ; mensualité ≤ intérêts refusée", async () => {
+  it("Créer : charge le 5, de 01/2027 à 12/2046 ; contraintes SQL ; mensualité ≤ intérêts refusée", async () => {
     const l = await loan();
     const c = await getCharge(fullScope(hh), l.fixedChargeId);
-    expect(c).toMatchObject({ amount: 46887, dueDay: 5, startMonth: jan, endMonth: parseMonth("2046-12"), loan: { id: l.id } });
+    expect(c).toMatchObject({ dueDay: 5, startMonth: jan, endMonth: parseMonth("2046-12"), loan: { id: l.id } });
     // CHECK SQL de Loan lui-même (écriture directe, hors contrôles de la charge)
     for (const data of [{ principal: 0 }, { annualRate: -1 }, { annualRate: 50_001 }, { termMonths: 0 }, { termMonths: 601 }, { payment: 0 }, { insurance: -1 }]) {
       await expect(prisma.loan.update({ where: { id: l.id }, data })).rejects.toThrow(/check constraint/i);
@@ -69,7 +67,7 @@ describe("crédits", () => {
     const before = await getLoan(fullScope(hh), l.id, day("2028-01-10"));
     await expect(prepay(fullScope(hh), user, l.id, before.status.balance + 1, day("2028-01-10"), "REDUCE_TERM")).rejects.toMatchObject({ field: "amount" });
     const p = await prepay(fullScope(hh), user, l.id, 1_000_000, day("2028-01-10"), "REDUCE_TERM");
-    expect(await prisma.transaction.findUniqueOrThrow({ where: { id: p.transactionId } })).toMatchObject({ amount: 1_000_000, accountId: courant, categoryId: credit });
+    expect(await prisma.transaction.findUniqueOrThrow({ where: { id: p.transactionId } })).toMatchObject({ amount: 1_000_000, paidById: user, categoryId: credit });
     const after = await getLoan(fullScope(hh), l.id, day("2028-01-10"));
     expect(after.status.balance).toBe(before.status.balance - 1_000_000);
     expect(after.schedule.rows.length).toBeLessThan(240);
@@ -117,7 +115,7 @@ describe("crédits", () => {
     const l = await loan();
     const initial = (await getLoan(fullScope(hh), l.id, day("2028-01-10"))).schedule;
     const p = await prepay(fullScope(hh), user, l.id, 1_000_000, day("2028-01-10"), "REDUCE_TERM");
-    const base = { accountId: courant, kind: "INCOME" as const, amount: 1_000_000, occurredOn: day("2028-01-10"), note: null, categoryId: null };
+    const base = { paidById: user, kind: "INCOME" as const, amount: 1_000_000, occurredOn: day("2028-01-10"), note: null, categoryId: null };
     await expect(updateEntry(fullScope(hh), p.transactionId, base)).rejects.toMatchObject({ field: "kind" });
     const expense = { ...base, kind: "EXPENSE" as const, categoryId: credit };
     await expect(updateEntry(fullScope(hh), p.transactionId, { ...expense, amount: 2_000_000 })).rejects.toMatchObject({ field: "amount" });
@@ -130,12 +128,11 @@ describe("crédits", () => {
   it("Charge-crédit : non modifiable comme charge ; modifier le crédit recalcule ; supprimer garde les dépenses", async () => {
     const l = await loan();
     const c = await getCharge(fullScope(hh), l.fixedChargeId);
-    await expect(updateCharge(fullScope(hh), c.id, { ...c, amount: 100 })).rejects.toThrow();
-    // Compte perso, charge personnelle : la modification du crédit ne touche pas `shared`.
-    await prisma.account.update({ where: { id: courant }, data: { ownerId: user } });
+    await expect(updateCharge(fullScope(hh), c.id, { ...c, name: "Autre" })).rejects.toThrow();
+    // Charge personnelle : la modification du crédit ne touche pas `shared`.
     await prisma.fixedCharge.update({ where: { id: c.id }, data: { shared: false } });
     await updateLoan(fullScope(hh), l.id, {
-      name: "Maison", accountId: courant, categoryId: credit, firstDue: day("2027-02-10"),
+      name: "Maison", categoryId: credit, firstDue: day("2027-02-10"),
       principal: 10_000_000, annualRate: 1200, termMonths: 120, payment: null, insurance: 0,
     });
     expect(await getCharge(fullScope(hh), l.fixedChargeId)).toMatchObject({ dueDay: 10, startMonth: parseMonth("2027-02"), endMonth: parseMonth("2037-01"), shared: false });

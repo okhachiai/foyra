@@ -12,37 +12,9 @@ enum Role {
   MEMBER
 }
 
-enum AccountKind {
-  CHECKING
-  SAVINGS
-  CASH
-  OTHER
-}
-
 enum TransactionKind {
   INCOME
   EXPENSE
-  TRANSFER
-}
-
-// Sens d'une ligne de virement : OUT débite le compte, IN le crédite.
-enum TransferSide {
-  OUT
-  IN
-}
-
-// Accès explicite d'un utilisateur à un compte ; absence de ligne = aucun accès (le rôle admin n'en donne aucun).
-// MANAGE : modifier, archiver et régler le partage du compte.
-enum AccessLevel {
-  READ
-  WRITE
-  MANAGE
-}
-
-// HOUSEHOLD : tout utilisateur du foyer a au moins l'écriture ; SELECTED : seuls les accès explicites comptent.
-enum AccountSharing {
-  HOUSEHOLD
-  SELECTED
 }
 
 // Création d'un budget mensuel : reprise des lignes récurrentes du budget précédent, ou modèles de catégories.
@@ -88,7 +60,6 @@ model Household {
   createdAt    DateTime     @default(now())
 
   users         User[]
-  accounts      Account[]
   transactions  Transaction[]
   categories    Category[]
   budgets       Budget[]
@@ -113,8 +84,7 @@ model User {
   household     Household       @relation(fields: [householdId], references: [id])
   sessions      Session[]
   transactions  Transaction[]
-  accountAccess AccountAccess[]
-  ownedAccounts Account[]       @relation("AccountOwner")
+  paid          Transaction[] @relation("PaidBy")
   reports       Report[]
 }
 
@@ -130,69 +100,33 @@ model Session {
   @@index([userId])
 }
 
-model Account {
-  id             String         @id @default(cuid())
-  householdId    String
-  kind           AccountKind
-  name           String
-  initialBalance Int            @default(0) // fixé à la création
-  notes          String         @default("")
-  sharing        AccountSharing @default(SELECTED)
-  archivedAt     DateTime?
-  ownerId        String? // null = compte commun (joint) ; distinct des droits
-  createdAt      DateTime       @default(now())
-
-  household    Household       @relation(fields: [householdId], references: [id])
-  owner        User?           @relation("AccountOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  transactions Transaction[]
-  fixedCharges FixedCharge[]
-  access       AccountAccess[]
-
-  @@index([householdId])
-  @@index([ownerId])
-}
-
-model AccountAccess {
-  userId    String
-  accountId String
-  level     AccessLevel
-
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-
-  @@id([userId, accountId])
-  @@index([accountId])
-}
-
+// Opération réelle (recette / dépense), sans compte bancaire : `paidById` = membre qui a payé ou reçu.
 model Transaction {
   id             String          @id @default(cuid())
   householdId    String
-  accountId      String
   createdById    String
+  paidById       String
   kind           TransactionKind
   amount         Int
   occurredOn     DateTime        @db.Date
   note           String?
-  transferId     String?
-  transferSide   TransferSide?
   categoryId     String?
-  // Clé envoyée par le formulaire : une seconde soumission identique ne crée rien (côté OUT pour un virement).
+  // Clé envoyée par le formulaire : une seconde soumission identique ne crée rien.
   idempotencyKey String?
-  shared         Boolean         @default(true) // dépense commune ; forcé true sur un compte commun
+  shared         Boolean         @default(true) // dépense commune / recette commune (partagées au prorata)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
   household    Household           @relation(fields: [householdId], references: [id])
-  account      Account             @relation(fields: [accountId], references: [id])
   createdBy    User                @relation(fields: [createdById], references: [id])
+  paidBy       User                @relation("PaidBy", fields: [paidById], references: [id])
   category     Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   fixedPayment FixedChargePayment?
   prepayment   LoanPrepayment?
 
-  @@unique([transferId, transferSide])
   @@unique([householdId, idempotencyKey])
-  @@index([accountId, occurredOn])
-  @@index([householdId])
+  @@index([householdId, occurredOn])
+  @@index([paidById])
   @@index([categoryId])
 }
 
@@ -205,12 +139,12 @@ model Category {
   parentId       String?
   kind           CategoryKind
   name           String
-  forecastAmount Int          @default(0) // montant par défaut des nouveaux budgets, centimes >= 0 (CHECK SQL)
   enabled        Boolean      @default(true) // « Inclure dans le calcul » par défaut
   recurring      Boolean      @default(true) // « Reprendre le mois suivant » par défaut
   isTemplate     Boolean      @default(true) // utilisée quand un budget part des modèles
   sortOrder      Int          @default(0)
   fixed          Boolean      @default(false) // dépense de premier niveau : charge fixe (factures…) ou variable (courses…) ; les sous-catégories suivent leur parent
+  savings        Boolean      @default(false) // dépense de premier niveau « Épargne » : déduite des revenus comme une charge, suivie sur /epargne
   archivedAt     DateTime?
   createdAt      DateTime     @default(now())
 
@@ -226,7 +160,7 @@ model Category {
   @@index([parentId])
 }
 
-// Budget prévisionnel d'un mois (au plus un par foyer et par mois). Ne crée jamais d'opération, ne touche aucun solde.
+// Budget prévisionnel d'un mois (au plus un par foyer et par mois). Ne crée jamais d'opération.
 model Budget {
   id          String       @id @default(cuid())
   householdId String
@@ -275,7 +209,7 @@ model BudgetItem {
   @@index([categoryId])
 }
 
-// Récurrence mensuelle (revenu ou dépense) : échéance indicative, s'applique au mois M si active et startMonth <= M <= endMonth.
+// Récurrence mensuelle : échéance indicative, sans montant (lu sur la ligne du budget du mois de même catégorie), s'applique au mois M si active et startMonth <= M <= endMonth.
 // Ne crée jamais de paiement toute seule : « marquer payée » crée l'opération sur action explicite.
 model FixedCharge {
   id          String       @id @default(cuid())
@@ -283,17 +217,14 @@ model FixedCharge {
   kind        CategoryKind @default(EXPENSE)
   active      Boolean      @default(true)
   name        String
-  amount      Int // centimes, > 0 (CHECK SQL)
   dueDay      Int // 1–31 (CHECK SQL) ; échéance = min(jour, dernier jour du mois)
-  accountId   String
   categoryId  String
   startMonth  DateTime     @db.Date // 1er du mois (CHECK SQL)
   endMonth    DateTime?    @db.Date // 1er du mois, >= startMonth (CHECK SQL)
-  shared      Boolean      @default(true) // charge commune (partagée au prorata) ; forcé true sur un compte commun
+  shared      Boolean      @default(true) // charge commune (partagée au prorata)
   createdAt   DateTime     @default(now())
 
   household Household            @relation(fields: [householdId], references: [id])
-  account   Account              @relation(fields: [accountId], references: [id])
   category  Category             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   payments  FixedChargePayment[]
   loan      Loan?
@@ -318,7 +249,7 @@ model FixedChargePayment {
   @@index([householdId, month])
 }
 
-// Crédit amortissable : porté par une charge fixe (nom, compte, catégorie, jour, période) ; échéancier calculé, jamais stocké.
+// Crédit amortissable : porté par une charge fixe (nom, catégorie, jour, période) ; échéancier calculé, jamais stocké.
 model Loan {
   id            String   @id @default(cuid())
   householdId   String

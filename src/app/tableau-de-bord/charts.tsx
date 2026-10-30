@@ -4,12 +4,11 @@ import * as React from "react";
 import type { DashboardCharts } from "@/lib/dashboard";
 
 /*
- * Bento analytique (adapté de « Analytics Bento », vasnev.art) : solde, entrées/sorties, dépenses par catégorie, saisonnalité.
+ * Bento analytique (adapté de « Analytics Bento », vasnev.art) : entrées/sorties, dépenses par catégorie, saisonnalité.
  * SVG seul, sans bibliothèque de graphiques ; styles dans globals.css (.ab-*). Montants en centimes.
  */
 
 const COLORS = {
-  balance: ["#22d3ee", "#34d399"],
   income: ["#22d3ee", "#818cf8"],
   expense: ["#ffb800", "#ff3da5"],
   radar: "#3bf08c",
@@ -163,85 +162,6 @@ function Segmented({ items, value, onChange, label }: { items: string[]; value: 
 }
 
 const leave = (setHover: (v: null) => void, tip: TipRef) => () => { setHover(null); tip.current?.hide(); };
-
-/* ---------------- A : solde sur 30 jours ---------------- */
-
-function BalanceChart({ series, tip }: { series: { label: string; value: number }[]; tip: TipRef }) {
-  const money = React.useContext(MoneyContext);
-  const [ref, { w: W, h: H }] = useSize();
-  const reduce = useReducedMotion();
-  const [drawn, setDrawn] = React.useState(false);
-  const [hover, setHover] = React.useState<number | null>(null);
-  const id = React.useId().replace(/:/g, "");
-  React.useEffect(() => { if (!W) return; const r = requestAnimationFrame(() => requestAnimationFrame(() => setDrawn(true))); return () => cancelAnimationFrame(r); }, [W]);
-
-  const vals = series.map((s) => s.value);
-  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || Math.abs(hi) || 100;
-  const raw = span / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((s) => s >= raw) || raw;
-  const mn = lo - span * 0.45, mx = hi + span * 0.08, top = 30, bot = 14;
-  const Y = (v: number) => top + (1 - (v - mn) / (mx - mn)) * (H - top - bot);
-  const ticks: number[] = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) ticks.push(v);
-  const P = vals.map((v, i) => [14 + (i / (vals.length - 1)) * (W - 66), Y(v)] as [number, number]);
-  const d = W ? smooth(P) : "";
-  const last = P[P.length - 1];
-
-  const move = (e: React.PointerEvent) => {
-    const r = (e.currentTarget as SVGRectElement).ownerSVGElement!.getBoundingClientRect();
-    const i = Math.max(0, Math.min(vals.length - 1, Math.round(((e.clientX - r.left - 14) / (W - 66)) * (vals.length - 1))));
-    setHover(i);
-    tip.current?.show(r.left + P[i][0], r.top + P[i][1], { title: series[i].label, rows: [{ label: "Solde", value: money(vals[i]), color: COLORS.balance[1] }] });
-  };
-
-  return (
-    <div ref={ref} className="ab-chart">
-      <div className="ab-caption">30 derniers jours</div>
-      {W > 0 && (
-        <svg width={W} height={H} role="img" aria-label={`Solde global sur 30 jours : de ${money(vals[0])} à ${money(vals[vals.length - 1])}`}>
-          <defs>
-            <linearGradient id={`${id}l`} gradientUnits="userSpaceOnUse" x1={0} x2={W} y1={0} y2={0}>
-              <stop offset="0" stopColor={COLORS.balance[0]} />
-              <stop offset="1" stopColor={COLORS.balance[1]} />
-            </linearGradient>
-            <linearGradient id={`${id}a`} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0" stopColor={COLORS.balance[1]} stopOpacity={0.18} />
-              <stop offset="1" stopColor={COLORS.balance[1]} stopOpacity={0} />
-            </linearGradient>
-            <linearGradient id={`${id}m`} x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0" stopColor="#fff" stopOpacity="0.2" />
-              <stop offset="1" stopColor="#fff" stopOpacity="1" />
-            </linearGradient>
-            <mask id={`${id}k`}><rect width={W} height={H} fill={`url(#${id}m)`} /></mask>
-          </defs>
-          {ticks.map((v) => (
-            <g key={v}>
-              <line x1={0} x2={W} y1={Y(v)} y2={Y(v)} stroke="var(--hairline)" />
-              <text x={W - 10} y={Y(v) - 5} textAnchor="end" fontSize={10} fill="var(--faint)" style={{ fontFamily: MONO }}>{compact.format(v / 100)}</text>
-            </g>
-          ))}
-          <path d={`${d}L${last[0]},${H}L${P[0][0]},${H}Z`} fill={`url(#${id}a)`} mask={`url(#${id}k)`} />
-          <path
-            d={d}
-            pathLength={1}
-            fill="none"
-            stroke={`url(#${id}l)`}
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            style={{ strokeDasharray: 1, strokeDashoffset: drawn || reduce ? 0 : 1, transition: reduce ? "none" : "stroke-dashoffset 1.4s cubic-bezier(.3,.8,.2,1) .2s" }}
-          />
-          <circle cx={last[0]} cy={last[1]} r={4.5} fill={COLORS.balance[1]} stroke="var(--surface)" strokeWidth={2} />
-          {hover !== null && (
-            <>
-              <line x1={P[hover][0]} x2={P[hover][0]} y1={0} y2={H} stroke="var(--faint)" />
-              <circle cx={P[hover][0]} cy={P[hover][1]} r={4.5} fill={COLORS.balance[1]} stroke="var(--surface)" strokeWidth={2} />
-            </>
-          )}
-          <rect width={W} height={H} fill="transparent" onPointerMove={move} onPointerLeave={leave(setHover, tip)} />
-        </svg>
-      )}
-    </div>
-  );
-}
 
 /* ---------------- B : entrées (en haut) / sorties (en bas) cumulées ---------------- */
 
@@ -493,7 +413,7 @@ function Radar({ values, year, tip }: { values: number[]; year: string; tip: Tip
 
 /* ---------------- le bento ---------------- */
 
-export function AnalyticsBento({ currency, total, data }: { currency: string; total: number; data: DashboardCharts }) {
+export function AnalyticsBento({ currency, data }: { currency: string; data: DashboardCharts }) {
   const money = React.useMemo(() => {
     const f = new Intl.NumberFormat("fr-FR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 });
     return (cents: number) => f.format(cents / 100);
@@ -510,18 +430,7 @@ export function AnalyticsBento({ currency, total, data }: { currency: string; to
   return (
     <MoneyContext.Provider value={money}>
       <div className={shown ? "ab-grid ab-shown" : "ab-grid"}>
-        <section className="ab-card w5" aria-label="Solde global">
-          <div className="ab-split">
-            <div>
-              <div className="ab-label">Solde global</div>
-              <div className={total < 0 ? "ab-big ab-num neg" : "ab-big ab-num"}><CountUp value={total} /></div>
-              <div className="ab-note"><Delta value={data.balance.delta} /> sur 30 jours</div>
-            </div>
-            <BalanceChart series={data.balance.series} tip={tip} />
-          </div>
-        </section>
-
-        <section className="ab-card w7" aria-label="Entrées et sorties du mois">
+        <section className="ab-card w12" aria-label="Entrées et sorties du mois">
           <div className="ab-split">
             <div>
               <div className="ab-label">Solde du mois</div>

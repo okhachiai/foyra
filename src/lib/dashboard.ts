@@ -1,43 +1,36 @@
-import { Prisma } from "@prisma/client";
-import { readable, type Scope } from "./access";
-import { addMonths, budgetTotals } from "./budget";
+import type { Scope } from "./access";
+import { addMonths, budgetTotals, savedIn } from "./budget";
 import { chargeStatus } from "./calendar";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
-import { listAccounts } from "./ledger";
 import { bigintToCents } from "./money";
 
 /**
- * Tableau de bord du mois de `today` (jour du foyer), uniquement sur les comptes lisibles :
- * revenus et dépenses enregistrés (virements exclus), résultat, comptes actifs et leurs soldes,
- * dernières opérations, dépenses récurrentes encore à payer, et rappel du budget prévu s'il existe.
+ * Tableau de bord de `month` (par défaut le mois de `today`, jour du foyer) : revenus saisis dans le budget du mois, dépenses
+ * enregistrées, résultat, net des opérations du mois (recettes − dépenses réelles), dernières opérations jusqu'à la fin du mois,
+ * dépenses récurrentes encore à payer (retard jugé par rapport à `today`), et rappel du budget prévu s'il existe.
  */
-export async function getDashboard(scope: Scope, today: Date) {
-  const month = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+export async function getDashboard(scope: Scope, today: Date, month = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))) {
   const householdId = scope.householdId;
-  const [accounts, sums, lines, charges, budget] = await Promise.all([
-    listAccounts(scope),
+  const [sums, recent, charges, budget, saved] = await Promise.all([
     prisma.transaction.groupBy({
       by: ["kind"],
-      where: { householdId, accountId: readable(scope), kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: addMonths(month, 1) } },
+      where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) } },
       _sum: { amount: true },
     }),
     prisma.transaction.findMany({
-      where: { householdId, accountId: readable(scope) },
+      where: { householdId, occurredOn: { lt: addMonths(month, 1) } },
       orderBy: [{ occurredOn: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-      take: 12,
-      include: { account: { select: { name: true } }, category: { select: { name: true, parent: { select: { name: true } } } } },
+      take: 8,
+      include: { paidBy: { select: { name: true } }, category: { select: { name: true, parent: { select: { name: true } } } } },
     }),
     listMonthCharges(scope, month),
-    prisma.budget.findUnique({ where: { householdId_month: { householdId, month } }, include: { items: { include: { category: { select: { fixed: true } } } } } }),
+    prisma.budget.findUnique({ where: { householdId_month: { householdId, month } }, include: { items: { include: { category: { select: { fixed: true, savings: true } } } } } }),
+    savedIn(householdId, month),
   ]);
-  const active = accounts.filter((a) => !a.archivedAt);
+  const totals = budget && budgetTotals(budget.items, saved);
   const sum = (kind: "INCOME" | "EXPENSE") => sums.find((s) => s.kind === kind)?._sum.amount ?? 0;
-  const income = sum("INCOME"), expense = sum("EXPENSE");
-
-  // Un virement une seule fois : côté sortant s'il est visible.
-  const outs = new Set(lines.filter((t) => t.transferSide === "OUT").map((t) => t.transferId));
-  const recent = lines.filter((t) => t.transferSide !== "IN" || !outs.has(t.transferId)).slice(0, 8);
+  const income = totals?.income ?? 0, expense = sum("EXPENSE");
 
   const unpaid = charges.filter((c) => c.kind === "EXPENSE" && !c.payment).map((c) => ({ ...c, status: chargeStatus(c, today) }));
   const late = unpaid.filter((c) => c.status === "late");
@@ -47,13 +40,12 @@ export async function getDashboard(scope: Scope, today: Date) {
     income,
     expense,
     result: income - expense,
-    accounts: active,
-    total: active.reduce((s, a) => s + a.balance, 0),
+    net: sum("INCOME") - expense,
     recent,
     unpaid,
     toPay: unpaid.reduce((s, c) => s + c.amount, 0),
     late: { count: late.length, amount: late.reduce((s, c) => s + c.amount, 0) },
-    budget: budget && { status: budget.status, totals: budgetTotals(budget.items) },
+    budget: budget && { status: budget.status, totals: totals! },
   };
 }
 
@@ -63,39 +55,29 @@ const pct = (cur: number, prev: number) => (prev ? ((cur - prev) / Math.abs(prev
 const fr = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
 const NONE = "none";
 
-/** Mouvements agrégés par jour, sens, côté de virement, catégorie et compte archivé ou non. */
-export type Flow = { day: number; kind: "INCOME" | "EXPENSE" | "TRANSFER"; side: "IN" | "OUT" | null; categoryId: string | null; archived: boolean; amount: number };
+/** Opérations agrégées par jour, sens et catégorie. */
+export type Flow = { day: number; kind: "INCOME" | "EXPENSE"; categoryId: string | null; amount: number };
 
-/** Graphiques du tableau de bord : mouvements des comptes lisibles depuis le 1er janvier de l'an dernier. */
-export async function getDashboardCharts(scope: Scope, today: Date, total: number) {
+/** Graphiques du tableau de bord : opérations du foyer depuis le 1er janvier de l'an dernier. */
+export async function getDashboardCharts(scope: Scope, today: Date) {
   const from = new Date(utc(today.getUTCFullYear() - 1, 0));
   const [rows, categories] = await Promise.all([
     prisma.$queryRaw<(Omit<Flow, "day" | "amount"> & { day: Date; amount: bigint })[]>`
-      SELECT t."occurredOn" AS day, t."kind"::text AS kind, t."transferSide"::text AS side, t."categoryId" AS "categoryId",
-        a."archivedAt" IS NOT NULL AS archived, SUM(t."amount")::bigint AS amount
-      FROM "Transaction" t JOIN "Account" a ON a."id" = t."accountId"
-      WHERE t."householdId" = ${scope.householdId} AND t."occurredOn" >= ${from}
-        ${scope.read ? Prisma.sql`AND t."accountId" = ANY(${scope.read})` : Prisma.empty}
-      GROUP BY 1, 2, 3, 4, 5`,
+      SELECT "occurredOn" AS day, "kind"::text AS kind, "categoryId", SUM("amount")::bigint AS amount
+      FROM "Transaction"
+      WHERE "householdId" = ${scope.householdId} AND "occurredOn" >= ${from}
+      GROUP BY 1, 2, 3`,
     prisma.category.findMany({ where: { householdId: scope.householdId }, select: { id: true, name: true, parentId: true } }),
   ]);
-  return buildCharts(rows.map((r) => ({ ...r, day: r.day.getTime(), amount: bigintToCents(r.amount) })), categories, today, total);
+  return buildCharts(rows.map((r) => ({ ...r, day: r.day.getTime(), amount: bigintToCents(r.amount) })), categories, today);
 }
 
 export type DashboardCharts = ReturnType<typeof buildCharts>;
 
-export function buildCharts(flows: Flow[], categories: { id: string; name: string; parentId: string | null }[], today: Date, total: number) {
+export function buildCharts(flows: Flow[], categories: { id: string; name: string; parentId: string | null }[], today: Date) {
   const y = today.getUTCFullYear(), m = today.getUTCMonth(), t = today.getTime();
-  const entries = flows.filter((f) => f.kind !== "TRANSFER");
   const sum = (kind: "INCOME" | "EXPENSE", from: number, to: number, pick: (f: Flow) => boolean = () => true) =>
-    entries.reduce((s, f) => (f.kind === kind && f.day >= from && f.day < to && pick(f) ? s + f.amount : s), 0);
-
-  // Solde global en fin de journée : solde actuel moins tout ce qui a été passé après ce jour (comptes actifs).
-  const balance = Array.from({ length: 30 }, (_, i) => {
-    const d = t - (29 - i) * DAY;
-    const after = flows.reduce((s, f) => (!f.archived && f.day > d ? s + (f.kind === "INCOME" || f.side === "IN" ? f.amount : -f.amount) : s), 0);
-    return { label: fr({ day: "numeric", month: "short" }).format(d), value: total - after };
-  });
+    flows.reduce((s, f) => (f.kind === kind && f.day >= from && f.day < to && pick(f) ? s + f.amount : s), 0);
 
   // Entrées et sorties cumulées jour par jour : ce mois puis les deux précédents.
   const cumul = (kind: "INCOME" | "EXPENSE") =>
@@ -111,7 +93,7 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
     { label: "Mois dernier", from: utc(y, m - 1), to: utc(y, m), prev: [utc(y, m - 2), utc(y, m - 1)], compare: "le mois précédent" },
     { label: "Cette année", from: utc(y, 0), to: t + DAY, prev: [utc(y - 1, 0), yearAgo], compare: "l’an dernier à date" },
   ];
-  const ids = [...new Set(entries.filter((f) => f.kind === "EXPENSE").map((f) => f.categoryId))];
+  const ids = [...new Set(flows.filter((f) => f.kind === "EXPENSE").map((f) => f.categoryId))];
   const items = ids
     .map((id) => ({
       id,
@@ -144,7 +126,6 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
   });
 
   return {
-    balance: { series: balance, delta: pct(total, balance[0].value) },
     flows: {
       income,
       expense,

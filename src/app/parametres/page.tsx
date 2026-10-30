@@ -7,7 +7,6 @@ import { ActionForm, Field } from "../form";
 import { SettingsNav } from "../nav";
 
 const SECTIONS = [
-  ["/accounts", "Comptes", "Création, modification, archivage et partage des comptes."],
   ["/categories", "Catégories", "Catalogue des revenus et dépenses, modèles de budget."],
   ["/charges", "Récurrences", "Échéances mensuelles indicatives : aucun paiement automatique."],
   ["/members", "Membres et permissions", "Membres du foyer et rôles (administrateurs)."],

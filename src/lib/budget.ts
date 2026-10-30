@@ -1,5 +1,5 @@
 import type { BudgetStatus, CategoryKind, Prisma } from "@prisma/client";
-import { readable, type Scope } from "./access";
+import type { Scope } from "./access";
 import { prisma } from "./db";
 import { isCode, LedgerError, NotFoundError, parseDay } from "./ledger";
 
@@ -16,8 +16,13 @@ export type Item = {
   id: string; parentId: string | null; categoryId: string | null; kind: CategoryKind;
   label: string; amount: number; included: boolean; recurring: boolean; sortOrder: number;
   shared: boolean; reserve: boolean; // ligne commune (sinon personnelle) ; « Réserve imprévus »
-  category?: { fixed: boolean } | null; // charge fixe ou variable : lue sur la catégorie d'une ligne principale
+  category?: { fixed: boolean; savings?: boolean } | null; // charge fixe, variable ou épargne : lue sur la catégorie d'une ligne principale
 };
+
+export type Group = "income" | "fixed" | "savings" | "variable";
+/** Groupe d'une ligne principale : l'épargne (catégorie d'épargne, toujours fixe) est sortie des charges fixes ; sans catégorie : variable. */
+export const groupOf = (n: Pick<Item, "kind" | "category">): Group =>
+  n.kind === "INCOME" ? "income" : n.category?.savings ? "savings" : n.category?.fixed ? "fixed" : "variable";
 
 export type Node = Item & { children: Item[]; total: number };
 
@@ -40,18 +45,16 @@ export function buildTree(items: Item[]): Node[] {
 
 /**
  * Totaux prévus : une branche exclue (parent non inclus) ne compte pas, ses enfants non plus.
- * Dépenses réparties en charges fixes / variables selon la catégorie de la ligne principale (sans catégorie : variable).
+ * Dépenses réparties en charges fixes / épargne / variables (voir groupOf).
+ * Épargne = max(prévu, `saved` déjà versé ce mois) : un versement hors budget n'est plus disponible.
+ * Reste = revenus − charges fixes − charges variables − épargne.
  */
-export function budgetTotals(items: Item[]) {
-  let income = 0, fixed = 0, variable = 0;
-  for (const n of buildTree(items)) {
-    if (!n.included) continue;
-    if (n.kind === "INCOME") income += n.total;
-    else if (n.category?.fixed) fixed += n.total;
-    else variable += n.total;
-  }
-  const expense = fixed + variable;
-  return { income, expense, fixed, variable, remaining: income - expense };
+export function budgetTotals(items: Item[], saved = 0) {
+  const t: Record<Group, number> = { income: 0, fixed: 0, savings: 0, variable: 0 };
+  for (const n of buildTree(items)) if (n.included) t[groupOf(n)] += n.total;
+  t.savings = Math.max(t.savings, saved);
+  const expense = t.fixed + t.variable + t.savings;
+  return { ...t, expense, remaining: t.income - expense };
 }
 
 /** Ligne à créer dans un nouveau budget (sans identifiant : chaque mois a ses propres lignes). */
@@ -74,21 +77,21 @@ export function carryOver(items: Item[]): Seed[] {
 }
 
 type TemplateCategory = {
-  id: string; kind: CategoryKind; name: string; forecastAmount: number; enabled: boolean; recurring: boolean;
+  id: string; kind: CategoryKind; name: string; enabled: boolean; recurring: boolean;
   isTemplate: boolean; sortOrder: number; archivedAt: Date | null;
   children: Omit<TemplateCategory, "children">[];
 };
 
-/** Budget depuis les modèles : catégories actives marquées « modèle », montant par défaut (0 pour un parent avec enfants). */
+/** Budget depuis les modèles : catégories actives marquées « modèle », montants à 0 (saisis dans le budget). */
 export function fromTemplates(categories: TemplateCategory[]): Seed[] {
   const seed = (c: Omit<TemplateCategory, "children">) => ({
-    categoryId: c.id, kind: c.kind, label: c.name, amount: c.forecastAmount, included: c.enabled, recurring: c.recurring, sortOrder: c.sortOrder, shared: true, reserve: false,
+    categoryId: c.id, kind: c.kind, label: c.name, amount: 0, included: c.enabled, recurring: c.recurring, sortOrder: c.sortOrder, shared: true, reserve: false,
   });
   return categories
     .filter((c) => c.isTemplate && !c.archivedAt)
     .map((c) => {
       const children = c.children.filter((s) => s.isTemplate && !s.archivedAt).map(seed);
-      return { ...seed(c), amount: children.length ? 0 : c.forecastAmount, children };
+      return { ...seed(c), children };
     });
 }
 
@@ -109,23 +112,48 @@ export function envelopes(tree: (Node & { actual: number })[]): { lines: Envelop
 
 // --- Lecture ---
 
+/** Versé dans le mois sur les catégories d'épargne (et leurs sous-catégories), opérations communes et personnelles. */
+export async function savedIn(householdId: string, month: Date) {
+  const r = await prisma.transaction.aggregate({
+    where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) }, category: { OR: [{ savings: true }, { parent: { savings: true } }] } },
+    _sum: { amount: true },
+  });
+  return r._sum.amount ?? 0;
+}
+
+/**
+ * Réel du mois par groupe (voir groupOf) : toutes les opérations du foyer, budgétées ou non ; une sous-catégorie suit son parent,
+ * sans catégorie : variable. Reste réel = revenus − charges fixes − charges variables − épargne enregistrées.
+ */
+export async function actualTotals(householdId: string, month: Date) {
+  const [sums, categories] = await Promise.all([
+    prisma.transaction.groupBy({ by: ["kind", "categoryId"], where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) } }, _sum: { amount: true } }),
+    prisma.category.findMany({ where: { householdId }, select: { id: true, fixed: true, savings: true, parent: { select: { fixed: true, savings: true } } } }),
+  ]);
+  const top = new Map(categories.map((c) => [c.id, c.parent ?? c]));
+  const t: Record<Group, number> = { income: 0, fixed: 0, savings: 0, variable: 0 };
+  for (const s of sums) t[groupOf({ kind: s.kind, category: s.categoryId ? top.get(s.categoryId) : null })] += s._sum.amount ?? 0;
+  const expense = t.fixed + t.variable + t.savings;
+  return { ...t, expense, remaining: t.income - expense };
+}
+
 const ITEM_ORDER = [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }];
 
 /**
  * Budget d'un mois (null s'il n'est pas encore créé : jamais créé implicitement), son arbre, ses totaux prévus,
- * et le réel par ligne (opérations des comptes lisibles rattachées à la catégorie d'origine).
+ * et le réel par ligne (opérations du foyer rattachées à la catégorie d'origine).
  * Dépense : seules les opérations communes ou personnelles selon la ligne principale ; revenu : toutes.
  */
 export async function getBudget(scope: Scope, month: Date) {
   const householdId = scope.householdId;
   const budget = await prisma.budget.findUnique({
     where: { householdId_month: { householdId, month } },
-    include: { items: { orderBy: ITEM_ORDER, include: { category: { select: { fixed: true } } } } },
+    include: { items: { orderBy: ITEM_ORDER, include: { category: { select: { fixed: true, savings: true } } } } },
   });
   if (!budget) return null;
   const sums = await prisma.transaction.groupBy({
     by: ["categoryId", "shared"],
-    where: { householdId, accountId: readable(scope), kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: addMonths(month, 1) } },
+    where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) } },
     _sum: { amount: true },
   });
   const sum = new Map(sums.map((s) => [`${s.categoryId}:${s.shared}`, s._sum.amount ?? 0]));
@@ -137,7 +165,7 @@ export async function getBudget(scope: Scope, month: Date) {
     actual: actual(n, n) + n.children.reduce((s, c) => s + actual(c, n), 0),
     children: n.children.map((c) => ({ ...c, actual: actual(c, n) })),
   }));
-  return { ...budget, tree, totals: budgetTotals(budget.items) };
+  return { ...budget, tree, totals: budgetTotals(budget.items, await savedIn(householdId, month)) };
 }
 
 // --- Écriture ---
@@ -168,19 +196,6 @@ export type IncomeLine = { label: string; amount: number; categoryId: string | n
 export const incomeLines = (seeds: Seed[]): IncomeLine[] =>
   seeds.filter((s) => s.kind === "INCOME" && s.included).flatMap((s) => (s.children.length ? s.children.filter((c) => c.included) : [s]))
     .map(({ label, amount, categoryId }) => ({ label, amount, categoryId }));
-
-/**
- * Revenus proposés + revenus fixes du mois (charges de type revenu), en tête avec leur montant actuel.
- * Retirées des lignes proposées : celles du même libellé (reprises du mois précédent) et les lignes à 0 de la même catégorie (modèles vides).
- */
-export function mergeIncomes(proposed: IncomeLine[], fixed: { name: string; amount: number; categoryId: string }[]): IncomeLine[] {
-  const names = new Set(fixed.map((f) => f.name.toLocaleLowerCase("fr")));
-  const cats = new Set(fixed.map((f) => f.categoryId));
-  return [
-    ...fixed.map((f) => ({ label: f.name, amount: f.amount, categoryId: f.categoryId })),
-    ...proposed.filter((p) => !names.has(p.label.toLocaleLowerCase("fr")) && !(p.amount === 0 && p.categoryId && cats.has(p.categoryId))),
-  ];
-}
 
 /**
  * Création explicite du budget d'un mois selon le réglage du foyer : reprise des lignes récurrentes
@@ -247,8 +262,15 @@ async function oneReserve<T>(write: () => Promise<T>) {
   }
 }
 
+/** Catégorie active du foyer de même nom (casse ignorée) sous le même parent, créée hors modèles à défaut : la ligne suit son réel. */
+async function categoryFor(tx: Db, householdId: string, kind: CategoryKind, name: string, parentId: string | null) {
+  const where = { householdId, kind, parentId, archivedAt: null, name: { equals: name, mode: "insensitive" as const } };
+  const found = await tx.category.findFirst({ where, select: { id: true } });
+  return (found ?? await tx.category.create({ data: { householdId, kind, name, parentId, isTemplate: false }, select: { id: true } })).id;
+}
+
 /**
- * Ajoute une ligne. Sous-ligne : le parent doit être une ligne principale du même budget ; elle prend son type et son
+ * Ajoute une ligne, rattachée à sa catégorie (existante ou créée ; parent sans catégorie rattaché aussi). Sous-ligne : le parent doit être une ligne principale du même budget ; elle prend son type et son
  * caractère commun (une réserve est refusée), et le montant direct du parent repasse à 0 (son total devient la somme de ses enfants).
  * Elle se place en dernier.
  */
@@ -256,6 +278,7 @@ export async function addItem(householdId: string, budgetId: string, input: Item
   return oneReserve(() => prisma.$transaction(async (tx) => {
     await lockBudget(tx, householdId, budgetId);
     let kind = input.kind;
+    let categoryId: string;
     if (input.reserve && (input.parentId || kind === "INCOME")) throw new LedgerError(RESERVE_TOP);
     if (input.reserve && !input.included) throw new LedgerError(RESERVE_INCLUDED);
     if (input.parentId) {
@@ -264,10 +287,14 @@ export async function addItem(householdId: string, budgetId: string, input: Item
       if (parent.parentId) throw new LedgerError("Une sous-catégorie ne peut pas avoir de sous-catégorie.", "parentId");
       kind = parent.kind;
       input = { ...input, shared: parent.shared };
-      await tx.budgetItem.update({ where: { id: parent.id }, data: { amount: 0 } });
+      const parentCategory = parent.categoryId ?? await categoryFor(tx, householdId, kind, parent.label, null);
+      await tx.budgetItem.update({ where: { id: parent.id }, data: { amount: 0, categoryId: parentCategory } });
+      categoryId = await categoryFor(tx, householdId, kind, input.label, parentCategory);
+    } else {
+      categoryId = await categoryFor(tx, householdId, kind, input.label, null);
     }
     const last = await tx.budgetItem.aggregate({ where: { budgetId, parentId: input.parentId, kind }, _max: { sortOrder: true } });
-    return tx.budgetItem.create({ data: { ...input, kind, householdId, budgetId, sortOrder: (last._max.sortOrder ?? -1) + 1 } });
+    return tx.budgetItem.create({ data: { ...input, kind, categoryId, householdId, budgetId, sortOrder: (last._max.sortOrder ?? -1) + 1 } });
   }));
 }
 

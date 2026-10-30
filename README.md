@@ -1,6 +1,6 @@
 # Foyra
 
-Gestion des comptes d'un foyer, auto-hébergée : comptes (courant, épargne, espèces, autre), recettes, dépenses, virements, soldes par compte et solde global. Un foyer par instance, plusieurs membres.
+Budget mensuel d'un foyer, auto-hébergé : budget prévisionnel par mois, recettes et dépenses réelles (sans comptes bancaires), charges récurrentes, crédits et partage au prorata des revenus. Un foyer par instance, plusieurs membres.
 
 ## Installation (Docker)
 
@@ -37,7 +37,7 @@ Un mot de passe provisoire aléatoire s'affiche une seule fois ; toutes les sess
 
 Un rapport (dépenses du jour, répartition du budget, planning, conseil) est généré à la demande ou chaque soir. Un fournisseur n'est proposé que si ses variables sont renseignées dans `.env` : `ANTHROPIC_API_KEY` (+ `CLAUDE_MODEL`) pour Claude, `LOCAL_LLM_URL` / `LOCAL_LLM_MODEL` / `LOCAL_LLM_API_KEY` pour un modèle local compatible OpenAI.
 
-Le service `cron` appelle `POST /api/reports/daily` avec `Authorization: Bearer $CRON_TOKEN` à l'heure `REPORT_CRON` (défaut `0 20 * * *`, fuseau Europe/Paris). Renseignez un `CRON_TOKEN` secret : s'il est vide, la route refuse tout. Un seul rapport quotidien par foyer et par jour ; un nouvel appel ne le régénère pas.
+Le service `cron` appelle `POST /api/reports/daily` avec `Authorization: Bearer $CRON_TOKEN` à l'heure `REPORT_CRON` (défaut `0 20 * * *`, fuseau Europe/Paris). Renseignez un `CRON_TOKEN` secret **hexadécimal** (`openssl rand -hex 32`) : il est recopié dans une ligne de crontab, où `%`, guillemets ou `$` la casseraient ; s'il est vide, la route refuse tout. Réponses et erreurs (401, 500) : `docker compose logs cron`. Un seul rapport quotidien par foyer et par jour ; un nouvel appel ne le régénère pas.
 
 ## Sauvegarde et restauration
 
@@ -100,12 +100,10 @@ Une clé SSH doit permettre une connexion sans mot de passe. Le code local, y co
 
 ## Règles métier
 
-- Membres : l'admin change le rôle et désactive / réactive un utilisateur (jamais de suppression). Désactivé : sessions fermées, connexion refusée, accès aux comptes conservés. Le foyer garde toujours au moins un admin actif ; on ne peut pas désactiver son propre compte. Rétrogradé en membre : aucun accès aux comptes tant que l'admin n'en donne pas.
+- Membres : l'admin change le rôle et désactive / réactive un utilisateur (jamais de suppression). Désactivé : sessions fermées, connexion refusée, opérations conservées. Le foyer garde toujours au moins un admin actif ; on ne peut pas désactiver son propre compte. Tout membre voit et saisit budgets, opérations, récurrences et crédits ; catégories, membres et réglages restent réservés aux admins.
 - Montants en centimes entiers, toujours > 0 (contrainte CHECK) ; le sens découle du type.
-- Solde = solde initial + somme signée des opérations, jamais stocké. Le découvert est autorisé.
-- Un virement = deux lignes liées (`transferId`, côté `OUT`/`IN`), créées, modifiées et supprimées ensemble.
-- Un compte ne s'archive qu'à solde nul ; archivé, il est en lecture seule et sort du solde global ; un gestionnaire peut le réactiver.
-- Accès aux comptes : explicites (lecture / écriture / gestion) ou partage « tout le foyer » (écriture). Le rôle admin ne donne aucun accès aux comptes privés.
-- Budget mensuel : au plus un par mois, créé explicitement (reprise des lignes récurrentes du précédent ou modèles, selon le réglage du foyer), brouillon ou validé. Lignes copiées : modifier le catalogue ne change jamais un budget existant. Un parent avec sous-lignes vaut la somme de ses sous-lignes incluses. Le budget ne crée aucune opération et ne touche aucun solde.
+- Pas de comptes bancaires : chaque opération porte un « payé / reçu par » (membre) et une case « commune ». Le net du mois = recettes − dépenses enregistrées du mois, jamais stocké.
+- Partage : dépenses communes prévues (récurrences et lignes communes du budget) moins recettes communes, réparties au prorata des revenus personnels ; « communes payées » = dépenses communes payées par le membre.
+- Budget mensuel : au plus un par mois, créé explicitement (reprise des lignes récurrentes du précédent ou modèles, selon le réglage du foyer), brouillon ou validé. Lignes copiées : modifier le catalogue ne change jamais un budget existant. Un parent avec sous-lignes vaut la somme de ses sous-lignes incluses. Le budget ne crée aucune opération.
 - Récurrences : échéances indicatives (revenu ou dépense) ; seule l'action « marquer payée / reçu » enregistre l'opération.
 - Opérations : clé d'idempotence par formulaire (double clic sans doublon).

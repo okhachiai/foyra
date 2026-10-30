@@ -1,27 +1,27 @@
 import { Prisma, type LlmProvider, type Report, type ReportTrigger, type Role } from "@prisma/client";
-import { canRead, fullScope, getScope, readable } from "./access";
+import { fullScope, getScope } from "./access";
 import { addMonths, envelopes, formatMonth, getBudget, saveItems, type Envelope, type ItemFields } from "./budget";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
-import { ADJUSTMENT_NOTE, formatDay, getTransaction, isCode, LedgerError, listAccounts, NotFoundError, parseDay, updateEntry } from "./ledger";
+import { formatDay, getTransaction, isCode, LedgerError, monthNet, NotFoundError, parseDay, updateEntry } from "./ledger";
 import { complete, LlmError, pickProvider } from "./llm";
-import { accountsByOwner, getSplit, visibleSplit, type Split } from "./split";
+import { getSplit, type Split } from "./split";
 
 type Kind = "INCOME" | "EXPENSE";
 type Viewer = { id: string; role: Role; householdId: string };
 
-/** Opération transmise au LLM : libellé = note, sinon nom de catégorie. */
-export type Op = { id: string; label: string; amount: number; kind: Kind; account: string; categoryId: string | null };
+/** Opération transmise au LLM : libellé = note, sinon nom de catégorie ; `paidBy` = nom du membre. */
+export type Op = { id: string; label: string; amount: number; kind: Kind; paidBy: string; categoryId: string | null };
 
 /** Tout ce que reçoit le LLM ; chaque montant est calculé par l'app (centimes). */
 export type ReportInput = {
   today: string; daysLeft: number; month: string; split: Split;
   envelopes: (Envelope & { allocatable: boolean })[];
   reserve: (Envelope & { overrun: number; allocatable: boolean }) | null;
-  available: number; // reste commun à répartir
+  available: number; // net des opérations du mois moins les échéances non payées : reste à répartir
   todayOps: Op[]; uncategorized: Op[];
   categories: { id: string; name: string; kind: Kind }[];
-  upcoming: { name: string; amount: number; due: string; account: string }[];
+  upcoming: { name: string; amount: number; due: string }[];
   members: { id: string; name: string }[];
 };
 
@@ -109,54 +109,52 @@ export function validateOutput(input: ReportInput, text: string): { ok: true; ou
   try {
     v = JSON.parse(text);
   } catch {
-    return { ok: false, error: "Réponse non JSON." };
+    // Modèle local : JSON entouré de ```json ou de prose ; on garde du premier « { » au dernier « } ».
+    try {
+      v = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+    } catch {
+      return { ok: false, error: "Réponse non JSON." };
+    }
   }
   if (!conforms(v, OUTPUT_SCHEMA)) return { ok: false, error: "Réponse non conforme au schéma." };
   const error = check(input, v as ReportOutput);
   return error ? { ok: false, error } : { ok: true, output: v as ReportOutput };
 }
 
+const MAX_UNCATEGORIZED = 50;
+
 /**
  * Entrée du rapport du mois de `today` (Date UTC minuit, jour du foyer) vue par `viewer`.
- * Partage : agrégats seuls pour les membres dont il ne lit pas tous les comptes. Enveloppes et disponible : portée complète
- * (argent commun, identique pour tous). Opérations et échéances : comptes lisibles seulement ; ajustements de solde exclus.
+ * Tout le foyer est visible : partage, enveloppes, disponible, opérations et échéances.
  * Aucun e-mail ni identifiant de session : seuls ids, noms et libellés partent au LLM.
  */
 export async function buildInput(viewer: Viewer, today: Date): Promise<{ budgetId: string; input: ReportInput }> {
   const householdId = viewer.householdId;
   const month = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
   const all = fullScope(householdId);
-  const scope = await getScope(viewer);
-  const [budget, split, accounts, charges, ops, categories] = await Promise.all([
+  const [budget, split, net, charges, ops, categories] = await Promise.all([
     getBudget(all, month),
     getSplit(householdId, month),
-    listAccounts(all),
+    monthNet(all, month),
     listMonthCharges(all, month),
     prisma.transaction.findMany({
       where: {
-        householdId, accountId: readable(scope), kind: { in: ["INCOME", "EXPENSE"] }, occurredOn: { gte: month, lt: addMonths(month, 1) },
+        householdId, occurredOn: { gte: month, lt: addMonths(month, 1) },
         OR: [{ occurredOn: today }, { categoryId: null }],
       },
-      include: { account: { select: { name: true } }, category: { select: { name: true } } },
+      include: { paidBy: { select: { name: true } }, category: { select: { name: true } } },
       orderBy: [{ occurredOn: "asc" }, { createdAt: "asc" }],
     }),
     prisma.category.findMany({ where: { householdId, archivedAt: null }, select: { id: true, name: true, kind: true }, orderBy: [{ kind: "asc" }, { sortOrder: "asc" }, { name: "asc" }] }),
   ]);
   if (!budget) throw new LedgerError("Aucun budget pour ce mois.");
-  // Filtré ici : en SQL, NOT (… AND note = …) écarterait aussi les notes nulles.
-  const kept = ops.filter((t) => !(t.categoryId === null && t.note === ADJUSTMENT_NOTE));
-
   // Allouable : ligne sans sous-ligne (le plan porte sur une ligne précise).
   const leaf = new Set(budget.tree.filter((n) => !n.children.length).map((n) => n.id));
   const { lines, reserve } = envelopes(budget.tree);
-  const common = new Set(accounts.filter((a) => a.ownerId === null && !a.archivedAt).map((a) => a.id));
-  const unpaid = charges.filter((c) => c.kind === "EXPENSE" && !c.payment);
-  const available = Math.max(
-    accounts.filter((a) => common.has(a.id)).reduce((s, a) => s + a.balance, 0) - unpaid.filter((c) => common.has(c.accountId)).reduce((s, c) => s + c.amount, 0),
-    0,
-  );
+  const unpaid = charges.filter((c) => !c.payment);
+  const available = Math.max(net - unpaid.reduce((s, c) => s + c.amount, 0), 0);
   const op = (t: (typeof ops)[number]): Op => ({
-    id: t.id, label: t.note ?? t.category?.name ?? "", amount: t.amount, kind: t.kind as Kind, account: t.account.name, categoryId: t.categoryId,
+    id: t.id, label: t.note ?? t.category?.name ?? "", amount: t.amount, kind: t.kind as Kind, paidBy: t.paidBy.name, categoryId: t.categoryId,
   });
   const day = formatDay(today);
   // Jours restants, aujourd'hui compris (le 30 d'un mois de 30 jours : 1).
@@ -166,16 +164,18 @@ export async function buildInput(viewer: Viewer, today: Date): Promise<{ budgetI
     budgetId: budget.id,
     input: {
       today: day, daysLeft, month: formatMonth(month),
-      split: visibleSplit(split, viewer, scope, accountsByOwner(accounts)),
+      split,
       envelopes: lines.map((l) => ({ ...l, allocatable: leaf.has(l.id) })),
       reserve: reserve && { ...reserve, allocatable: leaf.has(reserve.id) },
       available,
-      todayOps: kept.filter((t) => t.occurredOn.getTime() === today.getTime()).map(op),
-      uncategorized: kept.filter((t) => t.categoryId === null).map(op),
+      todayOps: ops.filter((t) => t.occurredOn.getTime() === today.getTime()).map(op),
+      // Les 50 plus récentes : borne la taille de la demande et de la réponse.
+      uncategorized: ops.filter((t) => t.categoryId === null)
+        .sort((a, b) => b.occurredOn.getTime() - a.occurredOn.getTime() || b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
+        .slice(0, MAX_UNCATEGORIZED).map(op),
       categories: categories.map((c) => ({ ...c, kind: c.kind as Kind })),
       // Dépenses prévues seulement : `upcoming` ne porte pas de sens.
-      upcoming: unpaid.filter((c) => formatDay(c.due) >= day && canRead(scope, c.accountId))
-        .map((c) => ({ name: c.name, amount: c.amount, due: formatDay(c.due), account: c.account.name })),
+      upcoming: unpaid.filter((c) => formatDay(c.due) >= day).map((c) => ({ name: c.name, amount: c.amount, due: formatDay(c.due) })),
       members: split.members.map((m) => ({ id: m.userId, name: m.name })),
     },
   };
@@ -269,6 +269,8 @@ export function listReports(viewer: Viewer): Promise<Report[]> {
   });
 }
 
+export const STALE = "Rapport périmé : relancez « Analyser ».";
+
 /** Rapport visible du viewer (admin ou auteur) avec ses propositions ; sinon NotFoundError. */
 async function proposal(viewer: Viewer, reportId: string) {
   const r = await prisma.report.findFirst({
@@ -280,9 +282,14 @@ async function proposal(viewer: Viewer, reportId: string) {
   return { ...r, output: r.output as ReportOutput };
 }
 
-/** Applique la répartition : prévu de chaque ligne = réel actuel (relu maintenant) + allocation. Lignes disparues ou devenues parents ignorées. */
-export async function applyAllocations(viewer: Viewer, reportId: string): Promise<number> {
+/**
+ * Applique la répartition : prévu de chaque ligne = réel actuel (relu maintenant) + allocation. Lignes disparues ou devenues parents ignorées.
+ * Seul le rapport du jour `today` (Date UTC minuit, jour du foyer) s'applique : plus tard, réel actuel + allocation compterait deux fois
+ * les dépenses faites depuis.
+ */
+export async function applyAllocations(viewer: Viewer, reportId: string, today: Date): Promise<number> {
   const r = await proposal(viewer, reportId);
+  if (r.day.getTime() !== today.getTime()) throw new LedgerError(STALE);
   if (r.budget.status === "VALIDATED") throw new LedgerError("Repasser le budget en brouillon pour appliquer");
   const budget = await getBudget(fullScope(r.householdId), r.budget.month);
   const nodes = new Map(budget!.tree.filter((n) => !n.children.length).map((n) => [n.id, n]));
@@ -295,7 +302,7 @@ export async function applyAllocations(viewer: Viewer, reportId: string): Promis
   return items.size;
 }
 
-/** Applique les catégories proposées sous la portée du viewer ; opérations disparues, illisibles ou non modifiables ignorées. */
+/** Applique les catégories proposées ; opérations disparues ou déjà catégorisées ignorées. */
 export async function applyCategories(viewer: Viewer, reportId: string): Promise<number> {
   const r = await proposal(viewer, reportId);
   const scope = await getScope(viewer);
@@ -303,9 +310,9 @@ export async function applyCategories(viewer: Viewer, reportId: string): Promise
   for (const c of r.output.categorize) {
     try {
       const t = await getTransaction(scope, c.transactionId);
-      if (t.kind === "TRANSFER" || t.categoryId === c.categoryId) continue;
-      const { accountId, kind, amount, occurredOn, note, shared } = t;
-      await updateEntry(scope, t.id, { accountId, kind, amount, occurredOn, note, shared, categoryId: c.categoryId });
+      if (t.categoryId !== null) continue; // jamais d'écrasement d'un choix de l'utilisateur
+      const { kind, amount, occurredOn, note, shared, paidById } = t;
+      await updateEntry(scope, t.id, { kind, amount, occurredOn, note, shared, paidById, categoryId: c.categoryId });
       n++;
     } catch (e) {
       if (!(e instanceof LedgerError || e instanceof NotFoundError)) throw e;

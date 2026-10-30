@@ -2,7 +2,7 @@ export const MAX_CENTS = 2_147_483_647; // limite d'un Int PostgreSQL
 
 /**
  * « 1 234,56 » → 123456, « 12.5 » → 1250. Renvoie null si la saisie est invalide.
- * Par défaut le montant doit être > 0 ; `allowSigned` accepte 0 et les négatifs (solde initial).
+ * Par défaut le montant doit être > 0 ; `allowSigned` accepte 0 et les négatifs.
  */
 export function parseCents(input: string, { allowSigned = false } = {}): number | null {
   let s = input.trim().replace(/[\s  ]+/g, " ");

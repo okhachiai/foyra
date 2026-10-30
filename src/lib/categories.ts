@@ -5,7 +5,7 @@ import { parseCents } from "./money";
 
 type Db = Prisma.TransactionClient;
 
-export type CategoryFields = { name: string; forecastAmount: number; enabled: boolean; recurring: boolean; isTemplate: boolean; sortOrder: number; fixed?: boolean };
+export type CategoryFields = { name: string; enabled: boolean; recurring: boolean; isTemplate: boolean; sortOrder: number; fixed?: boolean };
 export type CategoryInput = CategoryFields & { kind: CategoryKind; parentId: string | null };
 
 /** Montant prévisionnel saisi : vide → 0, montant ≥ 0 en centimes, sinon undefined (invalide). */
@@ -15,7 +15,7 @@ export function parseForecast(raw: string): number | undefined {
   return cents === null || cents < 0 ? undefined : cents;
 }
 
-/** Modèles de catégories : [nom, sous-catégories]. Montants à 0, inclus, repris le mois suivant. */
+/** Modèles de catégories : [nom, sous-catégories]. Inclus, repris le mois suivant. */
 export const DEFAULT_CATEGORIES: Record<CategoryKind, [string, string[]][]> = {
   INCOME: [["Revenus", ["Salaire 1", "Salaire 2", "Autres revenus"]]],
   EXPENSE: [

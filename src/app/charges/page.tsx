@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { canWrite, getScope, readable } from "@/lib/access";
+import { getScope } from "@/lib/access";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
 import { addMonths, formatMonth, parseMonth } from "@/lib/budget";
@@ -19,11 +19,10 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
   const scope = await getScope(user);
   const [charges, inactive] = await Promise.all([
     listMonthCharges(scope, month),
-    prisma.fixedCharge.findMany({ where: { householdId: user.householdId, accountId: readable(scope), active: false }, orderBy: { name: "asc" } }),
+    prisma.fixedCharge.findMany({ where: { householdId: user.householdId, active: false }, orderBy: { name: "asc" } }),
   ]);
   const money = (cents: number) => formatCents(cents, user.household.currency);
-  const sum = (kind: "INCOME" | "EXPENSE", unpaidOnly = false) =>
-    charges.reduce((s, c) => s + (c.kind === kind && !(unpaidOnly && c.payment) ? c.amount : 0), 0);
+  const sum = (unpaidOnly = false) => charges.reduce((s, c) => s + (unpaidOnly && c.payment ? 0 : c.amount), 0);
   const m = formatMonth(month);
   const lastDay = formatDay(new Date(addMonths(month, 1).getTime() - 86_400_000));
 
@@ -36,14 +35,12 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
       </nav>
 
       <SettingsNav admin={user.role === "ADMIN"} />
-      <p className="muted">Échéances indicatives : rien n’est payé automatiquement et aucun solde n’est modifié. « Marquer payée » enregistre l’opération réelle.</p>
+      <p className="muted">Échéances indicatives : rien n’est payé automatiquement. « Marquer payée » enregistre l’opération réelle. Montants lus dans le budget du mois (ligne de même catégorie).</p>
       <section className="total">
         <span className="muted">Dépenses récurrentes du mois</span>
-        <strong>{money(sum("EXPENSE"))}</strong>
+        <strong>{money(sum())}</strong>
         <dl className="totals">
-          <dt>Dont à payer</dt><dd>{money(sum("EXPENSE", true))}</dd>
-          <dt>Revenus récurrents</dt><dd>{money(sum("INCOME"))}</dd>
-          <dt>Dont à recevoir</dt><dd>{money(sum("INCOME", true))}</dd>
+          <dt>Dont à payer</dt><dd>{money(sum(true))}</dd>
         </dl>
       </section>
 
@@ -62,31 +59,29 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
                   <span>
                     <Link href={`/charges/${c.id}`}>{c.name}</Link>
                     <small className="muted">
-                      {c.kind === "INCOME" ? "Revenu" : "Dépense"} · échéance {frDay(c.due)} · {c.account.name} · {c.category.parent ? `${c.category.parent.name} › ` : ""}{c.category.name}
+                      Échéance {frDay(c.due)} · {c.category.parent ? `${c.category.parent.name} › ` : ""}{c.category.name}
                     </small>
                   </span>
-                  <span className="amount">{money(c.amount)}</span>
+                  <span className="amount">{c.budgeted ? money(c.amount) : <small className="muted">Absente du budget</small>}</span>
                 </div>
                 {t ? (
                   <small>
-                    <span className="pos">{c.kind === "INCOME" ? "Reçu" : "Payée"}</span> · {money(t.amount)} le {frDay(t.occurredOn)}
-                    {canWrite(scope, t.accountId) && <> · <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>voir l’opération</Link></>}
+                    <span className="pos">Payée</span> · {money(t.amount)} le {frDay(t.occurredOn)}
+                    {" · "}<Link href={`/operations/${t.id}`}>voir l’opération</Link>
                   </small>
-                ) : !canWrite(scope, c.accountId) ? (
-                  <small className="neg">{c.kind === "INCOME" ? "À recevoir" : "À payer"}</small>
                 ) : (
                   <details>
-                    <summary><span className="neg">{c.kind === "INCOME" ? "À recevoir" : "À payer"}</span> · {c.kind === "INCOME" ? "Marquer reçu" : "Marquer payée"}</summary>
+                    <summary><span className="neg">À payer</span> · Marquer payée</summary>
                     <ActionForm action={payChargeAction}>
                       <input type="hidden" name="id" value={c.id} />
                       <input type="hidden" name="month" value={m} />
                       <Field name="amount" label="Montant">
-                        <input name="amount" inputMode="decimal" required autoComplete="off" defaultValue={centsToInput(c.amount)} />
+                        <input name="amount" inputMode="decimal" required autoComplete="off" defaultValue={c.amount ? centsToInput(c.amount) : ""} />
                       </Field>
                       <Field name="occurredOn" label="Date">
                         <input name="occurredOn" type="date" required min={`${m}-01`} max={lastDay} defaultValue={formatDay(c.due)} />
                       </Field>
-                      <button type="submit">{c.kind === "INCOME" ? "Enregistrer le revenu" : "Enregistrer la dépense"}</button>
+                      <button type="submit">Enregistrer la dépense</button>
                     </ActionForm>
                   </details>
                 )}
@@ -101,7 +96,7 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
           <ul className="list">
             {inactive.map((c) => (
               <li key={c.id}>
-                <Link href={`/charges/${c.id}`}><span>{c.name}<small className="muted">{c.kind === "INCOME" ? "Revenu" : "Dépense"} · le {c.dueDay}</small></span><span className="amount">{money(c.amount)}</span></Link>
+                <Link href={`/charges/${c.id}`}><span>{c.name}<small className="muted">Le {c.dueDay}</small></span></Link>
               </li>
             ))}
           </ul>

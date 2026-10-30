@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { canWrite, getScope } from "@/lib/access";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { listCategories } from "@/lib/categories";
 import { getCharge } from "@/lib/charges";
-import { NotFoundError, writableAccounts } from "@/lib/ledger";
+import { NotFoundError } from "@/lib/ledger";
 import { deleteChargeAction } from "../../actions";
 import { ActionForm } from "../../form";
 import { ChargeForm } from "../charge-form";
@@ -17,26 +17,13 @@ export default async function EditChargePage({ params }: { params: Promise<{ id:
     throw e;
   });
   if (charge.loan) redirect(`/credits/${charge.loan.id}`);
-  if (!canWrite(scope, charge.accountId)) {
-    return (
-      <>
-        <p><Link href="/charges">← Récurrences</Link></p>
-        <h1>{charge.name}</h1>
-        <p className="muted">Accès en lecture seule sur le compte de cette récurrence : elle ne peut pas être modifiée.</p>
-      </>
-    );
-  }
-  const [accounts, categories] = await Promise.all([
-    // Le compte actuel reste affiché même archivé : l'enregistrement demandera d'en choisir un autre.
-    writableAccounts(scope, charge.accountId),
-    listCategories(user.householdId),
-  ]);
+  const categories = await listCategories(user.householdId);
 
   return (
     <>
       <p><Link href="/charges">← Récurrences</Link></p>
       <h1>{charge.name}</h1>
-      <ChargeForm charge={charge} accounts={accounts} categories={categories} startMonth="" />
+      <ChargeForm charge={charge} categories={categories} startMonth="" />
       <ActionForm
         action={deleteChargeAction} className="danger-zone"
         confirm="Supprimer cette récurrence ? Les opérations déjà enregistrées sont conservées."

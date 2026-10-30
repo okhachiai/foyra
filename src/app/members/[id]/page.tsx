@@ -34,8 +34,8 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
           <h2>{member.disabledAt ? "Réactiver" : "Désactiver"}</h2>
           <p className="muted">
             {member.disabledAt
-              ? "Le compte retrouve la connexion avec son mot de passe et ses accès."
-              : "Le compte est déconnecté et ne peut plus se connecter ; ses accès aux comptes sont conservés."}
+              ? "Le membre retrouve la connexion avec son mot de passe."
+              : "Le membre est déconnecté et ne peut plus se connecter ; ses opérations sont conservées."}
           </p>
           <ActionForm
             action={setDisabledAction}
@@ -47,12 +47,6 @@ export default async function MemberPage({ params }: { params: Promise<{ id: str
           </ActionForm>
         </>
       )}
-
-      <h2>Accès aux comptes</h2>
-      <p className="muted">
-        Les accès (lecture, écriture, gestion) se règlent depuis la page de chaque compte, par ses gestionnaires.
-        Un administrateur a accès à tous les comptes du foyer.
-      </p>
     </>
   );
 }

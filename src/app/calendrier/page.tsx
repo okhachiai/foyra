@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { canWrite, getScope } from "@/lib/access";
+import { getScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { addMonths, formatMonth, parseMonth } from "@/lib/budget";
 import { getCalendar, type ChargeStatus } from "@/lib/calendar";
@@ -53,14 +53,11 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
 
       {forecast && (
         <section className="total">
-          <span className="muted">Solde prévisionnel fin de mois (échéances non payées déduites)</span>
+          <span className="muted">Prévision fin de mois : net des opérations du mois, échéances non payées déduites</span>
           <dl className="totals">
-            {forecast.map((a) => (
-              <div key={a.id} style={{ display: "contents" }}>
-                <dt>{a.name}</dt>
-                <dd>{money(a.balance)} → <b className={a.end < 0 ? "neg" : undefined}>{money(a.end)}</b></dd>
-              </div>
-            ))}
+            <dt>Net du mois</dt><dd>{money(forecast.net)}</dd>
+            <dt>Échéances à payer</dt><dd>{money(-forecast.unpaid)}</dd>
+            <dt>Fin de mois</dt><dd><b className={forecast.end < 0 ? "neg" : undefined}>{money(forecast.end)}</b></dd>
           </dl>
         </section>
       )}
@@ -81,17 +78,15 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
                       <div className="row">
                         <span>
                           <Link href={`/charges/${c.id}`}>{c.name}</Link>
-                          <small className="muted">Échéance · {c.account.name}</small>
+                          <small className="muted">Échéance</small>
                         </span>
                         <span className="amount">{money(c.amount)}</span>
                       </div>
                       {t ? (
                         <small>
                           <span className={cls}>{label}</span> · {money(t.amount)} le {frDay(t.occurredOn)}
-                          {canWrite(scope, t.accountId) && <> · <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>voir la dépense</Link></>}
+                          {" · "}<Link href={`/operations/${t.id}`}>voir la dépense</Link>
                         </small>
-                      ) : !canWrite(scope, c.accountId) ? (
-                        <small className={cls}>{label}</small>
                       ) : (
                         <details>
                           <summary><span className={cls}>{label}</span> · Marquer payée</summary>
@@ -114,20 +109,20 @@ export default async function CalendarPage({ searchParams }: { searchParams: Pro
                 );
               })}
               {transactions.map((t) => {
-                const credit = t.kind === "INCOME" || t.transferSide === "IN";
+                const credit = t.kind === "INCOME";
                 const cat = t.category && `${t.category.parent ? `${t.category.parent.name} › ` : ""}${t.category.name}`;
-                const label = t.kind === "TRANSFER" ? `Virement ${t.transferSide === "OUT" ? "vers" : "depuis"} ${t.otherAccount ?? "compte non partagé"}` : t.kind === "INCOME" ? "Recette" : "Dépense";
-                const content = (
-                  <>
-                    <span>
-                      {t.note || cat || label}
-                      <small className="muted">{[t.account.name, t.note || cat ? label : null].filter(Boolean).join(" · ")}</small>
-                    </span>
-                    <span className={credit ? "amount pos" : "amount"}>{money(credit ? t.amount : -t.amount)}</span>
-                  </>
+                const label = credit ? "Recette" : "Dépense";
+                return (
+                  <li key={t.id}>
+                    <Link href={`/operations/${t.id}`}>
+                      <span>
+                        {t.note || cat || label}
+                        <small className="muted">{[t.paidBy.name, t.note || cat ? label : null].filter(Boolean).join(" · ")}</small>
+                      </span>
+                      <span className={credit ? "amount pos" : "amount"}>{money(credit ? t.amount : -t.amount)}</span>
+                    </Link>
+                  </li>
                 );
-                // Compte archivé ou non modifiable : opération en lecture seule, comme sur la page du compte.
-                return <li key={t.id}>{t.account.archivedAt || !canWrite(scope, t.accountId) ? <div>{content}</div> : <Link href={`/accounts/${t.accountId}/transactions/${t.id}`}>{content}</Link>}</li>;
               })}
             </ul>
           </section>

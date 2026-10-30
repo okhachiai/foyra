@@ -1,14 +1,14 @@
 import Link from "next/link";
 import type { ReportTrigger } from "@prisma/client";
-import { fullScope, getScope, readable } from "@/lib/access";
+import { fullScope } from "@/lib/access";
 import { requireUser } from "@/lib/auth";
 import { envelopes, getBudget } from "@/lib/budget";
 import { listCategories } from "@/lib/categories";
 import { prisma } from "@/lib/db";
-import { formatDay } from "@/lib/ledger";
+import { formatDay, parseDay, todayIn } from "@/lib/ledger";
 import { configuredProviders, PROVIDER_LABELS } from "@/lib/llm";
 import { formatCents } from "@/lib/money";
-import { listReports, type ReportInput, type ReportOutput } from "@/lib/report";
+import { listReports, STALE, type ReportInput, type ReportOutput } from "@/lib/report";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -100,13 +100,12 @@ async function ReportView({ user, report, money }: { user: User; report: Report;
   const input = report.input as ReportInput;
   const output = report.output as ReportOutput | null;
   const opIds = [...new Set([...input.todayOps, ...input.uncategorized].map((o) => o.id))];
-  const scope = await getScope(user);
   const [budget, categories, ops] = await Promise.all([
     getBudget(fullScope(user.householdId), month),
     listCategories(user.householdId, { withArchived: true }),
     prisma.transaction.findMany({
-      where: { id: { in: opIds }, householdId: user.householdId, accountId: readable(scope) },
-      include: { account: { select: { name: true } }, category: { select: { name: true } } },
+      where: { id: { in: opIds }, householdId: user.householdId },
+      include: { paidBy: { select: { name: true } }, category: { select: { name: true } } },
       orderBy: [{ occurredOn: "asc" }, { createdAt: "asc" }],
     }),
   ]);
@@ -119,6 +118,8 @@ async function ReportView({ user, report, money }: { user: User; report: Report;
   const rows = env ? [...env.lines, ...(env.reserve ? [env.reserve] : [])] : [];
   const sum = (f: (e: (typeof rows)[number]) => number) => rows.reduce((s, e) => s + f(e), 0);
   const validated = budget?.status === "VALIDATED";
+  const stale = report.day.getTime() !== parseDay(todayIn(user.household.timezone))!.getTime();
+  const locked = stale ? STALE : validated ? "Repasser le budget en brouillon pour appliquer" : null;
 
   return (
     <div className="grid gap-4">
@@ -149,7 +150,7 @@ async function ReportView({ user, report, money }: { user: User; report: Report;
                     <tr className="text-left text-muted">
                       <th className={TH}>Date</th>
                       <th className={TH}>Libellé</th>
-                      <th className={TH}>Compte</th>
+                      <th className={TH}>Payé par</th>
                       <th className={`${TH} text-right`}>Montant</th>
                       <th className={TH}>Catégorie</th>
                       <th className="py-2 font-medium">Catégorie proposée</th>
@@ -162,7 +163,7 @@ async function ReportView({ user, report, money }: { user: User; report: Report;
                         <tr key={t.id} className="border-t border-hairline">
                           <td className={`${TD} whitespace-nowrap`}>{frDay(formatDay(t.occurredOn))}</td>
                           <td className={`${TD} break-words`}>{t.note ?? t.category?.name ?? ""}</td>
-                          <td className={TD}>{t.account.name}</td>
+                          <td className={TD}>{t.paidBy.name}</td>
                           <td className={`${TD} text-right whitespace-nowrap ${t.kind === "EXPENSE" ? "text-heading" : "text-pos"}`}>{money(t.kind === "EXPENSE" ? -t.amount : t.amount)}</td>
                           <td className={TD}>{t.category?.name ?? <span className="text-muted">Sans catégorie</span>}</td>
                           <td className="py-2">{p && p !== t.categoryId ? catName.get(p) ?? "—" : <span className="text-muted">—</span>}</td>
@@ -229,10 +230,10 @@ async function ReportView({ user, report, money }: { user: User; report: Report;
             {output.allocations.length > 0 && (
               <ActionForm action={applyAllocationsAction}>
                 <input type="hidden" name="reportId" value={report.id} />
-                <button type="submit" className="secondary" disabled={validated} aria-describedby={validated ? "alloc-locked" : undefined}>
+                <button type="submit" className="secondary" disabled={!!locked} aria-describedby={locked ? "alloc-locked" : undefined}>
                   Appliquer la répartition
                 </button>
-                {validated && <p id="alloc-locked" className="m-0 text-sm text-muted">Repasser le budget en brouillon pour appliquer</p>}
+                {locked && <p id="alloc-locked" className="m-0 text-sm text-muted">{locked}</p>}
               </ActionForm>
             )}
           </Card>

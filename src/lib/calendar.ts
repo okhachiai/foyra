@@ -1,8 +1,8 @@
-import { readable, type Scope } from "./access";
+import type { Scope } from "./access";
 import { addMonths, formatMonth } from "./budget";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
-import { formatDay, listAccounts } from "./ledger";
+import { formatDay, monthNet } from "./ledger";
 
 export type ChargeStatus = "paid" | "late" | "due";
 
@@ -15,8 +15,7 @@ const monthOf = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth
 /**
  * Calendrier du mois : jours ayant au moins une échéance ou une opération (triés),
  * « À venir » (non payées jusqu'à today + 7 j, plus les retards du mois courant ; indépendant du mois consulté),
- * solde prévisionnel de fin de mois par compte actif (seulement si `month` est le mois courant).
- * Seuls les comptes lisibles comptent ; compte d'en face d'un virement non lisible → `otherAccount` null.
+ * prévision de fin de mois : net des opérations du mois moins les échéances non payées (seulement si `month` est le mois courant).
  */
 export async function getCalendar(scope: Scope, month: Date, today: Date) {
   const current = monthOf(today);
@@ -28,31 +27,23 @@ export async function getCalendar(scope: Scope, month: Date, today: Date) {
   };
   const withStatus = async (m: Date) => (await chargesOf(m)).map((c) => ({ ...c, status: chargeStatus(c, today) }));
 
-  const [charges, cur, nextCur, lines] = await Promise.all([
+  const [charges, cur, nextCur, transactions] = await Promise.all([
     withStatus(month),
     withStatus(current),
     withStatus(addMonths(current, 1)),
     prisma.transaction.findMany({
       where: {
         householdId: scope.householdId,
-        accountId: readable(scope),
         occurredOn: { gte: month, lt: addMonths(month, 1) },
         fixedPayment: null, // déjà affichée sous l'échéance payée
       },
       include: {
-        account: { select: { name: true, archivedAt: true } },
+        paidBy: { select: { name: true } },
         category: { select: { name: true, parent: { select: { name: true } } } },
       },
       orderBy: [{ occurredOn: "asc" }, { createdAt: "asc" }],
     }),
   ]);
-
-  // Un virement une seule fois : côté OUT s'il est lisible, sinon côté IN. Les deux côtés ont la même date :
-  // le compte d'en face, s'il est lisible, est donc dans `lines`.
-  const sides = new Map(lines.flatMap((t) => (t.transferId ? [[`${t.transferId}:${t.transferSide}`, t.account.name] as const] : [])));
-  const transactions = lines
-    .filter((t) => t.transferSide !== "IN" || !sides.has(`${t.transferId}:OUT`))
-    .map((t) => ({ ...t, otherAccount: t.transferId ? sides.get(`${t.transferId}:${t.transferSide === "OUT" ? "IN" : "OUT"}`) ?? null : null }));
 
   const days = new Map<string, { day: Date; charges: typeof charges; transactions: typeof transactions }>();
   const dayOf = (d: Date) => {
@@ -69,12 +60,9 @@ export async function getCalendar(scope: Scope, month: Date, today: Date) {
 
   let forecast = null;
   if (month.getTime() === current.getTime()) {
-    const accounts = (await listAccounts(scope)).filter((a) => !a.archivedAt);
-    forecast = accounts.map((a) => {
-      // Échéances non réglées du compte : dépenses à payer, revenus à recevoir.
-      const unpaid = cur.reduce((s, c) => s + (!c.payment && c.accountId === a.id ? (c.kind === "EXPENSE" ? c.amount : -c.amount) : 0), 0);
-      return { id: a.id, name: a.name, balance: a.balance, unpaid, end: a.balance - unpaid };
-    });
+    const net = await monthNet(scope, month);
+    const unpaid = cur.reduce((s, c) => s + (c.payment ? 0 : c.amount), 0);
+    forecast = { net, unpaid, end: net - unpaid };
   }
 
   return { days: [...days.values()].sort((a, b) => a.day.getTime() - b.day.getTime()), upcoming, forecast };

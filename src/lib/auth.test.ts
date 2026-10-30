@@ -30,7 +30,7 @@ async function redirectTarget() {
 
 beforeEach(async () => {
   jar.clear();
-  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Account", "Session", "User", "Household" CASCADE`);
+  await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Session", "User", "Household" CASCADE`);
 });
 
 describe("premier démarrage", () => {
