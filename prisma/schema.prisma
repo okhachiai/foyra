@@ -51,6 +51,17 @@ enum BudgetSource {
   TEMPLATES
 }
 
+// Fournisseur LLM du rapport mensuel (clés et URL en variables d'environnement).
+enum LlmProvider {
+  CLAUDE
+  LOCAL
+}
+
+enum ReportTrigger {
+  MANUAL
+  DAILY
+}
+
 enum BudgetStatus {
   DRAFT
   VALIDATED
@@ -73,6 +84,7 @@ model Household {
   currency     String       @default("EUR")
   timezone     String       @default("Europe/Paris")
   budgetSource BudgetSource @default(PREVIOUS)
+  llmProvider  LlmProvider? // préférence pour le rapport ; null = Claude si configuré
   createdAt    DateTime     @default(now())
 
   users         User[]
@@ -85,6 +97,7 @@ model Household {
   fixedPayments FixedChargePayment[]
   loans         Loan[]
   prepayments   LoanPrepayment[]
+  reports       Report[]
 }
 
 model User {
@@ -102,6 +115,7 @@ model User {
   transactions  Transaction[]
   accountAccess AccountAccess[]
   ownedAccounts Account[]       @relation("AccountOwner")
+  reports       Report[]
 }
 
 model Session {
@@ -223,6 +237,7 @@ model Budget {
 
   household Household    @relation(fields: [householdId], references: [id])
   items     BudgetItem[]
+  reports   Report[]
 
   @@unique([householdId, month])
 }
@@ -336,4 +351,27 @@ model LoanPrepayment {
   transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
   @@index([loanId])
+}
+
+// Rapport LLM d'un budget : `input` = chiffres envoyés, `output` = rapport validé, `error` si l'appel a échoué.
+// Un seul rapport DAILY par foyer et par jour (index partiel SQL « Report_one_daily » sur (householdId, day) WHERE trigger = 'DAILY').
+model Report {
+  id          String        @id @default(cuid())
+  householdId String
+  budgetId    String
+  userId      String? // auteur d'un rapport manuel
+  day         DateTime      @db.Date
+  trigger     ReportTrigger
+  provider    LlmProvider
+  model       String
+  input       Json
+  output      Json?
+  error       String?
+  createdAt   DateTime      @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  budget    Budget    @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([householdId, createdAt])
 }
