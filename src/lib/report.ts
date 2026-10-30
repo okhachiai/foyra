@@ -1,12 +1,14 @@
-import type { Role } from "@prisma/client";
+import { Prisma, type LlmProvider, type Report, type ReportTrigger, type Role } from "@prisma/client";
 import { canRead, fullScope, getScope, readable } from "./access";
-import { addMonths, envelopes, formatMonth, getBudget, type Envelope } from "./budget";
+import { addMonths, envelopes, formatMonth, getBudget, saveItems, type Envelope, type ItemFields } from "./budget";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
-import { formatDay, LedgerError, listAccounts, parseDay } from "./ledger";
+import { ADJUSTMENT_NOTE, formatDay, getTransaction, isCode, LedgerError, listAccounts, NotFoundError, parseDay, updateEntry } from "./ledger";
+import { complete, LlmError, pickProvider } from "./llm";
 import { accountsByOwner, getSplit, visibleSplit, type Split } from "./split";
 
 type Kind = "INCOME" | "EXPENSE";
+type Viewer = { id: string; role: Role; householdId: string };
 
 /** Opération transmise au LLM : libellé = note, sinon nom de catégorie. */
 export type Op = { id: string; label: string; amount: number; kind: Kind; account: string; categoryId: string | null };
@@ -76,8 +78,11 @@ function check(i: ReportInput, o: ReportOutput): string | null {
 
   const ops = new Map([...i.todayOps, ...i.uncategorized].map((t) => [t.id, t.kind]));
   const cats = new Map(i.categories.map((c) => [c.id, c.kind]));
+  const categorized = new Set<string>();
   for (const c of o.categorize) {
     if (!ops.has(c.transactionId)) return `Opération inconnue : ${c.transactionId}.`;
+    if (categorized.has(c.transactionId)) return `Opération catégorisée deux fois : ${c.transactionId}.`;
+    categorized.add(c.transactionId);
     if (cats.get(c.categoryId) !== ops.get(c.transactionId)) return `Catégorie inconnue ou de mauvais sens pour ${c.transactionId} : ${c.categoryId}.`;
   }
 
@@ -111,16 +116,13 @@ export function validateOutput(input: ReportInput, text: string): { ok: true; ou
   return error ? { ok: false, error } : { ok: true, output: v as ReportOutput };
 }
 
-// Note posée par adjustBalance (ledger.ts) sur ses opérations sans catégorie.
-const ADJUSTMENT = "Ajustement de solde";
-
 /**
  * Entrée du rapport du mois de `today` (Date UTC minuit, jour du foyer) vue par `viewer`.
  * Partage : agrégats seuls pour les membres dont il ne lit pas tous les comptes. Enveloppes et disponible : portée complète
  * (argent commun, identique pour tous). Opérations et échéances : comptes lisibles seulement ; ajustements de solde exclus.
  * Aucun e-mail ni identifiant de session : seuls ids, noms et libellés partent au LLM.
  */
-export async function buildInput(viewer: { id: string; role: Role; householdId: string }, today: Date): Promise<{ budgetId: string; input: ReportInput }> {
+export async function buildInput(viewer: Viewer, today: Date): Promise<{ budgetId: string; input: ReportInput }> {
   const householdId = viewer.householdId;
   const month = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
   const all = fullScope(householdId);
@@ -142,7 +144,7 @@ export async function buildInput(viewer: { id: string; role: Role; householdId: 
   ]);
   if (!budget) throw new LedgerError("Aucun budget pour ce mois.");
   // Filtré ici : en SQL, NOT (… AND note = …) écarterait aussi les notes nulles.
-  const kept = ops.filter((t) => !(t.categoryId === null && t.note === ADJUSTMENT));
+  const kept = ops.filter((t) => !(t.categoryId === null && t.note === ADJUSTMENT_NOTE));
 
   // Allouable : ligne sans sous-ligne (le plan porte sur une ligne précise).
   const leaf = new Set(budget.tree.filter((n) => !n.children.length).map((n) => n.id));
@@ -177,4 +179,136 @@ export async function buildInput(viewer: { id: string; role: Role; householdId: 
       members: split.members.map((m) => ({ id: m.userId, name: m.name })),
     },
   };
+}
+
+/** Consigne du LLM : il rédige et répartit, l'app a déjà fait tous les calculs. */
+export const SYSTEM_PROMPT = `Tu es le conseiller budgétaire d'un foyer. Tu reçois en JSON la situation du mois, calculée par l'application.
+Tous les montants sont en centimes d'euro et sont exacts : ne les recalcule pas, ne les corrige pas.
+Rédige le rapport du jour, ton simple et bienveillant, en français :
+- dépenses du jour (todayOps) et catégorie proposée pour chaque opération sans catégorie (categorize, catégorie de même sens) ;
+- budget actualisé : répartis le reste commun disponible (available) entre les enveloppes allouables et la réserve imprévus (allocations) ;
+  la somme des allocations doit être exactement égale à available ;
+- planning des dépenses sur les jours restants du mois (plan), sans dépasser l'allocation de chaque ligne ;
+- rééquilibrages éventuels entre membres (balancing) ;
+- un conseil court et concret (advice).`;
+
+/** Appel au LLM avec une nouvelle tentative si la sortie est refusée ; une erreur du fournisseur devient l'erreur du rapport. */
+async function ask(provider: LlmProvider, input: ReportInput) {
+  let model = "", retry: { previous: string; error: string } | undefined;
+  for (let n = 0; n < 2; n++) {
+    try {
+      const r = await complete(provider, { system: SYSTEM_PROMPT, user: JSON.stringify(input), retry }, OUTPUT_SCHEMA);
+      model = r.model;
+      const v = validateOutput(input, r.text);
+      if (v.ok) return { model, output: v.output, error: null };
+      retry = { previous: r.text, error: v.error };
+    } catch (e) {
+      if (!(e instanceof LlmError)) throw e;
+      return { model, output: null, error: e.message };
+    }
+  }
+  return { model, output: null, error: retry!.error };
+}
+
+const daily = (householdId: string, day: Date) => prisma.report.findFirst({ where: { householdId, day, trigger: "DAILY" } });
+
+/**
+ * Génère et stocke le rapport du jour `today` (Date UTC minuit). Fournisseur absent : préférence du foyer, sinon le premier configuré.
+ * DAILY : sans auteur (visible de l'admin seul), un seul par foyer et par jour — l'existant est renvoyé sans rappeler le LLM.
+ * Sortie refusée deux fois ou fournisseur en échec : rapport stocké avec `error`. Sans budget du mois : LedgerError, rien n'est stocké.
+ */
+export async function generateReport(viewer: Viewer, today: Date, trigger: ReportTrigger, provider?: LlmProvider): Promise<Report> {
+  const householdId = viewer.householdId;
+  if (trigger === "DAILY") {
+    const existing = await daily(householdId, today);
+    if (existing) return existing;
+  }
+  provider ??= pickProvider((await prisma.household.findUniqueOrThrow({ where: { id: householdId } })).llmProvider) ?? undefined;
+  if (!provider) throw new LedgerError("Aucun fournisseur LLM configuré.");
+  const { budgetId, input } = await buildInput(viewer, today);
+  const { model, output, error } = await ask(provider, input);
+  try {
+    return await prisma.report.create({
+      data: {
+        householdId, budgetId, userId: trigger === "DAILY" ? null : viewer.id, day: today, trigger, provider, model, error,
+        input, output: output ?? Prisma.DbNull,
+      },
+    });
+  } catch (e) {
+    // Course entre deux DAILY : l'index partiel « Report_one_daily » garde le premier.
+    if (trigger === "DAILY" && isCode(e, "P2002")) return (await daily(householdId, today))!;
+    throw e;
+  }
+}
+
+/** Rapport DAILY de chaque foyer ayant un admin actif, un fournisseur et un budget du mois ; renvoie le nombre de rapports créés. */
+export async function generateDailyReports(today: Date): Promise<number> {
+  const households = await prisma.household.findMany({
+    select: { id: true, llmProvider: true, users: { where: { role: "ADMIN", disabledAt: null }, orderBy: { createdAt: "asc" }, take: 1 } },
+  });
+  let created = 0;
+  for (const h of households) {
+    const provider = pickProvider(h.llmProvider);
+    if (!h.users.length || !provider || (await daily(h.id, today))) continue;
+    try {
+      await generateReport(h.users[0], today, "DAILY", provider);
+      created++;
+    } catch (e) {
+      if (!(e instanceof LedgerError)) throw e; // pas de budget du mois
+    }
+  }
+  return created;
+}
+
+/** Rapports visibles : admin, tous ceux du foyer ; membre, les siens. Les 30 plus récents. */
+export function listReports(viewer: Viewer): Promise<Report[]> {
+  return prisma.report.findMany({
+    where: { householdId: viewer.householdId, ...(viewer.role !== "ADMIN" && { userId: viewer.id }) },
+    orderBy: { createdAt: "desc" }, take: 30,
+  });
+}
+
+/** Rapport visible du viewer (admin ou auteur) avec ses propositions ; sinon NotFoundError. */
+async function proposal(viewer: Viewer, reportId: string) {
+  const r = await prisma.report.findFirst({
+    where: { id: reportId, householdId: viewer.householdId, ...(viewer.role !== "ADMIN" && { userId: viewer.id }) },
+    include: { budget: { select: { month: true, status: true } } },
+  });
+  if (!r) throw new NotFoundError();
+  if (!r.output) throw new LedgerError("Ce rapport n'a pas de proposition.");
+  return { ...r, output: r.output as ReportOutput };
+}
+
+/** Applique la répartition : prévu de chaque ligne = réel actuel (relu maintenant) + allocation. Lignes disparues ou devenues parents ignorées. */
+export async function applyAllocations(viewer: Viewer, reportId: string): Promise<number> {
+  const r = await proposal(viewer, reportId);
+  if (r.budget.status === "VALIDATED") throw new LedgerError("Repasser le budget en brouillon pour appliquer");
+  const budget = await getBudget(fullScope(r.householdId), r.budget.month);
+  const nodes = new Map(budget!.tree.filter((n) => !n.children.length).map((n) => [n.id, n]));
+  const items = new Map<string, ItemFields>();
+  for (const a of r.output.allocations) {
+    const n = nodes.get(a.budgetItemId);
+    if (n) items.set(n.id, { label: n.label, amount: n.actual + a.amount, included: n.included, recurring: n.recurring });
+  }
+  await saveItems(r.householdId, r.budgetId, items);
+  return items.size;
+}
+
+/** Applique les catégories proposées sous la portée du viewer ; opérations disparues, illisibles ou non modifiables ignorées. */
+export async function applyCategories(viewer: Viewer, reportId: string): Promise<number> {
+  const r = await proposal(viewer, reportId);
+  const scope = await getScope(viewer);
+  let n = 0;
+  for (const c of r.output.categorize) {
+    try {
+      const t = await getTransaction(scope, c.transactionId);
+      if (t.kind === "TRANSFER" || t.categoryId === c.categoryId) continue;
+      const { accountId, kind, amount, occurredOn, note, shared } = t;
+      await updateEntry(scope, t.id, { accountId, kind, amount, occurredOn, note, shared, categoryId: c.categoryId });
+      n++;
+    } catch (e) {
+      if (!(e instanceof LedgerError || e instanceof NotFoundError)) throw e;
+    }
+  }
+  return n;
 }

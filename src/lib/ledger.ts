@@ -167,6 +167,9 @@ export async function createEntryTx(tx: Db, scope: Scope, userId: string, input:
   return tx.transaction.create({ data: { ...input, shared: sharedOn(a.ownerId, input, false), householdId: scope.householdId, createdById: userId } });
 }
 
+/** Note des opérations d'écart posées par `adjustBalance` (sans catégorie). */
+export const ADJUSTMENT_NOTE = "Ajustement de solde";
+
 /** Ajuste le solde d'un compte à `target` par une opération d'écart ; `null` si déjà égal. Compte verrouillé avant de lire le solde. */
 export async function adjustBalance(scope: Scope, userId: string, accountId: string, target: number, occurredOn: Date) {
   return prisma.$transaction(async (tx) => {
@@ -174,7 +177,7 @@ export async function adjustBalance(scope: Scope, userId: string, accountId: str
     const diff = target - (await accountBalance(scope, accountId, tx));
     if (diff === 0) return null;
     return createEntryTx(tx, scope, userId, {
-      accountId, kind: diff > 0 ? "INCOME" : "EXPENSE", amount: Math.abs(diff), occurredOn, note: "Ajustement de solde", categoryId: null,
+      accountId, kind: diff > 0 ? "INCOME" : "EXPENSE", amount: Math.abs(diff), occurredOn, note: ADJUSTMENT_NOTE, categoryId: null,
     });
   });
 }
