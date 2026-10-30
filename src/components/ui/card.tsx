@@ -2,8 +2,18 @@ import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
 /** Carte bento : fond panneau, coins arrondis, halo qui suit le pointeur (classe .card, cf. Spotlight). */
-export function Card({ className, ...props }: ComponentProps<"section">) {
-  return <section className={cn("card flex min-w-0 flex-col gap-3 p-5 sm:p-6", className)} {...props} />;
+export function Card({ className, children, ...props }: ComponentProps<"section">) {
+  return (
+    <section className={cn("card flex min-w-0 flex-col gap-3 p-5 sm:p-6", className)} {...props}>
+      <Beams />
+      {children}
+    </section>
+  );
+}
+
+/** Faisceaux lumineux qui parcourent les 4 bords de la carte parente (cf. .beams dans globals.css). */
+export function Beams() {
+  return <div aria-hidden className="beams"><i /><i /><i /><i /></div>;
 }
 
 export function CardHeader({ className, ...props }: ComponentProps<"div">) {

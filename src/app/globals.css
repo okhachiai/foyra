@@ -45,7 +45,7 @@
 
 @layer components {
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
 body {
   margin: 0;
   min-height: 100vh;
@@ -169,7 +169,9 @@ summary:hover { color: var(--heading); }
 .ab-grid { display: grid; gap: 1rem; }
 @media (min-width: 64rem) {
   .ab-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  .ab-grid .w4 { grid-column: span 4; }
   .ab-grid .w5 { grid-column: span 5; }
+  .ab-grid .w6 { grid-column: span 6; }
   .ab-grid .w7 { grid-column: span 7; }
   .ab-grid .w12 { grid-column: span 12; }
 }
@@ -183,6 +185,15 @@ summary:hover { color: var(--heading); }
 .ab-card:nth-child(2) { transition-delay: 75ms; }
 .ab-card:nth-child(3) { transition-delay: 150ms; }
 .ab-card:nth-child(4) { transition-delay: 200ms; }
+/* Indicateurs du haut : chiffre à gauche, courbe à droite quand la carte est assez large, sinon empilés. */
+.kpi { container-type: inline-size; }
+.kpi-split { display: flex; flex: 1; flex-direction: column; gap: 1rem; }
+.kpi-value { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.kpi-chart { min-height: 150px; }
+@container (min-width: 34rem) {
+  .kpi-split { flex-direction: row; align-items: center; }
+  .kpi-split > :first-child { flex-shrink: 0; }
+}
 .ab-split { display: flex; flex: 1; flex-direction: column; gap: 1.25rem; }
 .ab-split > :first-child { flex-shrink: 0; }
 .ab-label { font-size: 13px; letter-spacing: -0.01em; color: var(--muted); }
@@ -328,8 +339,21 @@ form:has(small.error) > p.error { display: none; }
 .today h2 { color: var(--accent-soft); }
 .badge { margin-left: 0.5rem; padding: 0.125rem 0.5rem; font-size: 0.75rem; font-weight: 500; vertical-align: middle; color: var(--accent-soft); background: rgba(var(--glow), 0.15); border: 1px solid rgba(var(--glow), 0.4); border-radius: 999px; }
 
+/* Faisceaux lumineux sur les bords des cartes (composant Beams), comme la carte de connexion. */
+.beams { position: absolute; inset: 0; z-index: 1; overflow: hidden; pointer-events: none; }
+.beams i { position: absolute; opacity: 0.6; filter: blur(1px); animation: 3.5s ease-in-out infinite both; }
+.beams i:nth-child(odd) { width: 50%; height: 2px; background: linear-gradient(90deg, transparent, #fff, transparent); animation-name: beam-x; }
+.beams i:nth-child(even) { width: 2px; height: 50%; background: linear-gradient(transparent, #fff, transparent); animation-name: beam-y; }
+.beams i:nth-child(1) { top: 0; left: 0; }
+.beams i:nth-child(2) { top: 0; right: 0; animation-delay: 0.6s; }
+.beams i:nth-child(3) { bottom: 0; right: 0; animation-delay: 1.2s; animation-direction: reverse; }
+.beams i:nth-child(4) { bottom: 0; left: 0; animation-delay: 1.8s; animation-direction: reverse; }
+@keyframes beam-x { 0% { transform: translateX(-100%); } 71%, 100% { transform: translateX(200%); } }
+@keyframes beam-y { 0% { transform: translateY(-100%); } 71%, 100% { transform: translateY(200%); } }
+
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after { transition: none !important; }
+  .beams { display: none; }
 }
 }
 

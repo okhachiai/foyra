@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import type { DashboardCharts } from "@/lib/dashboard";
+import { Beams } from "@/components/ui/card";
+import SpendingRing from "@/components/ui/kokonut-spending-ring";
 
 /*
  * Bento analytique (adapté de « Analytics Bento », vasnev.art) : entrées/sorties, dépenses par catégorie, saisonnalité.
@@ -286,6 +288,28 @@ type Categories = DashboardCharts["categories"];
 const groupColor = (groups: Categories["groups"], id: string) =>
   id === "none" ? COLORS.none : COLORS.groups[groups.findIndex((g) => g.id === id) % COLORS.groups.length];
 
+/** Dépenses du mois par catégorie de premier niveau, couleurs du treemap, évolution vs le mois précédent. */
+export function SpendingByCategory({ currency, data }: { currency: string; data: Categories }) {
+  const categories = React.useMemo(() => {
+    const sums = new Map<string, [number, number]>();
+    for (const i of data.items) {
+      const s = sums.get(i.group) ?? [0, 0];
+      sums.set(i.group, [s[0] + i.values[0], s[1] + i.values[1]]);
+    }
+    return data.groups
+      .map((g) => ({ g, s: sums.get(g.id)! }))
+      .filter(({ s }) => s[0] > 0)
+      .sort((a, b) => b.s[0] - a.s[0])
+      .map(({ g, s: [cur, prev] }) => ({
+        name: g.name,
+        amount: cur / 100,
+        change: prev ? ((cur - prev) / prev) * 100 : undefined,
+        color: groupColor(data.groups, g.id)[0],
+      }));
+  }, [data]);
+  return <SpendingRing title="Dépenses par catégorie" categories={categories} currency={currency} />;
+}
+
 function Treemap({ data, period, tip }: { data: Categories; period: number; tip: TipRef }) {
   const money = React.useContext(MoneyContext);
   const [ref, { w: W, h: H }] = useSize();
@@ -413,7 +437,7 @@ function Radar({ values, year, tip }: { values: number[]; year: string; tip: Tip
 
 /* ---------------- le bento ---------------- */
 
-export function AnalyticsBento({ currency, data }: { currency: string; data: DashboardCharts }) {
+export function AnalyticsBento({ currency, data, aside }: { currency: string; data: DashboardCharts; aside?: React.ReactNode }) {
   const money = React.useMemo(() => {
     const f = new Intl.NumberFormat("fr-FR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 });
     return (cents: number) => f.format(cents / 100);
@@ -431,6 +455,7 @@ export function AnalyticsBento({ currency, data }: { currency: string; data: Das
     <MoneyContext.Provider value={money}>
       <div className={shown ? "ab-grid ab-shown" : "ab-grid"}>
         <section className="ab-card w12" aria-label="Entrées et sorties du mois">
+          <Beams />
           <div className="ab-split">
             <div>
               <div className="ab-label">Solde du mois</div>
@@ -446,28 +471,9 @@ export function AnalyticsBento({ currency, data }: { currency: string; data: Das
           </div>
         </section>
 
-        <section className="ab-card w7" aria-label="Dépenses par catégorie">
-          <div className="ab-head">
-            <h2>Dépenses par catégorie</h2>
-            <div className="ab-legend">
-              {categories.groups.map((g) => (
-                <span key={g.id}><i style={{ background: groupColor(categories.groups, g.id)[0] }} />{g.name}</span>
-              ))}
-            </div>
-          </div>
-          <div className="ab-periods">
-            {categories.periods.map((p, i) => (
-              <button key={p.label} type="button" className="ab-period" aria-pressed={i === period} onClick={() => setPeriod(i)}>
-                <div className="ab-period-label"><i />{p.label}</div>
-                <div className="ab-period-value ab-num"><CountUp value={p.total} /> <Delta value={p.delta} upIsGood={false} /></div>
-                <div className="ab-period-compare">vs {money(p.previous)} {p.compare}</div>
-              </button>
-            ))}
-          </div>
-          <Treemap data={categories} period={period} tip={tip} />
-        </section>
-
-        <section className="ab-card w5" aria-label="Saisonnalité des dépenses">
+        {aside}
+        <section className={aside ? "ab-card w6" : "ab-card w12"} aria-label="Saisonnalité des dépenses">
+          <Beams />
           <div className="ab-head">
             <h2>Saisonnalité des dépenses</h2>
             <Segmented label="Année" items={seasons.map((s) => s.label)} value={year} onChange={setYear} />
@@ -492,6 +498,85 @@ export function AnalyticsBento({ currency, data }: { currency: string; data: Das
         </section>
       </div>
       <Tooltip api={tip} />
+    </MoneyContext.Provider>
+  );
+}
+
+/* ---------------- indicateurs du haut : valeur, variation, courbe du mois ---------------- */
+
+export type Kpi = { label: string; value: number; note: string; series: number[] | null; prev: number | null; upIsGood?: boolean; colors: readonly [string, string] };
+
+function Spark({ series, colors, label }: { series: number[]; colors: readonly [string, string]; label: string }) {
+  const [ref, { w: W, h: H }] = useSize();
+  const id = React.useId().replace(/:/g, "");
+  const min = Math.min(...series), max = Math.max(...series), span = max - min || 1;
+  const top = 34, bottom = 14, left = 14, right = 52;
+  const X = (i: number) => left + (series.length > 1 ? (i / (series.length - 1)) * (W - left - right) : 0);
+  const Y = (v: number) => top + (1 - (v - min) / span) * (H - top - bottom);
+  const P = series.map((v, i) => [X(i), Y(v)] as [number, number]);
+  const line = smooth(P), end = P[P.length - 1];
+  const ticks = [0, 1, 2, 3].map((k) => max - (span * k) / 3);
+  return (
+    <div ref={ref} className="ab-chart kpi-chart">
+      <span className="ab-caption">Ce mois</span>
+      {W > 0 && series.length > 1 && (
+        <svg width={W} height={H} role="img" aria-label={`${label} cumulé jour par jour ce mois-ci`}>
+          <defs>
+            <linearGradient id={`${id}l`} gradientUnits="userSpaceOnUse" x1={left} x2={W - right} y1={0} y2={0}>
+              <stop offset="0" stopColor={colors[0]} />
+              <stop offset="1" stopColor={colors[1]} />
+            </linearGradient>
+            <linearGradient id={`${id}a`} x1={0} x2={0} y1={0} y2={1}>
+              <stop offset="0" stopColor={colors[1]} stopOpacity={0.18} />
+              <stop offset="1" stopColor={colors[1]} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          {ticks.map((v) => (
+            <g key={v}>
+              <line x1={0} x2={W} y1={Y(v)} y2={Y(v)} stroke="var(--border)" />
+              <text x={W - 10} y={Y(v) - 4} textAnchor="end" fontSize={11} fontFamily={MONO} fill="var(--muted)">{compact.format(v / 100)}</text>
+            </g>
+          ))}
+          <path d={`${line}L${end[0]},${H}L${P[0][0]},${H}Z`} fill={`url(#${id}a)`} />
+          <path d={line} fill="none" stroke={`url(#${id}l)`} strokeWidth={2.5} strokeLinecap="round" />
+          <circle cx={end[0]} cy={end[1]} r={5} fill={colors[1]} />
+        </svg>
+      )}
+    </div>
+  );
+}
+
+export function KpiCards({ currency, items }: { currency: string; items: Kpi[] }) {
+  const money = React.useMemo(() => {
+    const f = new Intl.NumberFormat("fr-FR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    return (cents: number) => f.format(cents / 100);
+  }, [currency]);
+  const [shown, setShown] = React.useState(false);
+  React.useEffect(() => { const r = requestAnimationFrame(() => setShown(true)); return () => cancelAnimationFrame(r); }, []);
+  return (
+    <MoneyContext.Provider value={money}>
+      <div className={shown ? "ab-grid ab-shown" : "ab-grid"}>
+        {items.map((k) => {
+          const now = k.series?.at(-1);
+          // Variation du cumul au même jour du mois précédent ; rien si la base est nulle.
+          const delta = now !== undefined && k.prev ? ((now - k.prev) / Math.abs(k.prev)) * 100 : null;
+          return (
+            <section key={k.label} className="ab-card w4 kpi" aria-label={k.label}>
+              <div className="kpi-split">
+                <div>
+                  <div className="ab-label">{k.label}</div>
+                  <div className="kpi-value">
+                    <span className={k.value < 0 ? "ab-big ab-num neg" : "ab-big ab-num"}><CountUp value={k.value} /></span>
+                    <span title="Cumul comparé au même jour du mois précédent"><Delta value={delta} upIsGood={k.upIsGood} /></span>
+                  </div>
+                  <div className="ab-note">{k.note}</div>
+                </div>
+                {k.series && <Spark series={k.series} colors={k.colors} label={k.label} />}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </MoneyContext.Provider>
   );
 }

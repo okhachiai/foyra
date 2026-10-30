@@ -5,5 +5,5 @@ export function middleware(req: NextRequest) {
   if (!req.cookies.has("foyra_session")) return NextResponse.redirect(new URL("/login", req.url));
 }
 
-// Exclut « / » (qui choisit entre /setup et /login), /login, /setup, les fichiers statiques et /api/ (les routes vérifient elles-mêmes leur jeton).
-export const config = { matcher: ["/((?!_next/|api/|favicon.ico|login|setup).+)"] };
+// Exclut « / » (qui choisit entre /setup et /login), /login, /setup, les fichiers statiques (dont manifest et icônes de l'app installable) et /api/ (les routes vérifient elles-mêmes leur jeton).
+export const config = { matcher: ["/((?!_next/|api/|favicon.ico|manifest.webmanifest|icon.png|apple-icon.png|login|setup).+)"] };

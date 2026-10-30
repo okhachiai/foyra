@@ -7,8 +7,13 @@ const sans = Geist({ subsets: ["latin"], variable: "--font-sans" });
 const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Foyra", description: "Les comptes du foyer" };
-export const viewport: Viewport = { width: "device-width", initialScale: 1 };
+export const metadata: Metadata = {
+  title: "Foyra",
+  description: "Les comptes du foyer",
+  // Installable sur iOS via « Sur l'écran d'accueil » ; barre de statut noire = contenu jamais sous l'encoche.
+  appleWebApp: { capable: true, title: "Foyra", statusBarStyle: "black" },
+};
+export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#07080d" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
