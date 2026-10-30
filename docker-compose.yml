@@ -27,8 +27,29 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-foyra}:${POSTGRES_PASSWORD:-foyra}@db:5432/${POSTGRES_DB:-foyra}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SETUP_TOKEN: ${SETUP_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-}
+      LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+      LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-}
+      CRON_TOKEN: ${CRON_TOKEN:-}
+      TZ: Europe/Paris
     ports:
       - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
+
+  # Rapport du soir : appelle la route protégée de l'app à l'heure REPORT_CRON (fuseau Europe/Paris).
+  cron:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      TZ: Europe/Paris
+      CRON_TOKEN: ${CRON_TOKEN:-}
+      REPORT_CRON: ${REPORT_CRON:-0 20 * * *}
+    command: >-
+      sh -c 'apk add --no-cache tzdata >/dev/null &&
+      echo "$$REPORT_CRON wget -qO- --header \"Authorization: Bearer $$CRON_TOKEN\" --post-data \"\" http://app:3000/api/reports/daily" > /etc/crontabs/root &&
+      crond -f -l 8'
 
   # Base jetable pour `npm test` : docker compose --profile test up -d db-test
   db-test:

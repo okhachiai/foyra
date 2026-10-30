@@ -33,6 +33,12 @@ docker compose exec app npm run reset-password admin@exemple.fr
 
 Un mot de passe provisoire aléatoire s'affiche une seule fois ; toutes les sessions de l'utilisateur sont fermées. Un compte désactivé reste désactivé (un admin le réactive dans **Membres**). Sans email en argument, il est demandé.
 
+## Rapport LLM
+
+Un rapport (dépenses du jour, répartition du budget, planning, conseil) est généré à la demande ou chaque soir. Un fournisseur n'est proposé que si ses variables sont renseignées dans `.env` : `ANTHROPIC_API_KEY` (+ `CLAUDE_MODEL`) pour Claude, `LOCAL_LLM_URL` / `LOCAL_LLM_MODEL` / `LOCAL_LLM_API_KEY` pour un modèle local compatible OpenAI.
+
+Le service `cron` appelle `POST /api/reports/daily` avec `Authorization: Bearer $CRON_TOKEN` à l'heure `REPORT_CRON` (défaut `0 20 * * *`, fuseau Europe/Paris). Renseignez un `CRON_TOKEN` secret : s'il est vide, la route refuse tout. Un seul rapport quotidien par foyer et par jour ; un nouvel appel ne le régénère pas.
+
 ## Sauvegarde et restauration
 
 ```sh

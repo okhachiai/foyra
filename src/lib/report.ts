@@ -254,7 +254,8 @@ export async function generateDailyReports(today: Date): Promise<number> {
       await generateReport(h.users[0], today, "DAILY", provider);
       created++;
     } catch (e) {
-      if (!(e instanceof LedgerError)) throw e; // pas de budget du mois
+      // Pas de budget du mois : silencieux. Toute autre erreur est journalisée sans bloquer les autres foyers.
+      if (!(e instanceof LedgerError)) console.error(`Rapport quotidien : foyer ${h.id} en échec :`, e instanceof Error ? e.message : e);
     }
   }
   return created;
@@ -264,7 +265,7 @@ export async function generateDailyReports(today: Date): Promise<number> {
 export function listReports(viewer: Viewer): Promise<Report[]> {
   return prisma.report.findMany({
     where: { householdId: viewer.householdId, ...(viewer.role !== "ADMIN" && { userId: viewer.id }) },
-    orderBy: { createdAt: "desc" }, take: 30,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30,
   });
 }
 

@@ -276,6 +276,25 @@ describe("génération, stockage, application", () => {
     expect(await generateDailyReports(day("2026-12-01"))).toBe(0); // pas de budget en décembre
   });
 
+  it("DAILY : l'échec d'un foyer n'empêche pas les autres", async () => {
+    await setup(); // foyer 1 : 2 000 € disponibles
+    const admin2 = (await setupHousehold({ householdName: "Autre", name: "Zoé", email: "zoe@test.fr", password: "password1" }, { force: true }))!;
+    await createBudget(admin2.householdId, nov);
+    vi.stubEnv("ANTHROPIC_API_KEY", "k");
+    // L'ordre des foyers n'est pas garanti : le foyer 1 (disponible > 0) échoue, le foyer 2 (rien de disponible) reçoit une sortie vide valide.
+    llm.mockImplementation(async (_p, req) => {
+      if (JSON.parse(req.user).available > 0) throw new Error("boom");
+      return { model: "m1", text: JSON.stringify({ allocations: [], categorize: [], plan: [], balancing: [], advice: "ok" }) };
+    });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const created = await generateDailyReports(today);
+    expect(err).toHaveBeenCalledTimes(1);
+    expect(err.mock.calls[0][1]).toBe("boom");
+    err.mockRestore();
+    expect(created).toBe(1);
+    expect(await prisma.report.count()).toBe(1);
+  });
+
   it("listReports : un membre ne voit que les siens, l'admin tout", async () => {
     const { admin, bob, out, reply } = await setup();
     for (let i = 0; i < 3; i++) reply(out());
