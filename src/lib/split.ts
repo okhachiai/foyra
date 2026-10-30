@@ -99,6 +99,13 @@ export async function getSplit(householdId: string, month: Date): Promise<Split>
   return splitMonth(input);
 }
 
+/** Comptes de chaque propriétaire (archivés compris), pour `visibleSplit`. */
+export function accountsByOwner(accounts: { id: string; ownerId: string | null }[]) {
+  const owned: Record<string, string[]> = {};
+  for (const a of accounts) if (a.ownerId) (owned[a.ownerId] ??= []).push(a.id);
+  return owned;
+}
+
 /** Admin, soi-même ou membre dont tous les comptes sont lisibles : détail complet ; sinon (comptes inconnus inclus) revenu et reste perso masqués. */
 export function visibleSplit(split: Split, viewer: { id: string; role: Role }, scope: Scope, ownedBy: Record<string, string[]>): Split {
   const sees = (userId: string) => viewer.role === "ADMIN" || viewer.id === userId || !!ownedBy[userId]?.length && ownedBy[userId].every((id) => canRead(scope, id));
@@ -117,12 +124,10 @@ export async function getVisibleSplit(viewer: { id: string; role: Role; househol
   ]);
   if (!split.members.length || (!accounts.some((a) => a.ownerId === null && !a.archivedAt) && split.members.length < 2)) return null;
   const common = accounts.find((a) => a.ownerId === null && !a.archivedAt && canWrite(scope, a.id))?.id;
-  const ownedBy: Record<string, string[]> = {};
-  for (const a of accounts) if (a.ownerId) (ownedBy[a.ownerId] ??= []).push(a.id);
   const transfer: Record<string, string> = {};
   for (const m of split.members) {
     const from = accounts.find((a) => a.ownerId === m.userId && !a.archivedAt && canWrite(scope, a.id));
     if (m.toTransfer > 0 && from && common) transfer[m.userId] = `/accounts/${from.id}?virement=${common}&montant=${m.toTransfer}`;
   }
-  return { ...visibleSplit(split, viewer, scope, ownedBy), transfer };
+  return { ...visibleSplit(split, viewer, scope, accountsByOwner(accounts)), transfer };
 }
