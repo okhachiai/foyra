@@ -23,7 +23,7 @@ enum BudgetSource {
   TEMPLATES
 }
 
-// Fournisseur LLM du rapport mensuel (clés et URL en variables d'environnement).
+// Fournisseur LLM du rapport mensuel (clés et URL réglées par foyer dans Paramètres).
 enum LlmProvider {
   CLAUDE
   LOCAL
@@ -31,7 +31,14 @@ enum LlmProvider {
 
 enum ReportTrigger {
   MANUAL
+  AUTO // cron : quotidien, et bilan du mois écoulé le 1er
+}
+
+// Quotidien : suivi du mois en cours ; MONTHLY : bilan prévu / réel du mois écoulé ; PLAN : répartition du reste sur les charges variables.
+enum ReportKind {
   DAILY
+  MONTHLY
+  PLAN
 }
 
 enum BudgetStatus {
@@ -57,6 +64,12 @@ model Household {
   timezone     String       @default("Europe/Paris")
   budgetSource BudgetSource @default(PREVIOUS)
   llmProvider  LlmProvider? // préférence pour le rapport ; null = premier fournisseur configuré
+  // Réglages LLM : un fournisseur n'est proposé que si ses champs sont renseignés (Claude : clé ; local : URL + modèle).
+  claudeApiKey   String?
+  claudeModel    String?
+  localLlmUrl    String? // compatible OpenAI, sans /v1
+  localLlmModel  String?
+  localLlmApiKey String?
   createdAt    DateTime     @default(now())
 
   users         User[]
@@ -285,13 +298,14 @@ model LoanPrepayment {
 }
 
 // Rapport LLM d'un budget : `input` = chiffres envoyés, `output` = rapport validé, `error` si l'appel a échoué.
-// Un seul rapport DAILY par foyer et par jour (index partiel SQL « Report_one_daily » sur (householdId, day) WHERE trigger = 'DAILY').
+// Un seul rapport AUTO par foyer, jour et type (index partiel SQL « Report_one_auto » sur (householdId, day, kind) WHERE trigger = 'AUTO').
 model Report {
   id          String        @id @default(cuid())
   householdId String
   budgetId    String
   userId      String? // auteur d'un rapport manuel
   day         DateTime      @db.Date
+  kind        ReportKind
   trigger     ReportTrigger
   provider    LlmProvider
   model       String

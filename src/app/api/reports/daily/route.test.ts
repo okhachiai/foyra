@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { generateDailyReports } from "@/lib/report";
+import { generateAutoReports } from "@/lib/report";
 import { POST } from "./route";
 
-vi.mock("@/lib/report", () => ({ generateDailyReports: vi.fn() }));
-const generate = vi.mocked(generateDailyReports);
+vi.mock("@/lib/report", () => ({ generateAutoReports: vi.fn() }));
+const generate = vi.mocked(generateAutoReports);
 
 const call = (auth?: string) => POST(new Request("http://app/api/reports/daily", { method: "POST", headers: auth ? { authorization: auth } : {} }));
 

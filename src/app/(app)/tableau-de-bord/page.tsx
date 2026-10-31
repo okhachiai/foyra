@@ -51,7 +51,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <Link href={`/tableau-de-bord?m=${formatMonth(addMonths(month, 1))}`}>Mois suivant →</Link>
       </nav>
       {formatMonth(month) !== todayStr.slice(0, 7) && <p className="mb-4 text-center"><Link href="/tableau-de-bord">Revenir au mois en cours</Link></p>}
-      {configuredProviders().length > 0 && (
+      {configuredProviders(user.household).length > 0 && (
         <ActionForm action={analyzeAction} className="form mb-4">
           <button type="submit">Analyser</button>
         </ActionForm>

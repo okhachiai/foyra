@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { addMonths } from "@/lib/amortization";
 import { actualTotals, budgetSeeds, envelopes, formatMonth, getBudget, groupOf, incomeLines, itemSignature, parseMonth, type Group } from "@/lib/budget";
 import { listMonthCharges } from "@/lib/charges";
+import { configuredProviders } from "@/lib/llm";
 import { prisma } from "@/lib/db";
 import { formatDay, todayIn } from "@/lib/ledger";
 import { centsToInput, formatCents } from "@/lib/money";
@@ -11,7 +12,7 @@ import { getSplit } from "@/lib/split";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Stat } from "@/components/ui/stat";
-import { budgetAction, createBudgetAction } from "@/app/actions";
+import { budgetAction, createBudgetAction, planAction } from "@/app/actions";
 import { ActionForm, Field } from "@/app/form";
 import { Fold } from "./fold";
 
@@ -249,6 +250,16 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
         <Stat label="Reste prévisionnel" value={money(totals.remaining)} tone={totals.remaining < 0 ? "neg" : undefined} note="Revenus − fixes − variables − épargne" />
         <Stat label="Reste réel" value={money(actual.remaining)} tone={actual.remaining < 0 ? "neg" : undefined} note="Mêmes calculs sur les opérations enregistrées du mois" />
       </div>
+
+      {draft && configuredProviders(user.household).length > 0 && (
+        <ActionForm action={planAction} className="card mt-4 flex flex-wrap items-center justify-between gap-3" pendingNotice="L'IA prépare la répartition… cela peut prendre quelques minutes avec un modèle local.">
+          <input type="hidden" name="month" value={formatMonth(month)} />
+          <p className="m-0 text-sm text-muted">
+            Revenus, charges fixes et épargne saisis ? L'IA répartit les {money(Math.max(totals.income - totals.fixed - totals.savings, 0))} restants sur les charges variables.
+          </p>
+          <button type="submit" className="secondary">Proposer la répartition</button>
+        </ActionForm>
+      )}
 
       {split && (
         <Fold className="mt-4" title="Partage" aside={<span className="amount" title="Dépenses communes prévues, moins les recettes communes">{money(split.commonNet)}</span>}>

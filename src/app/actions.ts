@@ -14,9 +14,9 @@ import { addDefaultCategories, createCategory, deleteCategory, parseForecast, se
 import { addItem, createBudget, formatMonth, type IncomeLine, itemSignature, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
 import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
 import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/lib/loans";
-import { configuredProviders } from "@/lib/llm";
+import { configuredProviders, LlmError, PROVIDER_LABELS, testConnection, type LlmConfig } from "@/lib/llm";
 import { parseCents } from "@/lib/money";
-import { applyAllocations, applyCategories, generateReport } from "@/lib/report";
+import { applyPlan, generateReport } from "@/lib/report";
 import { addSaving } from "@/lib/savings";
 import type { FormState } from "./form";
 import { itemFlags, sharedField, str } from "./form-fields";
@@ -164,10 +164,10 @@ export async function setDisabledAction(_: FormState, fd: FormData): Promise<For
 // --- Préférences ---
 
 /** Fournisseur choisi : vide → null (premier configuré) ; seuls les fournisseurs configurés sont acceptés. */
-function providerField(fd: FormData, name: string, errors: Errors): LlmProvider | null {
+function providerField(fd: FormData, name: string, config: LlmConfig, errors: Errors): LlmProvider | null {
   const raw = str(fd, name);
   if (!raw) return null;
-  const provider = configuredProviders().find((p) => p === raw);
+  const provider = configuredProviders(config).find((p) => p === raw);
   if (!provider) errors.add(name, "Fournisseur non configuré.");
   return provider ?? null;
 }
@@ -187,11 +187,53 @@ export async function updateHouseholdAction(_: FormState, fd: FormData): Promise
   const name = requiredField(fd, "householdName", errors);
   const budgetSource = str(fd, "budgetSource") as BudgetSource;
   if (budgetSource !== "PREVIOUS" && budgetSource !== "TEMPLATES") errors.add("budgetSource", "Choix invalide.");
-  // Champ absent (aucun fournisseur configuré) : préférence inchangée.
-  const llmProvider = fd.has("llmProvider") ? providerField(fd, "llmProvider", errors) : undefined;
   if (errors.state) return errors.state;
-  await updateHousehold(admin.householdId, { name, budgetSource, llmProvider });
+  await updateHousehold(admin.householdId, { name, budgetSource });
   done("/parametres?ok=foyer");
+}
+
+/** Clé secrète : vide = inchangée (jamais réaffichée), case `clear_<nom>` cochée = effacée. */
+function secretField(fd: FormData, name: string, current: string | null) {
+  if (fd.get(`clear_${name}`)) return null;
+  return str(fd, name).slice(0, 500) || current;
+}
+
+/** Réglages LLM du foyer ; le fournisseur préféré est validé contre les réglages envoyés. */
+export async function updateLlmAction(_: FormState, fd: FormData): Promise<FormState> {
+  const admin = await requireAdmin();
+  const errors = new Errors();
+  const h = admin.household;
+  const localLlmUrl = str(fd, "localLlmUrl").slice(0, 500).replace(/\/+$/, "") || null;
+  if (localLlmUrl && !/^https?:\/\/[^\s/]/.test(localLlmUrl)) errors.add("localLlmUrl", "URL http(s) attendue, ex. http://localhost:11434");
+  const config: LlmConfig = {
+    llmProvider: null,
+    claudeApiKey: secretField(fd, "claudeApiKey", h.claudeApiKey),
+    claudeModel: str(fd, "claudeModel").slice(0, 100) || null,
+    localLlmUrl,
+    localLlmModel: str(fd, "localLlmModel").slice(0, 100) || null,
+    localLlmApiKey: secretField(fd, "localLlmApiKey", h.localLlmApiKey),
+  };
+  config.llmProvider = providerField(fd, "llmProvider", config, errors);
+  if (errors.state) return errors.state;
+  if (str(fd, "intent") === "test") return testLlm(config);
+  await updateHousehold(admin.householdId, config);
+  done("/parametres?ok=llm");
+}
+
+/** Teste chaque fournisseur renseigné avec les valeurs du formulaire (non enregistrées). */
+async function testLlm(config: LlmConfig): Promise<FormState> {
+  const providers = configuredProviders(config);
+  if (!providers.length) return { error: "Aucun fournisseur à tester : renseigner la clé Claude, ou l'URL et le modèle local." };
+  const ok: string[] = [], ko: string[] = [];
+  for (const p of providers) {
+    try {
+      ok.push(`${PROVIDER_LABELS[p]} : connexion réussie (modèle ${await testConnection(p, config)}).`);
+    } catch (e) {
+      if (!(e instanceof LlmError)) throw e;
+      ko.push(`${PROVIDER_LABELS[p]} : ${e.message}`);
+    }
+  }
+  return { error: ko.join("\n") || undefined, notice: ok.join("\n") || undefined };
 }
 
 // --- Mon compte ---
@@ -541,32 +583,35 @@ export async function prepayLoanAction(_: FormState, fd: FormData): Promise<Form
 
 // --- Rapports (rien n'est écrit dans le budget ni les opérations sans clic explicite) ---
 
-/** Rapport à la demande (MANUAL) ; `provider` facultatif = essai ponctuel, sinon préférence du foyer. */
+/** Rapport à la demande (MANUAL) : du jour ou bilan du mois écoulé ; `provider` facultatif = essai ponctuel, sinon préférence du foyer. */
 export async function analyzeAction(_: FormState, fd: FormData): Promise<FormState> {
   const user = await requireUser();
   const errors = new Errors();
-  const provider = providerField(fd, "provider", errors) ?? undefined;
+  const provider = providerField(fd, "provider", user.household, errors) ?? undefined;
   if (errors.state) return errors.state;
+  const kind = str(fd, "kind") === "MONTHLY" ? "MONTHLY" : "DAILY";
   let id = "";
-  const error = await run(async () => (id = (await generateReport(user, parseDay(todayIn(user.household.timezone))!, "MANUAL", provider)).id));
+  const error = await run(async () => (id = (await generateReport(user, kind, parseDay(todayIn(user.household.timezone))!, "MANUAL", { provider })).id));
   if (error) return error;
   done(`/rapports?id=${encodeURIComponent(id)}`);
 }
 
-export async function applyAllocationsAction(_: FormState, fd: FormData): Promise<FormState> {
+/** Préparation du budget d'un mois : proposition de répartition du reste sur les charges variables. */
+export async function planAction(_: FormState, fd: FormData): Promise<FormState> {
   const user = await requireUser();
-  const id = str(fd, "reportId");
-  let n = 0;
-  const error = await run(async () => (n = await applyAllocations(user, id, parseDay(todayIn(user.household.timezone))!)));
+  const month = parseMonth(str(fd, "month"));
+  if (!month) return { error: "Mois invalide." };
+  let id = "";
+  const error = await run(async () => (id = (await generateReport(user, "PLAN", parseDay(todayIn(user.household.timezone))!, "MANUAL", { month })).id));
   if (error) return error;
-  done(`/rapports?id=${encodeURIComponent(id)}&lignes=${n}`);
+  done(`/rapports?id=${encodeURIComponent(id)}`);
 }
 
-export async function applyCategoriesAction(_: FormState, fd: FormData): Promise<FormState> {
+export async function applyPlanAction(_: FormState, fd: FormData): Promise<FormState> {
   const user = await requireUser();
   const id = str(fd, "reportId");
   let n = 0;
-  const error = await run(async () => (n = await applyCategories(user, id)));
+  const error = await run(async () => (n = await applyPlan(user, id)));
   if (error) return error;
-  done(`/rapports?id=${encodeURIComponent(id)}&operations=${n}`);
+  done(`/rapports?id=${encodeURIComponent(id)}&lignes=${n}`);
 }

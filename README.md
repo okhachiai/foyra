@@ -35,9 +35,9 @@ Un mot de passe provisoire aléatoire s'affiche une seule fois ; toutes les sess
 
 ## Rapport LLM
 
-Un rapport (dépenses du jour, répartition du budget, planning, conseil) est généré à la demande ou chaque soir. Un fournisseur n'est proposé que si ses variables sont renseignées dans `.env` : `ANTHROPIC_API_KEY` (+ `CLAUDE_MODEL`) pour Claude, `LOCAL_LLM_URL` / `LOCAL_LLM_MODEL` / `LOCAL_LLM_API_KEY` pour un modèle local compatible OpenAI.
+Un rapport (dépenses du jour, répartition du budget, planning, conseil) est généré à la demande ou chaque soir. Les fournisseurs se règlent dans l'application (admin), **Paramètres → Rapport LLM** : clé API (+ modèle) pour Claude, URL / modèle / clé facultative pour un modèle local compatible OpenAI. Un fournisseur n'est proposé que si ses champs sont renseignés.
 
-Le service `cron` appelle `POST /api/reports/daily` avec `Authorization: Bearer $CRON_TOKEN` à l'heure `REPORT_CRON` (défaut `0 20 * * *`, fuseau Europe/Paris). Renseignez un `CRON_TOKEN` secret **hexadécimal** (`openssl rand -hex 32`) : il est recopié dans une ligne de crontab, où `%`, guillemets ou `$` la casseraient ; s'il est vide, la route refuse tout. Réponses et erreurs (401, 500) : `docker compose logs cron`. Un seul rapport quotidien par foyer et par jour ; un nouvel appel ne le régénère pas.
+Le service `cron` appelle `POST /api/reports/daily` avec `Authorization: Bearer $CRON_TOKEN` à l'heure `REPORT_CRON` (défaut `0 20 * * *`, fuseau Europe/Paris). Renseignez un `CRON_TOKEN` secret **hexadécimal** (`openssl rand -hex 32`) : il est recopié dans une ligne de crontab, où `%`, guillemets ou `$` la casseraient ; s'il est vide, la route refuse tout. Réponses et erreurs (401, 500) : `docker compose logs cron`. Chaque appel génère le rapport du jour (suivi des enveloppes, alertes, conseils) et, le 1er du mois, le bilan du mois écoulé (prévu contre réel). Un seul rapport automatique par foyer, jour et type ; un nouvel appel ne le régénère pas. La répartition des charges variables d'un nouveau budget se demande depuis la page Budget (bouton « Proposer la répartition »).
 
 ## Sauvegarde et restauration
 

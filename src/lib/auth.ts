@@ -2,10 +2,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { hash, verify } from "@node-rs/argon2";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Prisma, type BudgetSource, type LlmProvider, type Role } from "@prisma/client";
+import { Prisma, type BudgetSource, type Role } from "@prisma/client";
 import { createDefaultCategories } from "./categories";
 import { prisma } from "./db";
 import { LedgerError, NotFoundError } from "./ledger";
+import type { LlmConfig } from "./llm";
 
 export const SESSION_COOKIE = "foyra_session"; // dupliqué dans src/middleware.ts (runtime edge)
 const SESSION_DAYS = 30;
@@ -222,8 +223,8 @@ export const setRole = (householdId: string, actorId: string, userId: string, ro
 export const setDisabled = (householdId: string, actorId: string, userId: string, disabled: boolean) =>
   updateUser(householdId, actorId, userId, { disabled });
 
-/** Préférences du foyer (admin) : nom affiché, source des nouveaux budgets, fournisseur du rapport (absent = inchangé). La devise reste l'euro. */
-export async function updateHousehold(householdId: string, data: { name: string; budgetSource: BudgetSource; llmProvider?: LlmProvider | null }) {
+/** Préférences du foyer (admin) : nom affiché et source des nouveaux budgets, ou réglages LLM. La devise reste l'euro. */
+export async function updateHousehold(householdId: string, data: { name: string; budgetSource: BudgetSource } | LlmConfig) {
   await prisma.household.update({ where: { id: householdId }, data });
 }
 
