@@ -1,5 +1,5 @@
-import type { Scope } from "./access";
-import { addMonths, budgetTotals, savedIn } from "./budget";
+import { addMonths } from "./amortization";
+import { budgetTotals, savedIn } from "./budget";
 import { chargeStatus } from "./calendar";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
@@ -10,8 +10,7 @@ import { bigintToCents } from "./money";
  * enregistrées, résultat, net des opérations du mois (recettes − dépenses réelles), dernières opérations jusqu'à la fin du mois,
  * dépenses récurrentes encore à payer (retard jugé par rapport à `today`), et rappel du budget prévu s'il existe.
  */
-export async function getDashboard(scope: Scope, today: Date, month = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1))) {
-  const householdId = scope.householdId;
+export async function getDashboard(householdId: string, today: Date, month = addMonths(today, 0)) {
   const [sums, recent, charges, budget, saved] = await Promise.all([
     prisma.transaction.groupBy({
       by: ["kind"],
@@ -24,7 +23,7 @@ export async function getDashboard(scope: Scope, today: Date, month = new Date(D
       take: 8,
       include: { paidBy: { select: { name: true } }, category: { select: { name: true, parent: { select: { name: true } } } } },
     }),
-    listMonthCharges(scope, month),
+    listMonthCharges(householdId, month),
     prisma.budget.findUnique({ where: { householdId_month: { householdId, month } }, include: { items: { include: { category: { select: { fixed: true, savings: true } } } } } }),
     savedIn(householdId, month),
   ]);
@@ -59,15 +58,15 @@ const NONE = "none";
 export type Flow = { day: number; kind: "INCOME" | "EXPENSE"; categoryId: string | null; amount: number };
 
 /** Graphiques du tableau de bord : opérations du foyer depuis le 1er janvier de l'an dernier. */
-export async function getDashboardCharts(scope: Scope, today: Date) {
+export async function getDashboardCharts(householdId: string, today: Date) {
   const from = new Date(utc(today.getUTCFullYear() - 1, 0));
   const [rows, categories] = await Promise.all([
     prisma.$queryRaw<(Omit<Flow, "day" | "amount"> & { day: Date; amount: bigint })[]>`
       SELECT "occurredOn" AS day, "kind"::text AS kind, "categoryId", SUM("amount")::bigint AS amount
       FROM "Transaction"
-      WHERE "householdId" = ${scope.householdId} AND "occurredOn" >= ${from}
+      WHERE "householdId" = ${householdId} AND "occurredOn" >= ${from}
       GROUP BY 1, 2, 3`,
-    prisma.category.findMany({ where: { householdId: scope.householdId }, select: { id: true, name: true, parentId: true } }),
+    prisma.category.findMany({ where: { householdId }, select: { id: true, name: true, parentId: true } }),
   ]);
   return buildCharts(rows.map((r) => ({ ...r, day: r.day.getTime(), amount: bigintToCents(r.amount) })), categories, today);
 }

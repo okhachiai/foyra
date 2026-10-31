@@ -3,7 +3,6 @@ import { setupHousehold } from "./auth";
 import {
   addDefaultCategories, createCategory, DEFAULT_CATEGORIES, deleteCategory, FIXED_DEFAULTS, getCategory, listCategories, parseForecast, setCategoryArchived, updateCategory,
 } from "./categories";
-import { fullScope } from "./access";
 import { prisma } from "./db";
 import { createEntry, LedgerError, NotFoundError, parseDay, updateEntry } from "./ledger";
 
@@ -15,7 +14,7 @@ const cat = (name: string, kind: "INCOME" | "EXPENSE" = "EXPENSE", parentId: str
   createCategory(hh, { ...base, name, kind, parentId });
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
 const expense = (categoryId: string | null, amount = 4550) =>
-  createEntry(fullScope(hh), user, { paidById: user, kind: "EXPENSE", amount, occurredOn: day, note: null, categoryId });
+  createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount, occurredOn: day, note: null, categoryId });
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
@@ -72,7 +71,7 @@ describe("catégories", () => {
     const t = await expense(marche);
     expect(t.categoryId).toBe(marche);
     await expect(expense(await byName("Salaire 1"))).rejects.toMatchObject({ field: "categoryId", message: "Catégorie incompatible avec le type d’opération." });
-    await expect(updateEntry(fullScope(hh), t.id, { paidById: user, kind: "INCOME", amount: 100, occurredOn: day, note: null, categoryId: marche })).rejects.toBeInstanceOf(LedgerError);
+    await expect(updateEntry(hh, t.id, { paidById: user, kind: "INCOME", amount: 100, occurredOn: day, note: null, categoryId: marche })).rejects.toBeInstanceOf(LedgerError);
   });
 
   it("Archiver : historique conservé, nouvelles saisies refusées, branche archivée, réactivation", async () => {
@@ -83,7 +82,7 @@ describe("catégories", () => {
     expect((await prisma.transaction.findUniqueOrThrow({ where: { id: t.id } })).categoryId).toBe(marche);
     expect((await listCategories(hh)).some((x) => x.name === "Alimentation")).toBe(false);
     await expect(expense(marche)).rejects.toMatchObject({ field: "categoryId", message: "Cette catégorie est archivée." });
-    await updateEntry(fullScope(hh), t.id, { paidById: user, kind: "EXPENSE", amount: 100, occurredOn: day, note: "ok", categoryId: marche }); // inchangée : acceptée
+    await updateEntry(hh, t.id, { paidById: user, kind: "EXPENSE", amount: 100, occurredOn: day, note: "ok", categoryId: marche }); // inchangée : acceptée
     await expect(setCategoryArchived(hh, marche, false)).rejects.toThrow("Réactivez d’abord la catégorie parente.");
     await setCategoryArchived(hh, alimentation, false);
     expect((await getCategory(hh, alimentation)).archivedAt).toBeNull();

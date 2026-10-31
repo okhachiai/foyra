@@ -1,5 +1,2 @@
-import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
-
-/** Fusion de classes Tailwind (convention shadcn/ui). */
-export const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs));
+/** Concatène les classes non vides. Pas de fusion des conflits Tailwind : une surcharge en conflit passe par `!`. */
+export const cn = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(" ");

@@ -1,5 +1,5 @@
 import type { BudgetStatus, CategoryKind, Prisma } from "@prisma/client";
-import type { Scope } from "./access";
+import { addMonths } from "./amortization";
 import { prisma } from "./db";
 import { isCode, LedgerError, NotFoundError, parseDay } from "./ledger";
 
@@ -8,7 +8,6 @@ type Db = Prisma.TransactionClient;
 /** « AAAA-MM » (années 2000–2099) → Date UTC du 1er du mois (colonne @db.Date), ou null si invalide. */
 export const parseMonth = (s: string | undefined) => (s && /^20\d{2}-(0[1-9]|1[0-2])$/.test(s) ? parseDay(`${s}-01`) : null);
 export const formatMonth = (month: Date) => month.toISOString().slice(0, 7);
-export const addMonths = (month: Date, n: number) => new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + n, 1));
 
 // --- Calculs (purs) ---
 
@@ -144,8 +143,7 @@ const ITEM_ORDER = [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }
  * et le réel par ligne (opérations du foyer rattachées à la catégorie d'origine).
  * Dépense : seules les opérations communes ou personnelles selon la ligne principale ; revenu : toutes.
  */
-export async function getBudget(scope: Scope, month: Date) {
-  const householdId = scope.householdId;
+export async function getBudget(householdId: string, month: Date) {
   const budget = await prisma.budget.findUnique({
     where: { householdId_month: { householdId, month } },
     include: { items: { orderBy: ITEM_ORDER, include: { category: { select: { fixed: true, savings: true } } } } },
@@ -247,6 +245,9 @@ export async function setBudgetStatus(householdId: string, budgetId: string, sta
 
 /** `shared` / `reserve` absents : inchangés (valeurs par défaut à la création). */
 export type ItemFields = { label: string; amount: number; included: boolean; recurring: boolean; shared?: boolean; reserve?: boolean };
+
+/** Empreinte des valeurs affichées d'une ligne : identique à la soumission = ligne non modifiée (cases non affichées : undefined). */
+export const itemSignature = (f: ItemFields) => JSON.stringify([f.label, f.amount, f.included, f.recurring, f.shared, f.reserve]);
 
 const ONE_RESERVE = "Une seule réserve par budget.";
 const RESERVE_TOP = "La réserve doit être une ligne principale de dépense.";

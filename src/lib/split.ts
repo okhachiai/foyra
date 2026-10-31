@@ -1,5 +1,5 @@
-import { fullScope } from "./access";
-import { addMonths, getBudget } from "./budget";
+import { addMonths } from "./amortization";
+import { getBudget } from "./budget";
 import { prisma } from "./db";
 
 /** Montants du mois par membre (id utilisateur → centimes). */
@@ -56,14 +56,13 @@ export function splitMonth(i: SplitInput): Split {
 
 /** Partage du mois du foyer : chaque opération est attribuée à son « payé par ». Recettes sans catégorie ignorées. */
 export async function getSplit(householdId: string, month: Date): Promise<Split> {
-  const scope = fullScope(householdId);
   const [members, rows, budget] = await Promise.all([
     prisma.user.findMany({ where: { householdId, disabledAt: null }, select: { id: true, name: true }, orderBy: { createdAt: "asc" } }),
     prisma.transaction.findMany({
       where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) } },
       select: { paidById: true, kind: true, amount: true, shared: true, categoryId: true },
     }),
-    getBudget(scope, month),
+    getBudget(householdId, month),
   ]);
   const add = (r: PerMember, id: string, n: number) => { r[id] = (r[id] ?? 0) + n; };
   const input: SplitInput = { members, income: {}, commonIncome: 0, plannedCommon: 0, paidCommon: {}, spentPersonal: {} };

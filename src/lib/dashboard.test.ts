@@ -3,7 +3,6 @@ import { setupHousehold } from "./auth";
 import { createBudget, parseMonth } from "./budget";
 import { createCharge, payCharge, type ChargeInput } from "./charges";
 import { buildCharts, getDashboard, type Flow } from "./dashboard";
-import { fullScope } from "./access";
 import { prisma } from "./db";
 import { createEntry, parseDay } from "./ledger";
 import { createLoan } from "./loans";
@@ -15,7 +14,7 @@ const today = parseDay("2026-11-10")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(fullScope(hh), { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 /** Budget du mois : lignes de dépense (libellé = nom de la récurrence) dans la catégorie Loyer. */
 const plan = async (lines: [string, number][], month = nov) => {
   const b = await createBudget(hh, month);
@@ -24,7 +23,7 @@ const plan = async (lines: [string, number][], month = nov) => {
   await prisma.budgetItem.createMany({ data: lines.map(([label, amount]) => ({ householdId: hh, budgetId: b.id, kind: "EXPENSE" as const, label, amount, categoryId })) });
 };
 const spend = async (cat: string, amount: number) =>
-  createEntry(fullScope(hh), user, { paidById: user, kind: "EXPENSE", amount, occurredOn: day("2026-11-09"), note: null, categoryId: await byName(cat) });
+  createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount, occurredOn: day("2026-11-09"), note: null, categoryId: await byName(cat) });
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
@@ -39,8 +38,8 @@ describe("tableau de bord", () => {
     const loyer = await charge();
     await charge({ name: "Assurance", dueDay: 8 });
     await charge({ name: "Internet", dueDay: 20 });
-    await payCharge(fullScope(hh), user, loyer.id, nov, 95000, day("2026-11-05"));
-    const d = await getDashboard(fullScope(hh), today);
+    await payCharge(hh, user, loyer.id, nov, 95000, day("2026-11-05"));
+    const d = await getDashboard(hh, today);
     expect(d.toPay).toBe(11000);
     expect(d.late).toEqual({ count: 1, amount: 8000 });
     expect(d.unpaid.map((c) => `${c.name}:${c.status}`)).toEqual(["Assurance:late", "Internet:due"]);
@@ -49,44 +48,44 @@ describe("tableau de bord", () => {
   it("Montants lus dans le budget du mois, jamais dans la récurrence ; sans ligne : 0, « absente du budget »", async () => {
     await charge();
     await charge({ name: "Assurance", dueDay: 20 });
-    expect((await getDashboard(fullScope(hh), today)).unpaid.map((c) => `${c.name}:${c.amount}:${c.budgeted}`)).toEqual(["Loyer:0:false", "Assurance:0:false"]);
+    expect((await getDashboard(hh, today)).unpaid.map((c) => `${c.name}:${c.amount}:${c.budgeted}`)).toEqual(["Loyer:0:false", "Assurance:0:false"]);
     await plan([["Loyer", 90000]]);
-    const d = await getDashboard(fullScope(hh), today);
+    const d = await getDashboard(hh, today);
     // Deux récurrences dans la même catégorie : le libellé départage, sinon première ligne de la catégorie.
     expect(d.unpaid.map((c) => `${c.name}:${c.amount}:${c.budgeted}`)).toEqual(["Loyer:90000:true", "Assurance:90000:true"]);
   });
 
   it("Crédit : échéance du mois non payée comptée (assurance incluse)", async () => {
-    await createLoan(fullScope(hh), {
+    await createLoan(hh, {
       name: "Maison", categoryId: await byName("Loyer"), firstDue: day("2026-11-15"),
       principal: 10_000_000, annualRate: 1200, termMonths: 240, payment: null, insurance: 1000,
     });
-    const d = await getDashboard(fullScope(hh), today);
+    const d = await getDashboard(hh, today);
     expect(d.toPay).toBe(46887 + 1000);
     expect(d.unpaid).toMatchObject([{ name: "Maison", status: "due" }]);
   });
 
   it("Mois : revenus du budget, dépenses enregistrées, résultat, net des opérations ; autres mois exclus", async () => {
-    await createEntry(fullScope(hh), user, { paidById: user, kind: "INCOME", amount: 250000, occurredOn: day("2026-11-02"), note: "Salaire", categoryId: await byName("Salaire 1") });
+    await createEntry(hh, user, { paidById: user, kind: "INCOME", amount: 250000, occurredOn: day("2026-11-02"), note: "Salaire", categoryId: await byName("Salaire 1") });
     await spend("Marché", 4500);
     await spend("Carburant", 6000);
-    await createEntry(fullScope(hh), user, { paidById: user, kind: "EXPENSE", amount: 99900, occurredOn: day("2026-10-31"), note: null, categoryId: null });
-    expect((await getDashboard(fullScope(hh), today)).income).toBe(0); // sans budget : opération de revenu ignorée
+    await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 99900, occurredOn: day("2026-10-31"), note: null, categoryId: null });
+    expect((await getDashboard(hh, today)).income).toBe(0); // sans budget : opération de revenu ignorée
     await createBudget(hh, nov, [{ label: "Salaire", amount: 300000, categoryId: null }]);
-    const d = await getDashboard(fullScope(hh), today);
+    const d = await getDashboard(hh, today);
     expect(d).toMatchObject({ income: 300000, expense: 10500, result: 289500, net: 250000 - 10500 });
     expect(d.recent.map((t) => `${t.kind}:${t.amount}`)).toEqual(["EXPENSE:6000", "EXPENSE:4500", "INCOME:250000", "EXPENSE:99900"]);
   });
 
   it("Budget : rappel du prévu s'il existe, jamais créé par le tableau de bord", async () => {
-    expect((await getDashboard(fullScope(hh), today)).budget).toBeNull();
+    expect((await getDashboard(hh, today)).budget).toBeNull();
     expect(await prisma.budget.count()).toBe(0);
     await createBudget(hh, nov);
-    expect((await getDashboard(fullScope(hh), today)).budget).toMatchObject({ status: "DRAFT", totals: { income: 0, expense: 0, remaining: 0 } });
+    expect((await getDashboard(hh, today)).budget).toMatchObject({ status: "DRAFT", totals: { income: 0, expense: 0, remaining: 0 } });
   });
 
   it("Vide : foyer sans opération ni charge", async () => {
-    const d = await getDashboard(fullScope(hh), today);
+    const d = await getDashboard(hh, today);
     expect(d).toMatchObject({ net: 0, income: 0, expense: 0, result: 0, recent: [], unpaid: [], toPay: 0, late: { count: 0, amount: 0 } });
   });
 });

@@ -5,21 +5,19 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { BudgetSource, CategoryKind, LlmProvider, Role } from "@prisma/client";
-import { getScope } from "@/lib/access";
 import {
   changePassword, checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
-  recordLoginFailure, requireAdmin, requireUser, setDisabled, setRole, setupHousehold, startSession, updateDisplayName, updateHousehold,
+  recordLoginFailure, requireAdmin, requireUser, setDisabled, setRole, setupHousehold, setupToken, startSession, updateDisplayName, updateHousehold,
 } from "@/lib/auth";
 import { createEntry, deleteTransaction, LedgerError, NotFoundError, parseDay, todayIn, updateEntry, type EntryInput } from "@/lib/ledger";
 import { addDefaultCategories, createCategory, deleteCategory, parseForecast, setCategoryArchived, updateCategory, type CategoryFields } from "@/lib/categories";
-import { addItem, createBudget, formatMonth, type IncomeLine, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
+import { addItem, createBudget, formatMonth, type IncomeLine, itemSignature, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
 import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
 import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/lib/loans";
 import { configuredProviders } from "@/lib/llm";
 import { parseCents } from "@/lib/money";
 import { applyAllocations, applyCategories, generateReport } from "@/lib/report";
 import { addSaving } from "@/lib/savings";
-import { itemSignature } from "./budget/signature";
 import type { FormState } from "./form";
 import { itemFlags, sharedField, str } from "./form-fields";
 
@@ -81,12 +79,6 @@ function requiredField(fd: FormData, name: string, errors: Errors) {
   return value;
 }
 
-/** Utilisateur connecté et sa portée (le foyer). */
-async function requireScope() {
-  const user = await requireUser();
-  return { user, scope: await getScope(user) };
-}
-
 function done(path: string): never {
   revalidatePath("/", "layout");
   redirect(path);
@@ -94,11 +86,9 @@ function done(path: string): never {
 
 // --- Setup, connexion, déconnexion ---
 
-/** Jeton d'installation facultatif (SETUP_TOKEN) : exigé par /setup quand il est défini. */
+/** Jeton d'installation (SETUP_TOKEN, ou celui des journaux du serveur) : toujours exigé par /setup. */
 function setupTokenOk(given: string) {
-  const expected = process.env.SETUP_TOKEN ?? "";
-  if (!expected) return true;
-  const a = Buffer.from(given), b = Buffer.from(expected);
+  const a = Buffer.from(given), b = Buffer.from(setupToken());
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
@@ -121,8 +111,9 @@ export async function setupAction(_: FormState, fd: FormData): Promise<FormState
 
 export async function loginAction(_: FormState, fd: FormData): Promise<FormState> {
   const h = await headers();
-  // Entrée la plus à droite : ajoutée par le reverse proxy, non choisie par le client.
-  const ip = h.get("x-forwarded-for")?.split(",").at(-1)?.trim() || h.get("x-real-ip")?.trim() || "";
+  // Derrière le reverse proxy (APP_URL renseignée) : entrée la plus à droite, ajoutée par le proxy.
+  // Sans proxy, ces en-têtes sont choisis par le client : limitation par email seulement.
+  const ip = process.env.APP_URL ? h.get("x-forwarded-for")?.split(",").at(-1)?.trim() || h.get("x-real-ip")?.trim() || "" : "";
   const email = str(fd, "email").toLowerCase();
   const neutral = { error: "Connexion impossible. Vérifiez vos identifiants ou réessayez plus tard." };
   if (loginBlocked(ip, email)) return neutral;
@@ -235,11 +226,11 @@ function entryFields(fd: FormData, errors: Errors): EntryInput {
 const idempotencyKey = (fd: FormData) => str(fd, "idempotencyKey").slice(0, 100) || null;
 
 export async function createEntryAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
+  const user = await requireUser();
   const errors = new Errors();
   const input = entryFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => createEntry(scope, user.id, { ...input, idempotencyKey: idempotencyKey(fd) }));
+  const error = await run(() => createEntry(user.householdId, user.id, { ...input, idempotencyKey: idempotencyKey(fd) }));
   if (error) return error;
   // Liste blanche : seules les valeurs fixes « dashboard » et « budget » changent la page de retour.
   const back = str(fd, "back");
@@ -247,31 +238,31 @@ export async function createEntryAction(_: FormState, fd: FormData): Promise<For
 }
 
 export async function updateTransactionAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
+  const { householdId } = await requireUser();
   const errors = new Errors();
   const input = entryFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => updateEntry(scope, str(fd, "id"), input));
+  const error = await run(() => updateEntry(householdId, str(fd, "id"), input));
   if (error) return error;
   done(`/operations?m=${formatMonth(input.occurredOn)}`);
 }
 
 export async function deleteTransactionAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
-  const error = await run(() => deleteTransaction(scope, str(fd, "id")));
+  const { householdId } = await requireUser();
+  const error = await run(() => deleteTransaction(householdId, str(fd, "id")));
   if (error) return error;
   done("/operations");
 }
 
 /** Versement d'épargne : dépense de la catégorie d'épargne (déduite des revenus), commune sauf case décochée. */
 export async function addSavingAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
+  const user = await requireUser();
   const errors = new Errors();
   const amount = amountField(fd, errors), occurredOn = dayField(fd, errors);
   const paidById = str(fd, "paidById");
   if (!paidById) errors.add("paidById", "Champ obligatoire.");
   if (errors.state) return errors.state;
-  const error = await run(() => addSaving(scope, user.id, { amount, occurredOn, paidById, note: noteField(fd), shared: sharedField(fd), idempotencyKey: idempotencyKey(fd) }));
+  const error = await run(() => addSaving(user.householdId, user.id, { amount, occurredOn, paidById, note: noteField(fd), shared: sharedField(fd), idempotencyKey: idempotencyKey(fd) }));
   if (error) return error;
   done(`/epargne?m=${formatMonth(occurredOn)}`);
 }
@@ -425,42 +416,42 @@ function chargeFields(fd: FormData, errors: Errors): ChargeInput {
 }
 
 export async function createChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
+  const { householdId } = await requireUser();
   const errors = new Errors();
   const input = chargeFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => createCharge(scope, input));
+  const error = await run(() => createCharge(householdId, input));
   if (error) return error;
   done("/charges");
 }
 
 export async function updateChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
+  const { householdId } = await requireUser();
   const errors = new Errors();
   const input = chargeFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => updateCharge(scope, str(fd, "id"), input));
+  const error = await run(() => updateCharge(householdId, str(fd, "id"), input));
   if (error) return error;
   done("/charges");
 }
 
 export async function deleteChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
-  const error = await run(() => deleteCharge(scope, str(fd, "id")));
+  const { householdId } = await requireUser();
+  const error = await run(() => deleteCharge(householdId, str(fd, "id")));
   if (error) return error;
   done("/charges");
 }
 
 /** Marque une charge payée pour le mois : crée la dépense réelle (montant et date saisis, payée par l'utilisateur). */
 export async function payChargeAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
+  const user = await requireUser();
   const month = parseMonth(str(fd, "month"));
   if (!month) return { error: "Mois invalide." };
   const errors = new Errors();
   const amount = amountField(fd, errors);
   const occurredOn = dayField(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => payCharge(scope, user.id, str(fd, "id"), month, amount, occurredOn));
+  const error = await run(() => payCharge(user.householdId, user.id, str(fd, "id"), month, amount, occurredOn));
   if (error) return error;
   // Liste blanche : seule la valeur fixe « calendar » change la page de retour.
   done(`${str(fd, "back") === "calendar" ? "/calendrier" : "/charges"}?m=${formatMonth(month)}`);
@@ -505,37 +496,37 @@ function loanFields(fd: FormData, errors: Errors): LoanInput {
 }
 
 export async function createLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
+  const { householdId } = await requireUser();
   const errors = new Errors();
   const input = loanFields(fd, errors);
   if (errors.state) return errors.state;
   let id = "";
-  const error = await run(async () => (id = (await createLoan(scope, input)).id));
+  const error = await run(async () => (id = (await createLoan(householdId, input)).id));
   if (error) return error;
   done(`/credits/${id}`);
 }
 
 export async function updateLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
+  const { householdId } = await requireUser();
   const id = str(fd, "id");
   const errors = new Errors();
   const input = loanFields(fd, errors);
   if (errors.state) return errors.state;
-  const error = await run(() => updateLoan(scope, id, input));
+  const error = await run(() => updateLoan(householdId, id, input));
   if (error) return error;
   done(`/credits/${id}`);
 }
 
 export async function deleteLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { scope } = await requireScope();
-  const error = await run(() => deleteLoan(scope, str(fd, "id")));
+  const { householdId } = await requireUser();
+  const error = await run(() => deleteLoan(householdId, str(fd, "id")));
   if (error) return error;
   done("/credits");
 }
 
 /** Remboursement anticipé : crée la dépense réelle (catégorie du crédit, payée par l'utilisateur). */
 export async function prepayLoanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const { user, scope } = await requireScope();
+  const user = await requireUser();
   const id = str(fd, "id");
   const errors = new Errors();
   const amount = amountField(fd, errors);
@@ -543,7 +534,7 @@ export async function prepayLoanAction(_: FormState, fd: FormData): Promise<Form
   const mode = str(fd, "mode");
   if (mode !== "REDUCE_TERM" && mode !== "REDUCE_PAYMENT") errors.add("mode", "Choisissez un mode.");
   if (errors.state) return errors.state;
-  const error = await run(() => prepay(scope, user.id, id, amount, occurredOn, mode as "REDUCE_TERM"));
+  const error = await run(() => prepay(user.householdId, user.id, id, amount, occurredOn, mode as "REDUCE_TERM"));
   if (error) return error;
   done(`/credits/${id}`);
 }

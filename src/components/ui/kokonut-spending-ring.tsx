@@ -72,8 +72,7 @@ export interface SpendingCategory {
 export interface SpendingRingProps {
   title: string;
   categories: SpendingCategory[];
-  currency?: string;
-  className?: string;
+  currency: string;
 }
 
 /** Wraps an angle into -180..180. */
@@ -119,8 +118,7 @@ function springStep(
 export default function SpendingRing({
   title,
   categories,
-  currency = "EUR",
-  className,
+  currency,
 }: SpendingRingProps) {
   const [selected, setSelected] = useState(0);
   const [spinning, setSpinning] = useState(false);
@@ -367,10 +365,7 @@ export default function SpendingRing({
 
   return (
     <div
-      className={cn(
-        "w-full text-foreground",
-        className
-      )}
+      className="w-full text-foreground"
     >
       <div className="flex items-baseline justify-between gap-4">
         <h2 className="m-0 text-base font-semibold tracking-tight text-heading">{title}</h2>

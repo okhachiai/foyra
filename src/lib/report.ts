@@ -1,6 +1,6 @@
 import { Prisma, type LlmProvider, type Report, type ReportTrigger, type Role } from "@prisma/client";
-import { fullScope, getScope } from "./access";
-import { addMonths, envelopes, formatMonth, getBudget, saveItems, type Envelope, type ItemFields } from "./budget";
+import { addMonths } from "./amortization";
+import { envelopes, formatMonth, getBudget, saveItems, type Envelope, type ItemFields } from "./budget";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
 import { formatDay, getTransaction, isCode, LedgerError, monthNet, NotFoundError, parseDay, updateEntry } from "./ledger";
@@ -130,13 +130,12 @@ const MAX_UNCATEGORIZED = 50;
  */
 export async function buildInput(viewer: Viewer, today: Date): Promise<{ budgetId: string; input: ReportInput }> {
   const householdId = viewer.householdId;
-  const month = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const all = fullScope(householdId);
+  const month = addMonths(today, 0);
   const [budget, split, net, charges, ops, categories] = await Promise.all([
-    getBudget(all, month),
+    getBudget(householdId, month),
     getSplit(householdId, month),
-    monthNet(all, month),
-    listMonthCharges(all, month),
+    monthNet(householdId, month),
+    listMonthCharges(householdId, month),
     prisma.transaction.findMany({
       where: {
         householdId, occurredOn: { gte: month, lt: addMonths(month, 1) },
@@ -291,7 +290,7 @@ export async function applyAllocations(viewer: Viewer, reportId: string, today: 
   const r = await proposal(viewer, reportId);
   if (r.day.getTime() !== today.getTime()) throw new LedgerError(STALE);
   if (r.budget.status === "VALIDATED") throw new LedgerError("Repasser le budget en brouillon pour appliquer");
-  const budget = await getBudget(fullScope(r.householdId), r.budget.month);
+  const budget = await getBudget(r.householdId, r.budget.month);
   const nodes = new Map(budget!.tree.filter((n) => !n.children.length).map((n) => [n.id, n]));
   const items = new Map<string, ItemFields>();
   for (const a of r.output.allocations) {
@@ -305,14 +304,14 @@ export async function applyAllocations(viewer: Viewer, reportId: string, today: 
 /** Applique les catégories proposées ; opérations disparues ou déjà catégorisées ignorées. */
 export async function applyCategories(viewer: Viewer, reportId: string): Promise<number> {
   const r = await proposal(viewer, reportId);
-  const scope = await getScope(viewer);
+  const { householdId } = viewer;
   let n = 0;
   for (const c of r.output.categorize) {
     try {
-      const t = await getTransaction(scope, c.transactionId);
+      const t = await getTransaction(householdId, c.transactionId);
       if (t.categoryId !== null) continue; // jamais d'écrasement d'un choix de l'utilisateur
       const { kind, amount, occurredOn, note, shared, paidById } = t;
-      await updateEntry(scope, t.id, { kind, amount, occurredOn, note, shared, paidById, categoryId: c.categoryId });
+      await updateEntry(householdId, t.id, { kind, amount, occurredOn, note, shared, paidById, categoryId: c.categoryId });
       n++;
     } catch (e) {
       if (!(e instanceof LedgerError || e instanceof NotFoundError)) throw e;

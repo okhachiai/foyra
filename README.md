@@ -9,13 +9,13 @@ cp .env.example .env   # changez POSTGRES_PASSWORD
 docker compose up -d
 ```
 
-Ouvrez `http://<hôte>:3000/` : la première visite mène à `/setup` (création du foyer et du compte admin). L'admin crée ensuite les autres membres dans **Membres** ; il n'y a pas d'inscription publique.
+Ouvrez `http://<hôte>:3000/` : la première visite mène à `/setup` (création du foyer et du compte admin), qui demande le jeton `SETUP_TOKEN` du `.env` ou, à défaut, celui affiché dans les journaux (`docker compose logs app`). L'admin crée ensuite les autres membres dans **Membres** ; il n'y a pas d'inscription publique.
 
 Au démarrage, le conteneur `app` attend que PostgreSQL soit prêt, applique les migrations (`prisma migrate deploy`) puis lance le serveur. Les données vivent dans le volume `pgdata` : `docker compose down` puis `up -d` les conserve (seul `down -v` les efface).
 
 ### Derrière un reverse proxy HTTPS
 
-Dans `.env` : `COOKIE_SECURE=true`, `APP_URL=https://foyra.example.org` (lu au build : relancez `docker compose up -d --build`), et `APP_BIND=127.0.0.1` si le proxy tourne sur la même machine.
+Dans `.env` : `APP_URL=https://foyra.example.org` (lu au build : relancez `docker compose up -d --build` ; rend aussi le cookie « Secure » et fait lire l'IP client dans `X-Forwarded-For`), et `APP_BIND=127.0.0.1` si le proxy tourne sur la même machine : l'app ne doit être joignable que par le proxy, sinon l'en-tête peut être falsifié.
 
 ### Mise à jour
 

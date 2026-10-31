@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fullScope } from "./access";
 import { createMember, setupHousehold } from "./auth";
 import { addItem, createBudget, parseMonth, removeItem, setBudgetStatus } from "./budget";
 import { createCharge } from "./charges";
@@ -120,13 +119,12 @@ beforeEach(async () => {
 async function household(income: number) {
   const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "alice@test.fr", password: "password1" }))!;
   const hh = admin.householdId;
-  const all = fullScope(hh);
   const bob = (await createMember(hh, { name: "Bob", email: "bob@test.fr", password: "password1", role: "MEMBER" }))!;
   const cat = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
   if (income) {
-    await createEntry(all, admin.id, { paidById: admin.id, kind: "INCOME", amount: income, occurredOn: day("2026-11-01"), note: null, categoryId: await cat("Autres revenus"), shared: true });
+    await createEntry(hh, admin.id, { paidById: admin.id, kind: "INCOME", amount: income, occurredOn: day("2026-11-01"), note: null, categoryId: await cat("Autres revenus"), shared: true });
   }
-  return { admin, bob: { ...bob, householdId: hh }, hh, all, cat };
+  return { admin, bob: { ...bob, householdId: hh }, hh, cat };
 }
 
 describe("buildInput", () => {
@@ -136,12 +134,12 @@ describe("buildInput", () => {
   });
 
   it("entrée complète, identique pour chaque membre, aucun e-mail", async () => {
-    const { admin, bob, hh, all, cat } = await household(200000);
+    const { admin, bob, hh, cat } = await household(200000);
     const loyer = await cat("Loyer");
-    await createCharge(all, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 25, categoryId: loyer, startMonth: nov, endMonth: null, shared: true });
-    await createCharge(all, { kind: "EXPENSE", active: true, name: "Eau", dueDay: 2, categoryId: loyer, startMonth: nov, endMonth: null, shared: true }); // échue : comptée dans le disponible, pas à venir
+    await createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 25, categoryId: loyer, startMonth: nov, endMonth: null, shared: true });
+    await createCharge(hh, { kind: "EXPENSE", active: true, name: "Eau", dueDay: 2, categoryId: loyer, startMonth: nov, endMonth: null, shared: true }); // échue : comptée dans le disponible, pas à venir
     const entry = (paidById: string, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, note: string | null, on = "2026-11-10") =>
-      createEntry(all, admin.id, { paidById, kind, amount, occurredOn: day(on), note, categoryId });
+      createEntry(hh, admin.id, { paidById, kind, amount, occurredOn: day(on), note, categoryId });
     const tA = await entry(admin.id, "EXPENSE", 1200, null, "Boulangerie");
     const tA2 = await entry(admin.id, "EXPENSE", 800, null, null, "2026-11-04");
     const tB = await entry(bob.id, "EXPENSE", 2500, await cat("Supermarché"), null);
@@ -180,9 +178,9 @@ describe("buildInput", () => {
   });
 
   it("sans catégorie : les 50 plus récentes seulement", async () => {
-    const { admin, hh, all } = await household(0);
+    const { admin, hh } = await household(0);
     await createBudget(hh, nov);
-    const entry = (on: string) => createEntry(all, admin.id, { paidById: admin.id, kind: "EXPENSE", amount: 100, occurredOn: day(on), note: null, categoryId: null });
+    const entry = (on: string) => createEntry(hh, admin.id, { paidById: admin.id, kind: "EXPENSE", amount: 100, occurredOn: day(on), note: null, categoryId: null });
     for (let i = 0; i < 49; i++) await entry("2026-11-05");
     const latest = await entry("2026-11-10");
     const oldest = await entry("2026-11-04"); // créée en dernier, mais la plus ancienne : écartée
@@ -193,8 +191,8 @@ describe("buildInput", () => {
   });
 
   it("disponible jamais négatif", async () => {
-    const { admin, hh, all, cat } = await household(1000);
-    await createCharge(all, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 25, categoryId: await cat("Loyer"), startMonth: nov, endMonth: null, shared: true });
+    const { admin, hh, cat } = await household(1000);
+    await createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 25, categoryId: await cat("Loyer"), startMonth: nov, endMonth: null, shared: true });
     const budget = await createBudget(hh, nov);
     await prisma.budgetItem.updateMany({ where: { budgetId: budget.id, label: "Loyer" }, data: { amount: 95000 } });
     expect((await buildInput(admin, today)).input.available).toBe(0);
@@ -318,8 +316,8 @@ describe("génération, stockage, application", () => {
   });
 
   it("applyAllocations : prévu = réel actuel + allocation ; ligne supprimée ignorée ; budget validé ; rapport d'un autre", async () => {
-    const { admin, bob, hh, all, budget, courses, reserve, out, reply, cat } = await setup();
-    const spend = async (amount: number) => createEntry(all, admin.id, { paidById: admin.id, shared: true, kind: "EXPENSE", amount, occurredOn: today, note: null, categoryId: await cat("Supermarché") });
+    const { admin, bob, hh, budget, courses, reserve, out, reply, cat } = await setup();
+    const spend = async (amount: number) => createEntry(hh, admin.id, { paidById: admin.id, shared: true, kind: "EXPENSE", amount, occurredOn: today, note: null, categoryId: await cat("Supermarché") });
     await spend(1200); // disponible : 198 800
     reply({ ...out(), allocations: [{ budgetItemId: courses.id, amount: 150000 }, { budgetItemId: reserve.id, amount: 48800 }] });
     const r = await generateReport(admin, today, "MANUAL", "CLAUDE");
@@ -343,17 +341,17 @@ describe("génération, stockage, application", () => {
   });
 
   it("applyCategories : opération supprimée ou déjà catégorisée ignorée", async () => {
-    const { admin, bob, all, courses, reserve, out, reply, cat } = await setup();
-    const entry = (paidById: string) => createEntry(all, bob.id, { paidById, kind: "EXPENSE", amount: 500, occurredOn: today, note: "x", categoryId: null });
+    const { admin, bob, hh, courses, reserve, out, reply, cat } = await setup();
+    const entry = (paidById: string) => createEntry(hh, bob.id, { paidById, kind: "EXPENSE", amount: 500, occurredOn: today, note: "x", categoryId: null });
     const [ok, other, gone] = [await entry(bob.id), await entry(admin.id), await entry(bob.id)];
     const [supermarche, loyer] = [await cat("Supermarché"), await cat("Loyer")];
-    const chosen = await createEntry(all, bob.id, { paidById: bob.id, kind: "EXPENSE", amount: 500, occurredOn: today, note: "y", categoryId: loyer });
+    const chosen = await createEntry(hh, bob.id, { paidById: bob.id, kind: "EXPENSE", amount: 500, occurredOn: today, note: "y", categoryId: loyer });
     // 4 dépenses de 5 € : disponible 2 000 − 20 = 1 980 €.
     const categorize = [ok, other, gone, chosen].map((t) => ({ transactionId: t.id, categoryId: supermarche }));
     reply({ ...out(categorize), allocations: [{ budgetItemId: courses.id, amount: 150000 }, { budgetItemId: reserve.id, amount: 48000 }] });
     const r = await generateReport(bob, today, "MANUAL", "CLAUDE");
     expect(r.error).toBeNull();
-    await deleteTransaction(all, gone.id);
+    await deleteTransaction(hh, gone.id);
 
     expect(await applyCategories(bob, r.id)).toBe(2);
     expect(await prisma.transaction.findUniqueOrThrow({ where: { id: ok.id } })).toMatchObject({ categoryId: supermarche, amount: 500, note: "x", paidById: bob.id });

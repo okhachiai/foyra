@@ -11,3 +11,5 @@ backups/
 .deploy-lock/
 .playwright-mcp/
 .superpowers/
+.agents/
+.claude/skills/

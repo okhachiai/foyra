@@ -22,7 +22,8 @@ async function setSessionCookie(token: string) {
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.COOKIE_SECURE === "true",
+    // COOKIE_SECURE explicite, sinon déduit de l'URL publique (https → Secure).
+    secure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === "true" : !!process.env.APP_URL?.startsWith("https://"),
     path: "/",
     maxAge: SESSION_DAYS * 86_400,
   });
@@ -131,6 +132,18 @@ export async function checkCredentials(email: string, password: string) {
 }
 
 // --- Initialisation et membres ---
+
+const g = globalThis as unknown as { setupToken?: string };
+
+/** Jeton exigé par /setup : SETUP_TOKEN, sinon jeton aléatoire tiré une fois et affiché dans les journaux du serveur. */
+export function setupToken() {
+  if (process.env.SETUP_TOKEN) return process.env.SETUP_TOKEN;
+  if (!g.setupToken) {
+    g.setupToken = randomBytes(16).toString("hex");
+    console.log(`Jeton d'installation (/setup) : ${g.setupToken}`);
+  }
+  return g.setupToken;
+}
 
 export async function householdExists() {
   return (await prisma.household.count()) > 0;

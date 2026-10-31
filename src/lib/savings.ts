@@ -1,5 +1,5 @@
-import type { Scope } from "./access";
-import { addMonths, buildTree, formatMonth } from "./budget";
+import { addMonths } from "./amortization";
+import { buildTree, formatMonth } from "./budget";
 import { prisma } from "./db";
 import { createEntry, isCode, type EntryInput } from "./ledger";
 
@@ -29,9 +29,9 @@ export async function savingsCategory(householdId: string): Promise<string> {
 }
 
 /** Versement d'épargne : une dépense commune de la catégorie d'épargne, donc déduite des revenus comme une charge. */
-export async function addSaving(scope: Scope, userId: string, input: Omit<EntryInput, "kind" | "categoryId"> & { idempotencyKey?: string | null }) {
-  const categoryId = await savingsCategory(scope.householdId);
-  return createEntry(scope, userId, { shared: true, ...input, kind: "EXPENSE", categoryId });
+export async function addSaving(householdId: string, userId: string, input: Omit<EntryInput, "kind" | "categoryId"> & { idempotencyKey?: string | null }) {
+  const categoryId = await savingsCategory(householdId);
+  return createEntry(householdId, userId, { shared: true, ...input, kind: "EXPENSE", categoryId });
 }
 
 export type SavingsMonth = { month: string; planned: number; actual: number; cumulative: number };
@@ -49,8 +49,7 @@ export function savingsSeries(months: Date[], paid: { occurredOn: Date; amount: 
 }
 
 /** Suivi des `count` derniers mois jusqu'à `month` inclus, et derniers versements. */
-export async function getSavings(scope: Scope, month: Date, count = 12) {
-  const householdId = scope.householdId;
+export async function getSavings(householdId: string, month: Date, count = 12) {
   const from = addMonths(month, 1 - count), to = addMonths(month, 1);
   const ids = (await prisma.category.findMany({ where: { householdId, OR: [{ savings: true }, { parent: { savings: true } }] }, select: { id: true } })).map((c) => c.id);
   const inSavings = { householdId, categoryId: { in: ids } };

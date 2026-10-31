@@ -6,10 +6,11 @@ export function dueDate(charge: { dueDay: number }, month: Date) {
   return new Date(Date.UTC(y, m, Math.min(charge.dueDay, new Date(Date.UTC(y, m + 1, 0)).getUTCDate())));
 }
 
-const addMonths = (month: Date, n: number) => new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + n, 1));
+/** 1er du mois UTC décalé de n mois (n = 0 : début du mois de la date). */
+export const addMonths = (month: Date, n: number) => new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + n, 1));
 
 /** Intérêts d'un mois : taux annuel en millièmes de pour cent (1,2 % → 1200). */
-const interestOf = (balance: number, annualRate: number) => Math.round((balance * annualRate) / 1_200_000);
+export const interestOf = (balance: number, annualRate: number) => Math.round((balance * annualRate) / 1_200_000);
 
 /** Mensualité constante (hors assurance) arrondie au centime ; taux 0 → capital / n. */
 export function annuity(principal: number, annualRate: number, n: number) {
@@ -19,7 +20,6 @@ export function annuity(principal: number, annualRate: number, n: number) {
 }
 
 /** Intérêts de la 1ʳᵉ échéance : une mensualité saisie doit les dépasser. */
-export const firstInterest = (principal: number, annualRate: number) => interestOf(principal, annualRate);
 
 export type LoanTerms = {
   principal: number; annualRate: number; termMonths: number; payment: number | null; insurance: number;

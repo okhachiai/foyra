@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import type { Scope } from "./access";
+import { addMonths } from "./amortization";
 import { prisma } from "./db";
 
 /** Erreur métier affichable (optionnellement rattachée à un champ du formulaire). */
@@ -21,11 +21,11 @@ export type EntryInput = { kind: "INCOME" | "EXPENSE"; amount: number; occurredO
 type Idempotent = { idempotencyKey?: string | null };
 
 /** Net des opérations du mois (recettes − dépenses) : remplace le solde des anciens comptes. */
-export async function monthNet(scope: Scope, month: Date, db: Db = prisma) {
-  const next = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1));
+export async function monthNet(householdId: string, month: Date, db: Db = prisma) {
+  const next = addMonths(month, 1);
   const sums = await db.transaction.groupBy({
     by: ["kind"],
-    where: { householdId: scope.householdId, occurredOn: { gte: month, lt: next } },
+    where: { householdId, occurredOn: { gte: month, lt: next } },
     _sum: { amount: true },
   });
   return sums.reduce((s, r) => s + (r.kind === "INCOME" ? 1 : -1) * (r._sum.amount ?? 0), 0);
@@ -64,34 +64,33 @@ export const payers = (householdId: string, keep?: string) =>
   });
 
 /** Création dans une transaction SQL existante (ex. paiement d'une récurrence) ; personnelle par défaut. */
-export async function createEntryTx(tx: Db, scope: Scope, userId: string, input: EntryInput & Idempotent) {
-  await checkPayer(tx, scope.householdId, input.paidById);
-  await checkCategory(tx, scope.householdId, input);
-  return tx.transaction.create({ data: { ...input, shared: input.shared ?? false, householdId: scope.householdId, createdById: userId } });
+export async function createEntryTx(tx: Db, householdId: string, userId: string, input: EntryInput & Idempotent) {
+  await checkPayer(tx, householdId, input.paidById);
+  await checkCategory(tx, householdId, input);
+  return tx.transaction.create({ data: { ...input, shared: input.shared ?? false, householdId, createdById: userId } });
 }
 
 /** Écrit ; si la clé existe déjà (double clic, nouvelle tentative), renvoie l'opération déjà enregistrée au lieu d'un doublon. */
-export async function createEntry(scope: Scope, userId: string, input: EntryInput & Idempotent) {
+export async function createEntry(householdId: string, userId: string, input: EntryInput & Idempotent) {
   try {
-    return await prisma.$transaction((tx) => createEntryTx(tx, scope, userId, input));
+    return await prisma.$transaction((tx) => createEntryTx(tx, householdId, userId, input));
   } catch (e) {
     const key = input.idempotencyKey;
     if (!key || !isCode(e, "P2002")) throw e;
-    const t = await prisma.transaction.findFirst({ where: { householdId: scope.householdId, idempotencyKey: key } });
+    const t = await prisma.transaction.findFirst({ where: { householdId, idempotencyKey: key } });
     if (!t) throw e;
     return t;
   }
 }
 
 /** Opération du foyer. */
-export async function getTransaction(scope: Scope, id: string) {
-  const t = await prisma.transaction.findFirst({ where: { id, householdId: scope.householdId } });
+export async function getTransaction(householdId: string, id: string) {
+  const t = await prisma.transaction.findFirst({ where: { id, householdId } });
   if (!t) throw new NotFoundError();
   return t;
 }
 
-export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
-  const householdId = scope.householdId;
+export async function updateEntry(householdId: string, id: string, input: EntryInput) {
   return prisma.$transaction(async (tx) => {
     await lockLines(tx, householdId, Prisma.sql`"id" = ${id}`);
     const current = await tx.transaction.findFirst({ where: { id, householdId } });
@@ -101,7 +100,7 @@ export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
     if (payment) {
       if (input.kind !== current.kind) throw new LedgerError("Cette opération règle une récurrence : son type ne peut pas changer.", "kind");
       const m = payment.month;
-      if (input.occurredOn < m || input.occurredOn >= new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 1))) {
+      if (input.occurredOn < m || input.occurredOn >= addMonths(m, 1)) {
         throw new LedgerError("Cette opération règle une récurrence : la date doit rester dans le mois de l’échéance.", "occurredOn");
       }
     }
@@ -118,8 +117,8 @@ export async function updateEntry(scope: Scope, id: string, input: EntryInput) {
   });
 }
 
-export async function deleteTransaction(scope: Scope, id: string) {
-  const { count } = await prisma.transaction.deleteMany({ where: { id, householdId: scope.householdId } });
+export async function deleteTransaction(householdId: string, id: string) {
+  const { count } = await prisma.transaction.deleteMany({ where: { id, householdId } });
   if (!count) throw new NotFoundError();
 }
 

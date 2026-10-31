@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { fullScope } from "./access";
 import { setupHousehold } from "./auth";
 import {
   actualTotals, addItem, budgetSeeds, budgetTotals, buildTree, envelopes, incomeLines, carryOver, createBudget, fromTemplates, getBudget, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type Item,
@@ -145,7 +144,7 @@ describe("budget mensuel", () => {
   it("Reste réel : opérations du mois par groupe (sous-catégorie → parent, sans catégorie → variable), autres mois exclus", async () => {
     const cat = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name } })).id;
     const op = (kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, d = "2026-11-09") =>
-      createEntry(fullScope(hh), user, { paidById: user, kind, amount, occurredOn: parseDay(d)!, note: null, categoryId });
+      createEntry(hh, user, { paidById: user, kind, amount, occurredOn: parseDay(d)!, note: null, categoryId });
     await op("INCOME", 300000, await cat("Salaire 1"));
     await op("EXPENSE", 90000, await cat("Loyer"));
     await op("EXPENSE", 4000, await cat("Marché"));
@@ -156,9 +155,9 @@ describe("budget mensuel", () => {
   });
 
   it("Jamais créé implicitement ; création explicite depuis les modèles (aucun budget antérieur), montants à 0", async () => {
-    expect(await getBudget(fullScope(hh), nov)).toBeNull();
+    expect(await getBudget(hh, nov)).toBeNull();
     const b = await createBudget(hh, nov);
-    const got = (await getBudget(fullScope(hh), nov))!;
+    const got = (await getBudget(hh, nov))!;
     expect(got).toMatchObject({ id: b.id, status: "DRAFT", totals: { income: 0, expense: 0, remaining: 0 } });
     expect(got.tree.find((t) => t.label === "Factures")!.children.map((c) => c.label)).toEqual(["Électricité", "Gaz", "Eau", "Internet", "Téléphones"]);
   });
@@ -180,7 +179,7 @@ describe("budget mensuel", () => {
     const b = await createBudget(hh, nov, [{ label: "Salaire", amount: 250000, categoryId: proposed[0].categoryId }, { label: "Prime", amount: 30000, categoryId: "étranger" }]);
     const inc = (await items(b.id)).filter((i) => i.kind === "INCOME").sort((x, y) => x.sortOrder - y.sortOrder);
     expect(inc.map((i) => [i.label, i.amount, i.categoryId])).toEqual([["Salaire", 250000, proposed[0].categoryId], ["Prime", 30000, null]]);
-    expect((await getBudget(fullScope(hh), nov))!.totals.income).toBe(280000);
+    expect((await getBudget(hh, nov))!.totals.income).toBe(280000);
   });
 
   it("Un seul budget par mois : créations simultanées → un budget ; doublon refusé en base", async () => {
@@ -237,7 +236,7 @@ describe("budget mensuel", () => {
     expect((await prisma.budgetItem.findUniqueOrThrow({ where: { id: divers.id } })).amount).toBe(0);
     // Montant d'un parent : ignoré à l'enregistrement (total calculé).
     await saveItems(hh, b.id, new Map([[divers.id, fields(divers, { amount: 4000 })]]));
-    expect((await getBudget(fullScope(hh), nov))!.tree.find((t) => t.id === divers.id)!.total).toBe(2500);
+    expect((await getBudget(hh, nov))!.tree.find((t) => t.id === divers.id)!.total).toBe(2500);
     await expect(addItem(hh, b.id, { kind: "EXPENSE", parentId: sub.id, label: "Trop profond", amount: 0, included: true, recurring: true }))
       .rejects.toMatchObject({ field: "parentId" });
     await expect(prisma.budgetItem.create({ data: { householdId: hh, budgetId: b.id, parentId: sub.id, kind: "EXPENSE", label: "SQL" } })).rejects.toThrow();
@@ -249,7 +248,7 @@ describe("budget mensuel", () => {
     const b = await createBudget(hh, nov);
     const divers = await find(b.id, "Divers et imprévus");
     for (const label of ["A", "B", "C"]) await addItem(hh, b.id, { kind: "EXPENSE", parentId: divers.id, label, amount: 0, included: true, recurring: true });
-    const order = async () => (await getBudget(fullScope(hh), nov))!.tree.find((t) => t.id === divers.id)!.children.map((c) => c.label);
+    const order = async () => (await getBudget(hh, nov))!.tree.find((t) => t.id === divers.id)!.children.map((c) => c.label);
     expect(await order()).toEqual(["A", "B", "C"]);
     const c = await find(b.id, "C");
     await moveItem(hh, b.id, c.id, "up");
@@ -264,7 +263,7 @@ describe("budget mensuel", () => {
   it("↑/↓ d'une ligne principale de dépense reste dans son groupe (charges fixes / variables)", async () => {
     const b = await createBudget(hh, nov);
     const group = async (fixed: boolean) =>
-      (await getBudget(fullScope(hh), nov))!.tree.filter((t) => t.kind === "EXPENSE" && !!t.category?.fixed === fixed).map((t) => t.label);
+      (await getBudget(hh, nov))!.tree.filter((t) => t.kind === "EXPENSE" && !!t.category?.fixed === fixed).map((t) => t.label);
     const [first, second] = await group(false);
     const ecole = await find(b.id, first);
     await moveItem(hh, b.id, ecole.id, "up"); // déjà en tête des variables : rien ne bouge
@@ -298,8 +297,8 @@ describe("budget mensuel", () => {
     await saveItems(hh, b.id, new Map([[marche.id, fields(marche, { amount: 40000 })]]));
     await setBudgetStatus(hh, b.id, "VALIDATED");
     expect(await prisma.transaction.count()).toBe(0);
-    await createEntry(fullScope(hh), user, { paidById: user, shared: true, kind: "EXPENSE", amount: 1250, occurredOn: parseDay("2026-11-03")!, note: null, categoryId: marche.categoryId });
-    const tree = (await getBudget(fullScope(hh), nov))!.tree;
+    await createEntry(hh, user, { paidById: user, shared: true, kind: "EXPENSE", amount: 1250, occurredOn: parseDay("2026-11-03")!, note: null, categoryId: marche.categoryId });
+    const tree = (await getBudget(hh, nov))!.tree;
     const alimentation = tree.find((t) => t.label === "Alimentation")!;
     expect(alimentation.children.find((c) => c.label === "Marché")!.actual).toBe(1250);
     expect(alimentation.actual).toBe(1250);
@@ -311,19 +310,19 @@ describe("budget mensuel", () => {
     const marche = await find(b.id, "Marché");
     const day = parseDay("2026-11-03")!;
     const entry = (shared: boolean, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null) =>
-      createEntry(fullScope(hh), user, { paidById: user, shared, kind, amount, occurredOn: day, note: null, categoryId });
+      createEntry(hh, user, { paidById: user, shared, kind, amount, occurredOn: day, note: null, categoryId });
     await entry(true, "EXPENSE", 1000, marche.categoryId);
     await entry(false, "EXPENSE", 500, marche.categoryId);
     await entry(false, "INCOME", 200000, incomeCat);
     await entry(true, "INCOME", 3000, incomeCat);
-    const tree = (await getBudget(fullScope(hh), nov))!.tree;
+    const tree = (await getBudget(hh, nov))!.tree;
     const alimentation = tree.find((t) => t.label === "Alimentation")!;
     expect(alimentation.children.find((c) => c.label === "Marché")!.actual).toBe(1000);
     expect(alimentation.actual).toBe(1000);
     expect(tree.find((t) => t.label === "Salaire")!.actual).toBe(203000);
     // Ligne personnelle : seules les dépenses personnelles.
     await saveItems(hh, b.id, new Map([[alimentation.id, { ...fields(alimentation), shared: false }]]));
-    expect((await getBudget(fullScope(hh), nov))!.tree.find((t) => t.id === alimentation.id)!.actual).toBe(500);
+    expect((await getBudget(hh, nov))!.tree.find((t) => t.id === alimentation.id)!.actual).toBe(500);
   });
 
   it("Réserve unique par budget ; sous-lignes alignées sur le parent (commun, jamais réserve)", async () => {
@@ -354,7 +353,7 @@ describe("budget mensuel", () => {
     const b = await createBudget(hh, nov);
     const loyer = await find(b.id, "Loyer");
     const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!.householdId;
-    expect(await getBudget(fullScope(other), nov)).toBeNull();
+    expect(await getBudget(other, nov)).toBeNull();
     await expect(saveItems(other, b.id, new Map([[loyer.id, fields(loyer, { amount: 1 })]]))).rejects.toBeInstanceOf(NotFoundError);
     await expect(removeItem(other, b.id, loyer.id)).rejects.toBeInstanceOf(NotFoundError);
     await expect(setBudgetStatus(other, b.id, "VALIDATED")).rejects.toBeInstanceOf(NotFoundError);

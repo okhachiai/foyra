@@ -12,7 +12,7 @@ vi.mock("next/headers", () => ({
 
 import {
   checkCredentials, clearLoginFailures, endSession, householdExists, loginBlocked, recordLoginFailure,
-  requireUser, SESSION_COOKIE, setupHousehold, startSession,
+  requireUser, SESSION_COOKIE, setupHousehold, setupToken, startSession,
 } from "./auth";
 import { prisma } from "./db";
 
@@ -116,5 +116,17 @@ describe("connexion", () => {
     expect(loginBlocked("", "z@test.fr", now)).toBe(true);
     expect(loginBlocked("", "w@test.fr", now)).toBe(false);
     clearLoginFailures("", "z@test.fr");
+  });
+});
+
+describe("setupToken", () => {
+  it("SETUP_TOKEN s'il est défini, sinon un jeton aléatoire stable (jamais vide)", () => {
+    vi.stubEnv("SETUP_TOKEN", "");
+    const t = setupToken();
+    expect(t).toMatch(/^[0-9a-f]{32}$/);
+    expect(setupToken()).toBe(t);
+    vi.stubEnv("SETUP_TOKEN", "fixe");
+    expect(setupToken()).toBe("fixe");
+    vi.unstubAllEnvs();
   });
 });

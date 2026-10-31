@@ -1,11 +1,9 @@
 import { Prisma } from "@prisma/client";
-import type { Scope } from "./access";
 import { prisma } from "./db";
-import { buildSchedule, dueDate } from "./amortization";
+import { addMonths, buildSchedule, dueDate } from "./amortization";
 import { buildTree, type Item } from "./budget";
 import { createEntryTx, isCode, LedgerError, NotFoundError } from "./ledger";
 
-export { dueDate };
 
 type Db = Prisma.TransactionClient;
 
@@ -18,8 +16,7 @@ export const appliesTo = (charge: { active: boolean; startMonth: Date; endMonth:
   charge.active && charge.startMonth <= month && (!charge.endMonth || month <= charge.endMonth);
 
 /** Période cohérente et catégorie de dépense du foyer ; FOR SHARE : la catégorie ne change pas avant l'écriture. */
-export async function checkRefs(tx: Db, scope: Scope, input: Omit<ChargeInput, "shared">) {
-  const householdId = scope.householdId;
+export async function checkRefs(tx: Db, householdId: string, input: Omit<ChargeInput, "shared">) {
   if (input.endMonth && input.endMonth < input.startMonth) throw new LedgerError("Le dernier mois doit être après le mois de début.", "endMonth");
   const [c] = await tx.$queryRaw<{ kind: string }[]>`
     SELECT "kind"::text FROM "Category" WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
@@ -27,31 +24,31 @@ export async function checkRefs(tx: Db, scope: Scope, input: Omit<ChargeInput, "
   if (c.kind !== "EXPENSE") throw new LedgerError("Choisissez une catégorie de dépense.", "categoryId");
 }
 
-export function createCharge(scope: Scope, input: ChargeInput) {
+export function createCharge(householdId: string, input: ChargeInput) {
   return prisma.$transaction(async (tx) => {
-    await checkRefs(tx, scope, input);
-    return tx.fixedCharge.create({ data: { ...input, householdId: scope.householdId } });
+    await checkRefs(tx, householdId, input);
+    return tx.fixedCharge.create({ data: { ...input, householdId } });
   });
 }
 
-export async function updateCharge(scope: Scope, id: string, input: ChargeInput) {
+export async function updateCharge(householdId: string, id: string, input: ChargeInput) {
   await prisma.$transaction(async (tx) => {
-    await checkRefs(tx, scope, input);
+    await checkRefs(tx, householdId, input);
     // Charge portée par un crédit : modifiable seulement via le crédit.
-    const { count } = await tx.fixedCharge.updateMany({ where: { id, householdId: scope.householdId, loan: null }, data: input });
+    const { count } = await tx.fixedCharge.updateMany({ where: { id, householdId, loan: null }, data: input });
     if (!count) throw new NotFoundError();
   });
 }
 
 /** Supprime la charge et ses paiements ; les dépenses créées restent (elles deviennent variables). */
-export async function deleteCharge(scope: Scope, id: string) {
-  const { count } = await prisma.fixedCharge.deleteMany({ where: { id, householdId: scope.householdId } });
+export async function deleteCharge(householdId: string, id: string) {
+  const { count } = await prisma.fixedCharge.deleteMany({ where: { id, householdId } });
   if (!count) throw new NotFoundError();
 }
 
-export async function getCharge(scope: Scope, id: string) {
+export async function getCharge(householdId: string, id: string) {
   const c = await prisma.fixedCharge.findFirst({
-    where: { id, householdId: scope.householdId },
+    where: { id, householdId },
     include: { loan: { select: { id: true } } },
   });
   if (!c) throw new NotFoundError();
@@ -89,10 +86,10 @@ export function plannedAmount(items: Item[], charge: { categoryId: string; name:
  * Montant : ligne du budget du mois (`budgeted` faux et 0 sans budget ni ligne) ;
  * charge-crédit : échéance du mois (assurance incluse), absente si le crédit n'a pas d'échéance ce mois.
  */
-export async function listMonthCharges(scope: Scope, month: Date) {
-  const budget = await prisma.budget.findUnique({ where: { householdId_month: { householdId: scope.householdId, month } }, include: { items: true } });
+export async function listMonthCharges(householdId: string, month: Date) {
+  const budget = await prisma.budget.findUnique({ where: { householdId_month: { householdId, month } }, include: { items: true } });
   const charges = await prisma.fixedCharge.findMany({
-    where: { householdId: scope.householdId, active: true, startMonth: { lte: month }, OR: [{ endMonth: null }, { endMonth: { gte: month } }] },
+    where: { householdId, active: true, startMonth: { lte: month }, OR: [{ endMonth: null }, { endMonth: { gte: month } }] },
     include: {
       category: { select: { name: true, parent: { select: { name: true } } } },
       payments: { where: { month }, include: { transaction: true } },
@@ -116,21 +113,21 @@ export async function listMonthCharges(scope: Scope, month: Date) {
 const ALREADY_PAID = "Cette charge est déjà payée pour ce mois.";
 
 /** Marque la charge payée pour le mois (payée par `userId`) : crée la dépense et le paiement dans une seule transaction SQL. */
-export async function payCharge(scope: Scope, userId: string, id: string, month: Date, amount: number, occurredOn: Date) {
-  const next = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1));
+export async function payCharge(householdId: string, userId: string, id: string, month: Date, amount: number, occurredOn: Date) {
+  const next = addMonths(month, 1);
   if (occurredOn < month || occurredOn >= next) throw new LedgerError("La date doit être dans le mois de l’échéance.", "occurredOn");
   try {
     return await prisma.$transaction(async (tx) => {
-      const charge = await tx.fixedCharge.findFirst({ where: { id, householdId: scope.householdId }, include: { loan: LOAN_INCLUDE } });
+      const charge = await tx.fixedCharge.findFirst({ where: { id, householdId }, include: { loan: LOAN_INCLUDE } });
       if (!charge) throw new NotFoundError();
       if (!appliesTo(charge, month) || (charge.loan && !loanRow({ ...charge, loan: charge.loan }, month))) {
         throw new LedgerError("Cette charge ne s’applique pas à ce mois.");
       }
       if (await tx.fixedChargePayment.count({ where: { fixedChargeId: id, month } })) throw new LedgerError(ALREADY_PAID);
-      const t = await createEntryTx(tx, scope, userId, {
+      const t = await createEntryTx(tx, householdId, userId, {
         kind: charge.kind, amount, occurredOn, note: charge.name, categoryId: charge.categoryId, paidById: userId, shared: charge.shared,
       });
-      return tx.fixedChargePayment.create({ data: { householdId: scope.householdId, fixedChargeId: id, month, transactionId: t.id } });
+      return tx.fixedChargePayment.create({ data: { householdId, fixedChargeId: id, month, transactionId: t.id } });
     });
   } catch (e) {
     if (isCode(e, "P2002")) throw new LedgerError(ALREADY_PAID); // double clic / paiement concurrent

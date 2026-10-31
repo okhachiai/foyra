@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { fullScope } from "./access";
 import { createMember, setupHousehold } from "./auth";
 import { addItem, createBudget, parseMonth } from "./budget";
 import { prisma } from "./db";
@@ -63,7 +62,7 @@ describe("getSplit", () => {
   it("getSplit : attribution au « payé par » ; recettes communes déduites ; revenus sans catégorie ignorés ; membre désactivé exclu", async () => {
     const admin = (await setupHousehold({ householdName: "Test", name: "Alice", email: "a@test.fr", password: "password1" }))!;
     hh = admin.householdId;
-    const all = fullScope(hh);
+    const all = hh;
     const bob = (await createMember(hh, { name: "Bob", email: "b@test.fr", password: "password1", role: "MEMBER" }))!;
     const ex = (await createMember(hh, { name: "Ex", email: "x@test.fr", password: "password1", role: "MEMBER" }))!;
     const entry = (paidById: string, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, shared?: boolean, on = "2026-11-09") =>
