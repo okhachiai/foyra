@@ -146,7 +146,8 @@ export async function complete(provider: LlmProvider, c: LlmConfig, messages: Me
   );
   const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
   if (choice?.finish_reason === "length") throw new LlmError(TRUNCATED);
-  const text = choice?.message?.content;
-  if (typeof text !== "string") throw new LlmError(EMPTY);
+  // Modèle « thinking » (LM Studio, vLLM) : content vide, JSON rangé dans reasoning_content.
+  const text = choice?.message?.content || choice?.message?.reasoning_content;
+  if (typeof text !== "string" || !text.trim()) throw new LlmError(EMPTY);
   return { model, text };
 }

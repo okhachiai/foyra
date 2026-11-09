@@ -17,6 +17,7 @@ import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/li
 import { configuredProviders, LlmError, PROVIDER_LABELS, testConnection, type LlmConfig } from "@/lib/llm";
 import { parseCents } from "@/lib/money";
 import { applyPlan, generateReport } from "@/lib/report";
+import { importMonth, parseMonthFile, type MonthFile } from "@/lib/budget-file";
 import { addSaving } from "@/lib/savings";
 import type { FormState } from "./form";
 import { itemFlags, sharedField, str } from "./form-fields";
@@ -436,6 +437,18 @@ export async function budgetAction(_: FormState, fd: FormData): Promise<FormStat
   });
   if (error) return error;
   done(`/budget?m=${formatMonth(month)}&ok=1`);
+}
+
+/** Import d'un fichier exporté (`file`) : le mois du fichier devient identique à celui de la base d'origine. */
+export async function importBudgetAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const file = fd.get("file");
+  if (!(file instanceof File) || !file.size) return { error: "Choisissez un fichier exporté (.json)." };
+  if (file.size > 5_000_000) return { error: "Fichier trop volumineux (5 Mo maximum)." };
+  let data: MonthFile | undefined;
+  const error = await run(async () => importMonth(user.householdId, (data = parseMonthFile(await file.text()))));
+  if (error) return error;
+  done(`/budget?m=${data!.month}&ok=1`);
 }
 
 // --- Charges fixes ---

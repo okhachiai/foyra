@@ -133,7 +133,9 @@ describe("complete", () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
       await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse vide"));
     }
-    for (const body of [{}, { choices: "x" }, { choices: [] }, null]) {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ choices: [{ message: { content: "", reasoning_content: '{"a":1}' } }] })));
+    expect((await complete("LOCAL", LOCAL, msgs, schema)).text).toBe('{"a":1}');
+    for (const body of [{}, { choices: "x" }, { choices: [] }, { choices: [{ message: { content: "" } }] }, null]) {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
       await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse vide"));
     }

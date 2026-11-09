@@ -6,8 +6,8 @@ import { Card } from "./card";
 export function Stat({ label, value, tone, note, className }: { label: string; value: ReactNode; tone?: "neg" | "pos"; note?: ReactNode; className?: string }) {
   return (
     <Card className={cn("gap-1!", className)}>
-      <span className="text-sm text-muted">{label}</span>
-      <strong className={cn("text-3xl font-semibold tabular-nums tracking-tight", tone === "neg" ? "text-neg" : tone === "pos" ? "text-pos" : "text-heading")}>
+      <span className="text-[0.9375rem] font-semibold text-heading">{label}</span>
+      <strong className={cn("mt-2 text-[1.75rem] font-semibold tracking-tight", tone === "neg" ? "text-neg" : tone === "pos" ? "text-pos" : "text-heading")}>
         {value}
       </strong>
       {note && <small className="text-xs text-faint">{note}</small>}

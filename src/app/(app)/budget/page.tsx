@@ -2,21 +2,17 @@ import Link from "next/link";
 import type { CategoryKind } from "@prisma/client";
 import { requireUser } from "@/lib/auth";
 import { addMonths } from "@/lib/amortization";
-import { actualTotals, budgetSeeds, envelopes, formatMonth, getBudget, groupOf, incomeLines, itemSignature, parseMonth, type Group } from "@/lib/budget";
-import { listMonthCharges } from "@/lib/charges";
+import { budgetSeeds, formatMonth, getBudget, groupOf, incomeLines, itemSignature, parseMonth, type Group } from "@/lib/budget";
 import { configuredProviders } from "@/lib/llm";
 import { prisma } from "@/lib/db";
-import { formatDay, todayIn } from "@/lib/ledger";
+import { todayIn } from "@/lib/ledger";
 import { centsToInput, formatCents } from "@/lib/money";
-import { getSplit } from "@/lib/split";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Stat } from "@/components/ui/stat";
-import { budgetAction, createBudgetAction, planAction } from "@/app/actions";
+import { budgetAction, createBudgetAction, importBudgetAction, planAction } from "@/app/actions";
 import { ActionForm, Field } from "@/app/form";
 import { Fold } from "./fold";
 
-const percent = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 2 });
 const monthLabel = (month: Date) => new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(month);
 /** Lignes prévues réparties selon le type de leur catégorie (voir groupOf) ; une ligne sans catégorie est variable. */
 const SECTIONS: [Group, string][] = [
@@ -25,6 +21,9 @@ const SECTIONS: [Group, string][] = [
   ["savings", "Épargne"],
   ["variable", "Catégories de charges variables"],
 ];
+
+/** Formulaire sur une ligne : le <fieldset> d'ActionForm, sans bordure, porte la mise en page. */
+const ROW = "[&_fieldset]:m-0 [&_fieldset]:flex [&_fieldset]:min-w-0 [&_fieldset]:flex-wrap [&_fieldset]:items-center [&_fieldset]:gap-3 [&_fieldset]:border-0 [&_fieldset]:p-0";
 
 type Budget = NonNullable<Awaited<ReturnType<typeof getBudget>>>;
 type Line = Budget["tree"][number]["children"][number];
@@ -36,7 +35,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
   const month = parseMonth(m) ?? parseMonth(today.slice(0, 7))!;
   // Date proposée pour saisir le réel : aujourd'hui si le budget est celui du mois courant, sinon le 1er du mois.
   const entryDay = today.startsWith(formatMonth(month)) ? today : `${formatMonth(month)}-01`;
-  const [budget, charges, actual] = await Promise.all([getBudget(user.householdId, month), listMonthCharges(user.householdId, month), actualTotals(user.householdId, month)]);
+  const budget = await getBudget(user.householdId, month);
   const money = (cents: number) => formatCents(cents, user.household.currency);
   const label = monthLabel(month);
 
@@ -46,6 +45,22 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
       <h1>Budget · {label}</h1>
       <Link href={`/budget?m=${formatMonth(addMonths(month, 1))}`}>Mois suivant →</Link>
     </nav>
+  );
+
+  /** Export du mois (budget, opérations, paiements) et import d'un fichier exporté : le mois du fichier est remplacé à l'identique. */
+  const transfer = (
+    <ActionForm
+      action={importBudgetAction}
+      className={`card mt-4 ${ROW}`}
+      confirm="Remplacer le budget et toutes les opérations du mois contenu dans le fichier par ceux du fichier ?"
+    >
+      <a href={`/budget/export?m=${formatMonth(month)}`} download className="button secondary">Exporter le mois</a>
+      <label className="min-w-0 flex-1 basis-56">
+        <span className="sr-only">Fichier de mois à importer (.json)</span>
+        <input type="file" name="file" accept=".json,application/json" required className="cursor-pointer py-2 text-sm text-muted file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-raised file:px-3 file:py-1 file:text-sm file:text-heading" />
+      </label>
+      <button type="submit" className="secondary">Importer</button>
+    </ActionForm>
   );
 
   if (!budget) {
@@ -82,20 +97,13 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
             : "Il partira des modèles de catégories."}{" "}
           Tous les montants prévus se saisissent ici : ils alimentent le tableau de bord, les récurrences et le partage. Le budget est prévisionnel : il ne crée aucune opération.
         </EmptyState>
+        {transfer}
       </>
     );
   }
 
   const draft = budget.status === "DRAFT";
   const { totals } = budget;
-  // Partage : utile à partir de deux membres.
-  const split = await getSplit(user.householdId, month).then((s) => (s.members.length > 1 ? s : null));
-  const env = envelopes(budget.tree);
-  // Charges fixes et crédits du mois, calculés en direct : un crédit soldé n'apparaît plus.
-  const expenses = charges.filter((c) => c.kind === "EXPENSE");
-  const fixed = expenses.filter((c) => !c.loanId), loans = expenses.filter((c) => c.loanId);
-  const sum = (l: typeof expenses) => l.reduce((s, c) => s + c.amount, 0);
-  const fixedTotal = sum(fixed), loanTotal = sum(loans);
 
   const currency = new Intl.NumberFormat("fr-FR", { style: "currency", currency: user.household.currency }).formatToParts(0).find((x) => x.type === "currency")?.value;
 
@@ -241,61 +249,16 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
         )}
       </ActionForm>
       {ok && <p role="status" className="text-pos">Budget enregistré.</p>}
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Stat label="Total des revenus" value={money(totals.income)} note={`Réel ${money(actual.income)}`} />
-        <Stat label="Charges fixes" value={money(totals.fixed)} note={`Réel ${money(actual.fixed)}`} />
-        <Stat label="Charges variables" value={money(totals.variable)} note={`Réel ${money(actual.variable)}`} />
-        <Stat label="Épargne" value={money(totals.savings)} note={`Prévu, ou versé s’il est plus élevé · réel ${money(actual.savings)}`} />
-        <Stat label="Reste prévisionnel" value={money(totals.remaining)} tone={totals.remaining < 0 ? "neg" : undefined} note="Revenus − fixes − variables − épargne" />
-        <Stat label="Reste réel" value={money(actual.remaining)} tone={actual.remaining < 0 ? "neg" : undefined} note="Mêmes calculs sur les opérations enregistrées du mois" />
-      </div>
+      {transfer}
 
       {draft && configuredProviders(user.household).length > 0 && (
-        <ActionForm action={planAction} className="card mt-4 flex flex-wrap items-center justify-between gap-3" pendingNotice="L'IA prépare la répartition… cela peut prendre quelques minutes avec un modèle local.">
+        <ActionForm action={planAction} className={`card mt-4 ${ROW} [&_fieldset]:justify-between`} pendingNotice="L'IA prépare la répartition… cela peut prendre quelques minutes avec un modèle local.">
           <input type="hidden" name="month" value={formatMonth(month)} />
-          <p className="m-0 text-sm text-muted">
+          <p className="m-0 min-w-0 flex-1 basis-64 text-sm text-muted">
             Revenus, charges fixes et épargne saisis ? L'IA répartit les {money(Math.max(totals.income - totals.fixed - totals.savings, 0))} restants sur les charges variables.
           </p>
           <button type="submit" className="secondary">Proposer la répartition</button>
         </ActionForm>
-      )}
-
-      {split && (
-        <Fold className="mt-4" title="Partage" aside={<span className="amount" title="Dépenses communes prévues, moins les recettes communes">{money(split.commonNet)}</span>}>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-sm tabular-nums">
-              <thead>
-                <tr className="text-left text-muted">
-                  <th className="py-2 pr-3 font-medium">Membre</th>
-                  <th className="py-2 pr-3 text-right font-medium">Revenu</th>
-                  <th className="py-2 pr-3 text-right font-medium">Part</th>
-                  <th className="py-2 pr-3 text-right font-medium">Dû</th>
-                  <th className="py-2 pr-3 text-right font-medium">Communes payées</th>
-                  <th className="py-2 pr-3 text-right font-medium">Reste à verser</th>
-                  <th className="py-2 text-right font-medium">Reste perso</th>
-                </tr>
-              </thead>
-              <tbody>
-                {split.members.map((m) => (
-                  <tr key={m.userId} className="border-t border-hairline">
-                    <td className="py-2 pr-3">{m.name}</td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap">
-                      {money(m.income)}
-                    </td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap">{percent.format(m.shareBp / 10000)}</td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap">{money(m.due)}</td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap">{money(m.contribution)}</td>
-                    <td className="py-2 pr-3 text-right whitespace-nowrap text-heading">
-                      {m.toTransfer < 0 ? <>à recevoir {money(-m.toTransfer)}</> : money(m.toTransfer)}
-                    </td>
-                    <td className="py-2 text-right whitespace-nowrap">{money(m.personalLeft)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Fold>
       )}
 
       {/* Clé neuve à chaque rendu serveur : après un enregistrement réussi, les champs repartent des valeurs en base. */}
@@ -305,65 +268,6 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
         <input type="hidden" name="month" value={formatMonth(month)} />
         <input type="hidden" name="budgetId" value={budget.id} />
         {section(SECTIONS.find(([group]) => group === "savings")!)}
-        {(env.lines.length > 0 || env.reserve) && (
-          <Fold title="Enveloppes">
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-sm tabular-nums">
-                <thead>
-                  <tr className="text-left text-muted">
-                    <th className="py-2 pr-3 font-medium">Libellé</th>
-                    <th className="py-2 pr-3 text-right font-medium">Prévu</th>
-                    <th className="py-2 pr-3 text-right font-medium">Réel</th>
-                    <th className="py-2 text-right font-medium">Restant</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...env.lines, ...(env.reserve ? [env.reserve] : [])].map((e) => (
-                    <tr key={e.id} className="border-t border-hairline">
-                      <td className="py-2 pr-3 break-words">
-                        {e.label}
-                        {e === env.reserve && <small className="block text-xs text-muted">Réserve · dont {money(env.reserve.overrun)} de dépassements absorbés</small>}
-                      </td>
-                      <td className="py-2 pr-3 text-right whitespace-nowrap">{money(e.planned)}</td>
-                      <td className="py-2 pr-3 text-right whitespace-nowrap">{money(e.actual)}</td>
-                      <td className={`py-2 text-right whitespace-nowrap ${e.left < 0 ? "text-neg" : "text-heading"}`}>{money(e.left)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Fold>
-        )}
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Fold title="Échéances du mois" aside={<span className="amount">{money(fixedTotal)}</span>}>
-            {fixed.length === 0 && <p className="m-0 text-sm text-muted">Aucune charge fixe ce mois-ci.</p>}
-            {fixed.map((c) => (
-              <Link key={c.id} href={`/charges/${c.id}`} className="flex justify-between gap-3 border-t border-hairline py-2">
-                <span>{c.name} <small className="text-muted">· le {c.due.getUTCDate()}{!c.budgeted && " · absente du budget"}</small></span>
-                <span className="amount">{money(c.amount)}</span>
-              </Link>
-            ))}
-          </Fold>
-          <Fold title="Crédits en cours" aside={<span className="amount">{money(loanTotal)}</span>}>
-            {loans.length === 0 && <p className="m-0 text-sm text-muted">Aucun crédit en cours ce mois-ci.</p>}
-            {loans.map((c) => (
-              <Link key={c.id} href={`/credits/${c.loanId}`} className="flex justify-between gap-3 border-t border-hairline py-2">
-                <span>
-                  {c.name}
-                  {c.installment && (
-                    <small className="block text-muted">
-                      1ʳᵉ échéance {formatDay(c.installment.firstDue).split("-").reverse().join("/")} · échéance {c.installment.n}/{c.installment.of}
-                      {c.installment.n === c.installment.of && " · dernière"}
-                    </small>
-                  )}
-                </span>
-                <span className="amount">{money(c.amount)}</span>
-              </Link>
-            ))}
-          </Fold>
-        </div>
-
         {SECTIONS.filter(([group]) => group !== "savings").map(section)}
         {draft && <button type="submit" name="op" value="save" className="self-start">Enregistrer le budget</button>}
       </ActionForm>

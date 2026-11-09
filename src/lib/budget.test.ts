@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
 import {
-  actualTotals, addItem, budgetSeeds, budgetTotals, buildTree, envelopes, incomeLines, carryOver, createBudget, fromTemplates, getBudget, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type Item,
+  actualTotals, addItem, budgetSeeds, budgetTotals, buildTree, envelopes, incomeLines, carryOver, createBudget, fromTemplates, getBudget, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, uncoveredFixedLines, type Item,
 } from "./budget";
 import { updateCategory } from "./categories";
 import { prisma } from "./db";
@@ -86,6 +86,24 @@ describe("enveloppes (pures)", () => {
     ], { p: 9000, f: 9000, x: 9000, i: 9000 });
     expect(lines.map((l) => l.id)).toEqual(["c"]);
     expect(reserve).toBeNull(); // réserve sur un revenu ou une ligne exclue : ignorée
+  });
+});
+
+describe("échéances prévues au budget", () => {
+  it("lignes fixes incluses > 0 sans charge de même catégorie ; une charge sur le parent couvre la branche", () => {
+    const tree = buildTree([
+      item({ id: "loyer", categoryId: "cLoyer", amount: 100000, category: { fixed: true } }),
+      item({ id: "fac", categoryId: "cFac", category: { fixed: true } }),
+      item({ id: "elec", parentId: "fac", categoryId: "cElec", amount: 8000 }),
+      item({ id: "eau", parentId: "fac", categoryId: "cEau", amount: 3000 }),
+      item({ id: "gaz", parentId: "fac", categoryId: "cGaz", amount: 2000, included: false }),
+      item({ id: "zero", categoryId: "cZero", amount: 0, category: { fixed: true } }),
+      item({ id: "abo", categoryId: "cAbo", category: { fixed: true } }),
+      item({ id: "net", parentId: "abo", categoryId: "cNet", amount: 4000 }),
+      item({ id: "var", categoryId: "cVar", amount: 5000 }),
+      item({ id: "ep", categoryId: "cEp", amount: 5000, category: { fixed: true, savings: true } }),
+    ]);
+    expect(uncoveredFixedLines(tree, new Set(["cEau", "cAbo"])).map((l) => l.id)).toEqual(["loyer", "elec"]);
   });
 });
 

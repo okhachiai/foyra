@@ -43,6 +43,18 @@ export function buildTree(items: Item[]): Node[] {
 }
 
 /**
+ * Lignes fixes incluses du budget (montant > 0) sans charge récurrente ni crédit de même catégorie : échéances prévues du mois.
+ * Une charge sur la catégorie d'une ligne principale couvre toute sa branche (plannedAmount en prend le total).
+ */
+export function uncoveredFixedLines(tree: Node[], chargeCategoryIds: Set<string>) {
+  const covered = (i: Item) => !!i.categoryId && chargeCategoryIds.has(i.categoryId);
+  return tree
+    .filter((n) => n.included && groupOf(n) === "fixed" && !covered(n))
+    .flatMap((n) => (n.children.length ? n.children.filter((c) => c.included && !covered(c)) : [n]))
+    .filter((l) => l.amount > 0);
+}
+
+/**
  * Totaux prévus : une branche exclue (parent non inclus) ne compte pas, ses enfants non plus.
  * Dépenses réparties en charges fixes / épargne / variables (voir groupOf).
  * Épargne = max(prévu, `saved` déjà versé ce mois) : un versement hors budget n'est plus disponible.
@@ -229,7 +241,7 @@ export async function createBudget(householdId: string, month: Date, incomes?: I
 const VALIDATED = "Ce budget est validé : repassez-le en brouillon pour le modifier.";
 
 /** Verrouille le budget du foyer (FOR UPDATE) ; `draft` : refuse s'il est validé. */
-async function lockBudget(tx: Db, householdId: string, budgetId: string, draft = true) {
+export async function lockBudget(tx: Db, householdId: string, budgetId: string, draft = true) {
   const [b] = await tx.$queryRaw<{ status: BudgetStatus }[]>`
     SELECT "status" FROM "Budget" WHERE "id" = ${budgetId} AND "householdId" = ${householdId} FOR UPDATE`;
   if (!b) throw new NotFoundError();

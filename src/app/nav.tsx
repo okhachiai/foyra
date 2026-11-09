@@ -2,18 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect } from "react";
+import { Icon, type IconName } from "@/components/ui/icon";
 
-const LINKS = [
-  ["/tableau-de-bord", "Tableau de bord"],
-  ["/budget", "Budget"],
-  ["/epargne", "Épargne"],
-  ["/rapports", "Rapports"],
-  ["/operations", "Opérations"],
-  ["/calendrier", "Calendrier"],
-  ["/credits", "Crédits"],
-  ["/parametres", "Paramètres"],
-] as const;
+const MAIN = [
+  ["/tableau-de-bord", "Tableau de bord", "dashboard"],
+  ["/budget", "Budget", "wallet"],
+  ["/operations", "Opérations", "transfers"],
+  ["/epargne", "Épargne", "savings"],
+  ["/credits", "Crédits", "bank"],
+  ["/calendrier", "Calendrier", "calendar"],
+  ["/rapports", "Rapports", "reports"],
+] as const satisfies readonly (readonly [string, string, IconName])[];
 
 /** Pages rattachées à « Paramètres » dans la navigation. */
 export const SETTINGS = [
@@ -29,13 +28,29 @@ const isActive = (path: string, href: string) => path === href || path.startsWit
 export function Nav() {
   const path = usePathname();
   const settings = SETTINGS.some(([href]) => isActive(path, href));
+  const item = (href: string, label: string, icon: IconName, active: boolean) => (
+    <Link key={href} href={href} aria-current={active ? "page" : undefined}>
+      <Icon name={icon} />{label}
+    </Link>
+  );
   return (
     <nav aria-label="Navigation principale">
-      {LINKS.map(([href, label]) => (
-        <Link key={href} href={href} aria-current={(href === "/parametres" ? settings : isActive(path, href)) ? "page" : undefined}>
-          {label}
-        </Link>
-      ))}
+      <span className="side-label">Menu principal</span>
+      {MAIN.map(([href, label, icon]) => item(href, label, icon, isActive(path, href)))}
+      <span className="side-label">Préférences</span>
+      {item("/parametres", "Paramètres", "settings", settings)}
+    </nav>
+  );
+}
+
+/** Fil d'Ariane de la barre du haut : foyer › page courante. */
+export function Crumbs({ root }: { root: string }) {
+  const path = usePathname();
+  const page = [...MAIN, ...SETTINGS].find(([href]) => isActive(path, href))?.[1];
+  return (
+    <nav aria-label="Fil d’Ariane" className="crumbs">
+      <Link href="/tableau-de-bord">{root}</Link>
+      {page && <><Icon name="chevron" className="size-4" /><span aria-current="page">{page}</span></>}
     </nav>
   );
 }
@@ -48,27 +63,11 @@ export function SettingsNav({ admin }: { admin: boolean }) {
       {SETTINGS.filter(([href]) => admin || href !== "/members").map(([href, label]) => (
         <Link
           key={href} href={href} aria-current={isActive(path, href) ? "page" : undefined}
-          className="rounded-full border border-border px-3 py-1.5 text-sm text-muted no-underline transition-colors hover:text-heading aria-[current=page]:border-accent/60 aria-[current=page]:bg-accent/15 aria-[current=page]:text-heading"
+          className="rounded-[10px] border border-border bg-panel px-3.5 py-1.5 text-sm font-medium text-muted no-underline transition-colors hover:text-heading aria-[current=page]:border-accent aria-[current=page]:bg-accent aria-[current=page]:text-white"
         >
           {label}
         </Link>
       ))}
     </nav>
   );
-}
-
-/** Position du curseur dans la carte survolée (--x / --y), lue par le halo CSS. */
-export function Spotlight() {
-  useEffect(() => {
-    const move = (e: PointerEvent) => {
-      const card = (e.target as Element).closest?.<HTMLElement>(".total, .list, .table-scroll, .card");
-      if (!card) return;
-      const r = card.getBoundingClientRect();
-      card.style.setProperty("--x", `${e.clientX - r.left}px`);
-      card.style.setProperty("--y", `${e.clientY - r.top}px`);
-    };
-    document.addEventListener("pointermove", move, { passive: true });
-    return () => document.removeEventListener("pointermove", move);
-  }, []);
-  return null;
 }

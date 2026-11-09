@@ -1,19 +1,13 @@
 import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
-/** Carte bento : fond panneau, coins arrondis, halo qui suit le pointeur (classe .card, cf. Spotlight). */
+/** Carte : fond blanc, bord fin, coins 16px (classe .card, cf. globals.css). */
 export function Card({ className, children, ...props }: ComponentProps<"section">) {
   return (
     <section className={cn("card flex min-w-0 flex-col gap-3 p-5 sm:p-6", className)} {...props}>
-      <Beams />
       {children}
     </section>
   );
-}
-
-/** Faisceaux lumineux qui parcourent les 4 bords de la carte parente (cf. .beams dans globals.css). */
-export function Beams() {
-  return <div aria-hidden className="beams"><i /><i /><i /><i /></div>;
 }
 
 export function CardHeader({ className, ...props }: ComponentProps<"div">) {
@@ -21,7 +15,7 @@ export function CardHeader({ className, ...props }: ComponentProps<"div">) {
 }
 
 export function CardTitle({ className, ...props }: ComponentProps<"h2">) {
-  return <h2 className={cn("m-0 text-base font-semibold tracking-tight text-heading", className)} {...props} />;
+  return <h2 className={cn("m-0 text-[1.0625rem] font-semibold tracking-tight text-heading", className)} {...props} />;
 }
 
 export function CardDescription({ className, ...props }: ComponentProps<"p">) {
