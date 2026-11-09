@@ -1,14 +1,22 @@
 import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
+/** Texte sur fond teinté : couleurs *-ink / --neg / --warn, contrastes vérifiés par tokens.test.ts. */
 const TONES = {
-  default: "text-accent bg-accent-tint border-transparent",
-  success: "text-pos bg-pos/10 border-transparent",
-  warning: "text-warn bg-warn/10 border-transparent",
-  danger: "text-neg bg-neg/10 border-transparent",
-  muted: "text-muted bg-raised border-transparent",
+  default: "text-accent-ink bg-accent-tint",
+  success: "text-accent-ink bg-accent-tint",
+  warning: "text-warn bg-warn-tint",
+  danger: "text-neg bg-expense-tint",
+  info: "text-info-ink bg-info-tint",
+  muted: "text-muted bg-raised",
 } as const;
 
-export function Badge({ tone = "default", className, ...props }: ComponentProps<"span"> & { tone?: keyof typeof TONES }) {
-  return <span className={cn("inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium", TONES[tone], className)} {...props} />;
+/** Pastille de statut. `dot` : point coloré devant le libellé (statut d'une ligne de tableau, d'une échéance). */
+export function Badge({ tone = "default", dot, className, children, ...props }: ComponentProps<"span"> & { tone?: keyof typeof TONES; dot?: boolean }) {
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-[var(--r-sm)] px-2 py-0.5 text-label font-semibold", TONES[tone], className)} {...props}>
+      {dot && <i aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />}
+      {children}
+    </span>
+  );
 }

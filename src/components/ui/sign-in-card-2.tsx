@@ -5,59 +5,38 @@ import { loginAction } from "@/app/actions";
 import { ActionForm } from "@/app/form";
 import { Icon } from "./icon";
 
-const INPUT = "pl-10";
 const ICON = "pointer-events-none absolute left-3 size-4 text-faint transition-colors group-focus-within/field:text-accent";
-const FIELD = "group/field relative flex items-center";
+const LABEL = "text-label font-semibold text-heading";
 
-/** Carte de connexion : carte blanche sur fond ivoire, branchée sur loginAction. */
+/** Formulaire de connexion (dans AuthShell), branché sur loginAction ; libellés au-dessus des champs. */
 export function SignInCard() {
   const [showPassword, setShowPassword] = useState(false);
-
   return (
-    <div className="flex min-h-dvh w-full items-center justify-center bg-background px-4">
-      <div className="card w-full max-w-sm p-6 transition duration-500 starting:translate-y-3 starting:opacity-0 sm:p-8">
-        <div className="mb-6 flex flex-col items-center gap-3 text-center">
-          <span className="logo" aria-hidden>F</span>
-          <div>
-            <h1 className="m-0 text-2xl">Foyra</h1>
-            <p className="m-0 mt-1 text-sm text-muted">Connectez-vous pour accéder aux comptes du foyer</p>
-          </div>
+    <ActionForm action={loginAction}>
+      <div className="field">
+        <label htmlFor="email" className={LABEL}>Email</label>
+        <div className="group/field relative flex items-center">
+          <Icon name="mail" className={ICON} />
+          <input id="email" name="email" type="email" required autoComplete="email" placeholder="vous@exemple.fr" className="pl-10" />
         </div>
-
-        <ActionForm action={loginAction} className="form group/form text-sm">
-          <label className={FIELD}>
-            <span className="sr-only">Email</span>
-            <Icon name="mail" className={ICON} />
-            <input name="email" type="email" required autoComplete="email" placeholder="Email" className={INPUT} />
-          </label>
-
-          <div className={FIELD}>
-            <Icon name="lock" className={ICON} />
-            <input
-              name="password"
-              type={showPassword ? "text" : "password"}
-              required
-              autoComplete="current-password"
-              placeholder="Mot de passe"
-              aria-label="Mot de passe"
-              className={`${INPUT} pr-11`}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
-              className="absolute right-1 min-h-0 border-0 bg-transparent p-2 text-faint hover:bg-transparent hover:text-heading"
-            >
-              <Icon name={showPassword ? "eye" : "eyeOff"} className="size-4" />
-            </button>
-          </div>
-
-          <button type="submit" className="mt-2 w-full">
-            <span className="hidden size-4 animate-spin rounded-full border-2 border-current border-t-transparent group-aria-busy/form:block" aria-hidden />
-            <span className="group-aria-busy/form:hidden">Se connecter</span>
-          </button>
-        </ActionForm>
       </div>
-    </div>
+      <div className="field">
+        <label htmlFor="password" className={LABEL}>Mot de passe</label>
+        <div className="group/field relative flex items-center">
+          <Icon name="lock" className={ICON} />
+          <input id="password" name="password" type={showPassword ? "text" : "password"} required autoComplete="current-password" className="pr-11 pl-10" />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            aria-label={showPassword ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+            aria-pressed={showPassword}
+            className="absolute right-0.5 border-0 bg-transparent px-3 text-faint hover:bg-transparent hover:text-heading"
+          >
+            <Icon name={showPassword ? "eye" : "eyeOff"} className="size-4" />
+          </button>
+        </div>
+      </div>
+      <button type="submit" className="mt-1 w-full">Se connecter</button>
+    </ActionForm>
   );
 }

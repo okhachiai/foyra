@@ -61,7 +61,7 @@ export function EntryForm({ members, categories, v, back }: {
         </select>
       </Field>
       <SharedCheck label="Commune (partagée au prorata des revenus)" checked={v.shared ?? false} />
-      <button type="submit">Enregistrer</button>
+      <div className="form-actions"><button type="submit">Enregistrer</button></div>
     </ActionForm>
   );
 }

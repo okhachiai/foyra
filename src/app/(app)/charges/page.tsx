@@ -1,101 +1,118 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth";
-import { addMonths } from "@/lib/amortization";
-import { formatMonth, parseMonth } from "@/lib/budget";
+import { parseMonth } from "@/lib/budget";
+import { chargeStatus } from "@/lib/calendar";
 import { listMonthCharges } from "@/lib/charges";
-import { formatDay, todayIn } from "@/lib/ledger";
-import { centsToInput, formatCents } from "@/lib/money";
-import { payChargeAction } from "@/app/actions";
-import { ActionForm, Field } from "@/app/form";
+import { formatDay, parseDay, todayIn } from "@/lib/ledger";
+import { formatCents } from "@/lib/money";
+import { Badge } from "@/components/ui/badge";
+import { Card, SectionHeader } from "@/components/ui/card";
+import { DateTile } from "@/components/ui/date-tile";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Icon } from "@/components/ui/icon";
+import { MonthNav } from "@/components/ui/month-nav";
+import { PageHeader } from "@/components/ui/page-header";
+import { Stat } from "@/components/ui/stat";
 import { SettingsNav } from "@/app/nav";
+import { PayCharge } from "./pay-form";
 
 const monthLabel = (month: Date) => new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(month);
 const frDay = (d: Date) => formatDay(d).split("-").reverse().join("/");
+const STATUS = { paid: ["success", "Payée"], due: ["warning", "À payer"], late: ["danger", "En retard"] } as const;
 
 export default async function ChargesPage({ searchParams }: { searchParams: Promise<{ m?: string }> }) {
   const user = await requireUser();
-  const month = parseMonth((await searchParams).m) ?? parseMonth(todayIn(user.household.timezone).slice(0, 7))!;
-  const [charges, inactive] = await Promise.all([
+  const todayStr = todayIn(user.household.timezone);
+  const today = parseDay(todayStr)!;
+  const month = parseMonth((await searchParams).m) ?? parseMonth(todayStr.slice(0, 7))!;
+  const [list, inactive] = await Promise.all([
     listMonthCharges(user.householdId, month),
     prisma.fixedCharge.findMany({ where: { householdId: user.householdId, active: false }, orderBy: { name: "asc" } }),
   ]);
+  const charges = list.map((c) => ({ ...c, status: chargeStatus(c, today) }));
   const money = (cents: number) => formatCents(cents, user.household.currency);
   const sum = (unpaidOnly = false) => charges.reduce((s, c) => s + (unpaidOnly && c.payment ? 0 : c.amount), 0);
-  const m = formatMonth(month);
-  const lastDay = formatDay(new Date(addMonths(month, 1).getTime() - 86_400_000));
+  const late = charges.filter((c) => c.status === "late");
+  const paidCount = charges.filter((c) => c.payment).length;
 
   return (
     <>
-      <nav className="pager">
-        <Link href={`/charges?m=${formatMonth(addMonths(month, -1))}`}>← Précédent</Link>
-        <h1>Récurrences · {monthLabel(month)}</h1>
-        <Link href={`/charges?m=${formatMonth(addMonths(month, 1))}`}>Suivant →</Link>
-      </nav>
-
+      <PageHeader
+        eyebrow="Paramètres / Récurrences"
+        title="Charges récurrentes"
+        subtitle={`Échéances de ${monthLabel(month)}. Indicatives : rien n’est payé automatiquement.`}
+        actions={
+          <>
+            <MonthNav path="/charges" month={month} />
+            <Link href="/charges/new" className="button"><Icon name="plus" className="size-4" />Ajouter</Link>
+          </>
+        }
+      />
       <SettingsNav admin={user.role === "ADMIN"} />
-      <p className="muted">Échéances indicatives : rien n’est payé automatiquement. « Marquer payée » enregistre l’opération réelle. Montants lus dans le budget du mois (ligne de même catégorie).</p>
-      <section className="total">
-        <span className="muted">Dépenses récurrentes du mois</span>
-        <strong>{money(sum())}</strong>
-        <dl className="totals">
-          <dt>Dont à payer</dt><dd>{money(sum(true))}</dd>
-        </dl>
-      </section>
 
-      <div className="row">
-        <h2>Échéances</h2>
-        <Link href="/charges/new" className="button secondary">Ajouter</Link>
+      <div className="mb-4 grid gap-4 sm:grid-cols-3">
+        <Stat label="Dépenses récurrentes du mois" value={money(sum())} note="Montants lus dans le budget du mois" />
+        <Stat label="Reste à payer" value={money(sum(true))} tone={sum(true) > 0 ? "neg" : undefined} note={`${charges.length - paidCount} échéance${charges.length - paidCount > 1 ? "s" : ""} non payée${charges.length - paidCount > 1 ? "s" : ""}`} />
+        <Stat label="Payées" value={`${paidCount} / ${charges.length}`} tone="pos" note="Opérations réelles enregistrées" />
       </div>
-      {charges.length === 0 && <p className="muted">Aucune récurrence active pour ce mois.</p>}
-      <ul className="list">
-        {charges.map((c) => {
-          const t = c.payment?.transaction;
-          return (
-            <li key={c.id}>
-              <div className="budget-line">
-                <div className="row">
-                  <span>
-                    <Link href={`/charges/${c.id}`}>{c.name}</Link>
-                    <small className="muted">
-                      Échéance {frDay(c.due)} · {c.category.parent ? `${c.category.parent.name} › ` : ""}{c.category.name}
-                    </small>
-                  </span>
-                  <span className="amount">{c.budgeted ? money(c.amount) : <small className="muted">Absente du budget</small>}</span>
-                </div>
-                {t ? (
-                  <small>
-                    <span className="pos">Payée</span> · {money(t.amount)} le {frDay(t.occurredOn)}
-                    {" · "}<Link href={`/operations/${t.id}`}>voir l’opération</Link>
-                  </small>
-                ) : (
-                  <details>
-                    <summary><span className="neg">À payer</span> · Marquer payée</summary>
-                    <ActionForm action={payChargeAction}>
-                      <input type="hidden" name="id" value={c.id} />
-                      <input type="hidden" name="month" value={m} />
-                      <Field name="amount" label="Montant">
-                        <input name="amount" inputMode="decimal" required autoComplete="off" defaultValue={c.amount ? centsToInput(c.amount) : ""} />
-                      </Field>
-                      <Field name="occurredOn" label="Date">
-                        <input name="occurredOn" type="date" required min={`${m}-01`} max={lastDay} defaultValue={formatDay(c.due)} />
-                      </Field>
-                      <button type="submit">Enregistrer la dépense</button>
-                    </ActionForm>
-                  </details>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+
+      {late.length > 0 && (
+        <div role="alert" className="alert danger mb-4">
+          <Icon name="alert" className="size-5 shrink-0" />
+          <p className="m-0">
+            <b>{late.length} échéance{late.length > 1 ? "s" : ""} en retard</b> · {money(late.reduce((s, c) => s + c.amount, 0))}
+            <span className="block text-label">{late.map((c) => c.name).join(", ")}</span>
+          </p>
+        </div>
+      )}
+
+      <Card>
+        <SectionHeader title="Échéances" subtitle="« Marquer payée » enregistre l’opération réelle. Montant : ligne du budget de même catégorie." />
+        {charges.length === 0 ? (
+          <EmptyState title="Aucune récurrence active pour ce mois" action={<Link href="/charges/new">Ajouter une récurrence</Link>} />
+        ) : (
+          <ul className="due-list">
+            {charges.map((c) => {
+              const t = c.payment?.transaction;
+              const [tone, label] = STATUS[c.status];
+              return (
+                <li key={c.id} className={c.status === "late" ? "is-late" : undefined}>
+                  <div className="due-row">
+                    <DateTile date={c.due} />
+                    <span className="min-w-0 flex-1">
+                      <Link href={`/charges/${c.id}`} className="block truncate font-bold text-heading no-underline hover:underline">{c.name}</Link>
+                      <small className="block truncate text-label text-faint">
+                        {c.category.parent ? `${c.category.parent.name} › ` : ""}{c.category.name}
+                        {c.loanId && " · crédit"}
+                      </small>
+                    </span>
+                    <span className="flex shrink-0 flex-col items-end gap-1">
+                      {c.budgeted ? <b className="ab-num text-heading">{money(c.amount)}</b> : <small className="text-label text-faint">Absente du budget</small>}
+                      <Badge dot tone={tone}>{label}</Badge>
+                    </span>
+                  </div>
+                  {t ? (
+                    <p className="due-meta">
+                      Payée {money(t.amount)} le {frDay(t.occurredOn)} · <Link href={`/operations/${t.id}`}>voir l’opération</Link>
+                    </p>
+                  ) : (
+                    <div className="due-meta"><PayCharge id={c.id} month={month} amount={c.amount} due={c.due} late={c.status === "late"} /></div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
+
       {inactive.length > 0 && (
         <details>
           <summary>Récurrences désactivées ({inactive.length})</summary>
           <ul className="list">
             {inactive.map((c) => (
               <li key={c.id}>
-                <Link href={`/charges/${c.id}`}><span>{c.name}<small className="muted">Le {c.dueDay}</small></span></Link>
+                <Link href={`/charges/${c.id}`}><span>{c.name}<small className="muted">Le {c.dueDay}</small></span><Icon name="chevron" className="size-4" /></Link>
               </li>
             ))}
           </ul>

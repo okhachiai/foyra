@@ -218,7 +218,7 @@ export async function updateLlmAction(_: FormState, fd: FormData): Promise<FormS
   if (errors.state) return errors.state;
   if (str(fd, "intent") === "test") return testLlm(config);
   await updateHousehold(admin.householdId, config);
-  done("/parametres?ok=llm");
+  done("/parametres/ia?ok=1");
 }
 
 /** Teste chaque fournisseur renseigné avec les valeurs du formulaire (non enregistrées). */

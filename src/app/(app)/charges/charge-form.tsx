@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { FixedCharge } from "@prisma/client";
 import { formatMonth } from "@/lib/budget";
 import type { listCategories } from "@/lib/categories";
@@ -31,8 +32,11 @@ export function ChargeForm({ charge, categories, startMonth }: {
       </Field>
       <SharedCheck label="Charge commune" checked={charge?.shared ?? true} />
       <label className="check"><input type="checkbox" name="active" defaultChecked={charge?.active ?? true} />Active</label>
-      <p className="muted m-0 text-sm">Échéance indicative : aucun paiement n’est créé automatiquement. Le montant est celui de la ligne du budget du mois de même catégorie.</p>
-      <button type="submit">{charge ? "Enregistrer" : "Créer la récurrence"}</button>
+      <p className="hint m-0">Échéance indicative : aucun paiement n’est créé automatiquement. Le montant est celui de la ligne du budget du mois de même catégorie.</p>
+      <div className="form-actions">
+        <button type="submit">{charge ? "Enregistrer" : "Créer la récurrence"}</button>
+        <Link href="/charges" className="button secondary">Annuler</Link>
+      </div>
     </ActionForm>
   );
 }

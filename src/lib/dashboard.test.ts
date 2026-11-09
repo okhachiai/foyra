@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { setupHousehold } from "./auth";
 import { createBudget, parseMonth } from "./budget";
 import { createCharge, payCharge, type ChargeInput } from "./charges";
-import { buildCharts, getDashboard, type Flow } from "./dashboard";
+import { buildCharts, getDashboard, getShell, spendingPlan, upcomingCharges, type Flow } from "./dashboard";
 import { prisma } from "./db";
 import { createEntry, parseDay } from "./ledger";
 import { createLoan } from "./loans";
@@ -115,5 +115,57 @@ describe("graphiques du tableau de bord", () => {
     expect(c.seasons[0].average).toBe(Math.round(186000 / 11));
     expect(c.seasons[1]).toMatchObject({ total: 50000, delta: null });
     expect(c.seasons[0].top).toEqual([{ label: "Loyer", value: 185000 }, { label: "Sans catégorie", value: 1000 }]);
+    // Mois : douze derniers, novembre en dernier, égal aux cumuls de fin de mois.
+    expect(c.monthly.labels).toHaveLength(12);
+    expect(c.monthly.labels.at(-1)).toBe("nov.");
+    expect(c.monthly.income.at(-1)).toBe(c.flows.income[0][30]);
+    expect(c.monthly.expense.slice(-2)).toEqual([90000, 96000]);
+    expect(c.monthly.expense.slice(0, 10).every((v) => v === 0)).toBe(true);
+  });
+
+});
+
+describe("plan de dépenses", () => {
+  const node = (id: string, kind: "INCOME" | "EXPENSE", total: number, actual: number, over: object = {}) =>
+    ({ id, label: id, kind, total, actual, included: true, category: { fixed: false }, children: [], ...over }) as unknown as Parameters<typeof spendingPlan>[0][number];
+
+  it("lignes de dépense incluses hors épargne, par prévu décroissant ; totaux de ces lignes", () => {
+    const p = spendingPlan([
+      node("Revenu", "INCOME", 300000, 300000),
+      node("Courses", "EXPENSE", 70000, 62000),
+      node("Loyer", "EXPENSE", 140000, 130000, { category: { fixed: true } }),
+      node("Livret", "EXPENSE", 50000, 50000, { category: { fixed: true, savings: true } }),
+      node("Exclue", "EXPENSE", 10000, 0, { included: false }),
+      node("Loisirs", "EXPENSE", 10000, 15000),
+    ]);
+    expect(p.lines.map((l) => `${l.label}:${l.left}`)).toEqual(["Loyer:10000", "Courses:8000", "Loisirs:-5000"]);
+    expect(p).toMatchObject({ planned: 220000, actual: 207000, left: 13000 });
+  });
+});
+
+describe("barre latérale", () => {
+  it("sans budget : pas de plan ; échéances non payées comptées", async () => {
+    await charge();
+    await charge({ name: "Internet", dueDay: 12 });
+    const s = await getShell(hh, today);
+    expect(s.plan).toBeNull();
+    expect(s.due).toBe(2);
+  });
+  it("avec budget : plan des lignes de dépense", async () => {
+    await plan([["Loyer", 90000]]);
+    // Ligne commune : seul le réel commun compte (logique de getBudget).
+    await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 30000, occurredOn: day("2026-11-09"), note: null, categoryId: await byName("Loyer"), shared: true });
+    await spend("Loyer", 5000);
+    const s = await getShell(hh, today);
+    expect(s.plan).toMatchObject({ planned: 90000, actual: 30000, left: 60000 });
+  });
+});
+
+describe("échéances du tableau de bord", () => {
+  it("retards, puis à payer, puis payées ; dépenses seules ; tronqué", () => {
+    const c = (name: string, due: string, paid = false, kind = "EXPENSE") => ({ name, kind, due: day(due), payment: paid ? {} : null });
+    const list = [c("Payée", "2026-11-01", true), c("Plus tard", "2026-11-20"), c("Retard", "2026-11-05"), c("Bientôt", "2026-11-12"), c("Salaire", "2026-11-01", false, "INCOME")];
+    expect(upcomingCharges(list, today).map((x) => [x.name, x.status])).toEqual([["Retard", "late"], ["Bientôt", "due"], ["Plus tard", "due"], ["Payée", "paid"]]);
+    expect(upcomingCharges(list, today, 2)).toHaveLength(2);
   });
 });

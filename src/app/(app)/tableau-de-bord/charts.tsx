@@ -12,12 +12,12 @@ import { Icon, type IconName } from "@/components/ui/icon";
 
 // Palette Foyra : vert = entrées, terracotta = sorties ; teintes de catégories accordées au vert et à la terre cuite.
 const COLORS = {
-  income: ["#8fb8a5", "#336956"],
-  expense: ["#e2ad97", "#cc7c5e"],
-  radar: "#336956",
-  // Couleur d'un groupe de catégories, avec l'encre lisible dessus.
-  groups: [["#336956", "#fff"], ["#cc7c5e", "#212936"], ["#d9b26a", "#212936"], ["#8fb8a5", "#212936"], ["#4f6f8f", "#fff"], ["#7a6a8e", "#fff"]],
-  none: ["#e5e3dd", "#212936"],
+  income: ["var(--chart-1-soft)", "var(--chart-1)"],
+  expense: ["var(--chart-2-soft)", "var(--chart-2)"],
+  radar: "var(--chart-1)",
+  // Couleur d'un groupe de catégories (tokens --chart-*, clair et sombre).
+  groups: [1, 2, 3, 4, 5, 6].map((n) => `var(--chart-${n})`),
+  none: "var(--chart-none)",
 } as const;
 const MONTHS = ["Janv", "Févr", "Mars", "Avr", "Mai", "Juin", "Juil", "Août", "Sept", "Oct", "Nov", "Déc"];
 const MONO = "var(--font-sans), system-ui, sans-serif";
@@ -278,18 +278,11 @@ function squarify(items: { name: string; group: string; v: number }[], x: number
   return out;
 }
 
-const TileIcon = ({ bg }: { bg: string }) => (
-  <svg viewBox="0 0 14 14" width={14} height={14} aria-hidden="true">
-    <rect x="1" y="1" width="12" height="12" rx="4" fill="currentColor" opacity=".9" />
-    <path d="M7 3.6l1 2.4 2.4 1-2.4 1L7 10.4 6 8 3.6 7 6 6z" fill={bg} />
-  </svg>
-);
-
 type Categories = DashboardCharts["categories"];
 const groupColor = (groups: Categories["groups"], id: string) =>
   id === "none" ? COLORS.none : COLORS.groups[groups.findIndex((g) => g.id === id) % COLORS.groups.length];
 
-/** Dépenses du mois par catégorie de premier niveau, couleurs du treemap, évolution vs le mois précédent. */
+/** Dépenses du mois par catégorie de premier niveau, une couleur par groupe, évolution vs le mois précédent. */
 export function SpendingByCategory({ currency, data }: { currency: string; data: Categories }) {
   const categories = React.useMemo(() => {
     const sums = new Map<string, [number, number]>();
@@ -305,56 +298,10 @@ export function SpendingByCategory({ currency, data }: { currency: string; data:
         name: g.name,
         amount: cur / 100,
         change: prev ? ((cur - prev) / prev) * 100 : undefined,
-        color: groupColor(data.groups, g.id)[0],
+        color: groupColor(data.groups, g.id),
       }));
   }, [data]);
   return <SpendingRing title="Dépenses par catégorie" categories={categories} currency={currency} />;
-}
-
-function Treemap({ data, period, tip }: { data: Categories; period: number; tip: TipRef }) {
-  const money = React.useContext(MoneyContext);
-  const [ref, { w: W, h: H }] = useSize();
-  const [placed, setPlaced] = React.useState(false);
-  React.useEffect(() => { if (W) { const r = requestAnimationFrame(() => requestAnimationFrame(() => setPlaced(true))); return () => cancelAnimationFrame(r); } }, [W]);
-  const G = 6;
-  const items = data.items.map((i) => ({ name: i.name, group: i.group, v: i.values[period] })).filter((i) => i.v > 0).sort((a, b) => b.v - a.v);
-  const total = items.reduce((a, b) => a + b.v, 0) || 1;
-  const rects = W ? squarify(items, 0, 0, W + G, H + G) : [];
-  const label = data.periods[period].label;
-  return (
-    <div ref={ref} className="ab-tree" role="img" aria-label={`Dépenses par catégorie, ${label}`}>
-      {!items.length && <p className="ab-empty muted">Aucune dépense sur cette période.</p>}
-      {rects.map((r) => {
-        const g = data.groups.find((x) => x.id === r.group)!;
-        const [bg, ink] = groupColor(data.groups, r.group);
-        const w = r.w - G, h = r.h - G, share = ((r.v / total) * 100).toLocaleString("fr-FR", { maximumFractionDigits: 1 }) + " %";
-        const chars = money(r.v).length;
-        let fs = Math.min(30, (w - 24 - 58) / (chars * 0.62)), showPct = true;
-        if (fs < 17) { showPct = false; fs = Math.min(30, (w - 24) / (chars * 0.62)); }
-        const tiny = fs < 12 || h < 54 || w < 60, showName = h >= 78 && w >= 96;
-        return (
-          <div
-            key={`${r.group}/${r.name}`}
-            className="ab-tile"
-            style={{ left: placed ? r.x : W / 2, top: placed ? r.y : H / 2, width: placed ? w : 0, height: placed ? h : 0, background: bg, color: ink }}
-            onPointerMove={(e) => tip.current?.show(e.clientX, e.clientY, { title: `${label} · ${g.name}`, rows: [{ label: r.name, value: money(r.v), color: bg }, { label: "Part", value: share }] })}
-            onPointerLeave={() => tip.current?.hide()}
-          >
-            <div className="ab-tile-name">
-              <TileIcon bg={bg} />
-              {showName && <span>{r.name}</span>}
-            </div>
-            {!tiny && (
-              <div className="ab-tile-foot">
-                <span className="ab-num" style={{ fontSize: fs, lineHeight: 0.9 }}><CountUp value={r.v} duration={900} /></span>
-                {showPct && <span className="ab-pill ab-num">{share}</span>}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
 }
 
 /* ---------------- D : saisonnalité (radar) ---------------- */
@@ -444,7 +391,6 @@ export function AnalyticsBento({ currency, data, aside }: { currency: string; da
     return (cents: number) => f.format(cents / 100);
   }, [currency]);
   const tip = React.useRef<TipApi | null>(null);
-  const [period, setPeriod] = React.useState(0);
   const [year, setYear] = React.useState(0);
   const [shown, setShown] = React.useState(false);
   React.useEffect(() => { const r = requestAnimationFrame(() => setShown(true)); return () => cancelAnimationFrame(r); }, []);
@@ -501,16 +447,21 @@ export function AnalyticsBento({ currency, data, aside }: { currency: string; da
   );
 }
 
-/* ---------------- indicateurs du haut : valeur, variation, courbe du mois ---------------- */
+/* ---------------- indicateurs du haut : carte principale + cartes secondaires ---------------- */
 
-export type Kpi = { label: string; icon: IconName; value: number; note: string; series: number[] | null; prev: number | null; upIsGood?: boolean; colors: readonly [string, string] };
+const useMoney = (currency: string) =>
+  React.useMemo(() => {
+    const f = new Intl.NumberFormat("fr-FR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    return (cents: number) => f.format(cents / 100);
+  }, [currency]);
 
+/** Mini-courbe d'un cumul (aire en dégradé + trait). `colors` : [départ, trait]. */
 function Spark({ series, colors, label }: { series: number[]; colors: readonly [string, string]; label: string }) {
   const [ref, { w: W, h: H }] = useSize();
   const id = React.useId().replace(/:/g, "");
   const min = Math.min(...series), max = Math.max(...series), span = max - min || 1;
-  const X = (i: number) => (i / (series.length - 1)) * W;
-  const Y = (v: number) => 3 + (1 - (v - min) / span) * (H - 6);
+  const X = (i: number) => (i / (series.length - 1)) * (W - 6) + 3;
+  const Y = (v: number) => 4 + (1 - (v - min) / span) * (H - 8);
   const P = series.map((v, i) => [X(i), Y(v)] as [number, number]);
   const line = smooth(P), end = P[P.length - 1];
   return (
@@ -519,50 +470,180 @@ function Spark({ series, colors, label }: { series: number[]; colors: readonly [
         <svg width={W} height={H} role="img" aria-label={`${label} cumulé jour par jour ce mois-ci`}>
           <defs>
             <linearGradient id={`${id}a`} x1={0} x2={0} y1={0} y2={1}>
-              <stop offset="0" stopColor={colors[1]} stopOpacity={0.28} />
+              <stop offset="0" stopColor={colors[1]} stopOpacity={0.24} />
               <stop offset="1" stopColor={colors[1]} stopOpacity={0} />
             </linearGradient>
           </defs>
           <path d={`${line}L${end[0]},${H}L${P[0][0]},${H}Z`} fill={`url(#${id}a)`} />
           <path d={line} fill="none" stroke={colors[1]} strokeWidth={2} strokeLinecap="round" />
+          <circle cx={end[0]} cy={end[1]} r={3.5} fill="var(--surface)" stroke={colors[1]} strokeWidth={2} />
         </svg>
       )}
     </div>
   );
 }
 
-export function KpiCards({ currency, items }: { currency: string; items: Kpi[] }) {
-  const money = React.useMemo(() => {
-    const f = new Intl.NumberFormat("fr-FR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 });
-    return (cents: number) => f.format(cents / 100);
-  }, [currency]);
-  const [shown, setShown] = React.useState(false);
-  React.useEffect(() => { const r = requestAnimationFrame(() => setShown(true)); return () => cancelAnimationFrame(r); }, []);
+export type Kpi = {
+  label: string; icon: IconName; tone: "hero" | "accent" | "expense" | "info"; value: number; note: string;
+  series: number[] | null; prev: number | null; upIsGood?: boolean; colors: readonly [string, string];
+  /** À la place de la courbe : avancement réel / prévu (épargne). */
+  progress?: { value: number; max: number; label: string };
+};
+
+/** Variation du cumul au même jour du mois précédent ; rien si la base est nulle. */
+const deltaOf = (k: { series: number[] | null; prev: number | null }) => {
+  const now = k.series?.at(-1);
+  return now !== undefined && k.prev ? ((now - k.prev) / Math.abs(k.prev)) * 100 : null;
+};
+
+/** Quatre indicateurs de même gabarit ; `tone: "hero"` = la carte principale, vert profond. */
+export function KpiRow({ currency, items }: { currency: string; items: Kpi[] }) {
+  const money = useMoney(currency);
   return (
     <MoneyContext.Provider value={money}>
-      <div className={shown ? "ab-grid ab-shown" : "ab-grid"}>
+      <div className="dash-kpis">
         {items.map((k) => {
-          const now = k.series?.at(-1);
-          // Variation du cumul au même jour du mois précédent ; rien si la base est nulle.
-          const delta = now !== undefined && k.prev ? ((now - k.prev) / Math.abs(k.prev)) * 100 : null;
+          const hero = k.tone === "hero";
           return (
-            <section key={k.label} className="ab-card w4" aria-label={k.label}>
-              <div className="kpi-head">
-                <span className="kpi-icon"><Icon name={k.icon} className="size-5" /></span>
-                <div>
-                  <div className="kpi-title">{k.label}</div>
-                  <div className="ab-note">{k.note}</div>
+            <section key={k.label} className={hero ? "card card-hero kpi-card" : "card kpi-card"} aria-label={k.label}>
+              <div className="kpi-top">
+                <span className={`kpi-icon ${k.tone}`}><Icon name={k.icon} className="size-4" /></span>
+                <span className="kpi-title min-w-0 truncate">{k.label}</span>
+                {!hero && <span className="ml-auto shrink-0" title="Cumul comparé au même jour du mois précédent"><Delta value={deltaOf(k)} upIsGood={k.upIsGood} /></span>}
+              </div>
+              <strong className={k.value < 0 && !hero ? "kpi-value text-neg" : "kpi-value"}><CountUp value={k.value} /></strong>
+              {k.progress ? (
+                <div className="kpi-progress">
+                  <progress
+                    className={k.tone === "info" ? "progress info" : "progress"}
+                    value={Math.max(Math.min(k.progress.value, k.progress.max || 1), 0)}
+                    max={k.progress.max || 1}
+                    aria-label={k.progress.label}
+                  />
                 </div>
-              </div>
-              <div className="kpi-foot">
-                <span className={k.value < 0 ? "ab-big ab-num neg" : "ab-big ab-num"}><CountUp value={k.value} /></span>
-                <span title="Cumul comparé au même jour du mois précédent"><Delta value={delta} upIsGood={k.upIsGood} /></span>
-                {k.series && <Spark series={k.series} colors={k.colors} label={k.label} />}
-              </div>
+              ) : k.series ? (
+                <Spark series={k.series} colors={k.colors} label={k.label} />
+              ) : (
+                <div className="kpi-chart" />
+              )}
+              <div className="kpi-note">{k.note}</div>
             </section>
           );
         })}
       </div>
     </MoneyContext.Provider>
+  );
+}
+
+/* ---------------- cash-flow : revenus et dépenses par mois, reste en ligne ---------------- */
+
+const RANGES = [["3M", 3], ["6M", 6], ["12M", 12]] as const;
+
+/** Graduations lisibles couvrant [lo, hi] : pas en 1/2/2,5/5 × 10ⁿ, environ 3 intervalles, 0 toujours inclus. */
+export function axisTicks(lo: number, hi: number) {
+  const span = Math.max(hi - lo, 1) / 3;
+  const p = 10 ** Math.floor(Math.log10(span));
+  const step = ([1, 2, 2.5, 5, 10].find((r) => span <= r * p) ?? 10) * p;
+  const bottom = Math.floor(lo / step) * step, top = Math.max(Math.ceil(hi / step) * step, bottom + step);
+  return Array.from({ length: Math.round((top - bottom) / step) + 1 }, (_, k) => bottom + k * step);
+}
+
+export function CashFlow({ currency, data }: { currency: string; data: DashboardCharts["monthly"] }) {
+  const money = useMoney(currency);
+  const [range, setRange] = React.useState(1);
+  const n = RANGES[range][1];
+  const labels = data.labels.slice(-n), income = data.income.slice(-n), expense = data.expense.slice(-n);
+  const net = income.map((v, i) => v - expense[i]);
+  const last = labels.length - 1;
+  const avg = (a: number[]) => Math.round(a.reduce((s, v) => s + v, 0) / a.length);
+  const rate = income[last] ? (net[last] / income[last]) * 100 : null;
+  const tip = React.useRef<TipApi | null>(null);
+
+  return (
+    <MoneyContext.Provider value={money}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="ab-legend m-0">
+          <span><i style={{ background: COLORS.income[1] }} />Revenus</span>
+          <span><i style={{ background: COLORS.expense[1] }} />Dépenses</span>
+          <span><i className="line" style={{ background: "var(--heading)" }} />Résultat</span>
+        </div>
+        <Segmented label="Période" items={RANGES.map((r) => r[0])} value={range} onChange={setRange} />
+      </div>
+      <Bars labels={labels} income={income} expense={expense} net={net} tip={tip} />
+      {/* aria-label plutôt que <caption> : la légende échappe au clip de .sr-only et s'affichait par-dessus le titre. */}
+      <table className="sr-only" aria-label="Revenus, dépenses et résultat par mois">
+        <thead><tr><th>Mois</th><th>Revenus</th><th>Dépenses</th><th>Résultat</th></tr></thead>
+        <tbody>
+          {labels.map((l, i) => <tr key={l + i}><td>{l}</td><td>{money(income[i])}</td><td>{money(expense[i])}</td><td>{money(net[i])}</td></tr>)}
+        </tbody>
+      </table>
+      <dl className="cash-stats">
+        <div><dt>Revenus moyens</dt><dd className="ab-num">{money(avg(income))}</dd></div>
+        <div><dt>Dépenses moyennes</dt><dd className="ab-num">{money(avg(expense))}</dd></div>
+        <div><dt>Résultat / revenus ({labels[last]})</dt><dd className="ab-num">{rate === null ? "—" : `${rate.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`}</dd></div>
+      </dl>
+      <Tooltip api={tip} />
+    </MoneyContext.Provider>
+  );
+}
+
+function Bars({ labels, income, expense, net, tip }: { labels: string[]; income: number[]; expense: number[]; net: number[]; tip: TipRef }) {
+  const money = React.useContext(MoneyContext);
+  const [ref, { w: W, h: H }] = useSize();
+  const [hover, setHover] = React.useState<number | null>(null);
+  const L = 44, B = 26, T = 22; // axe gauche, libellés du bas, valeurs au-dessus des barres
+  const ticks = axisTicks(Math.min(...net, 0), Math.max(...income, ...expense, ...net, 0));
+  const bottom = ticks[0], top = ticks.at(-1)!;
+  const Y = (v: number) => T + ((top - v) / (top - bottom)) * (H - T - B);
+  const step = (W - L) / labels.length;
+  const bw = Math.max(Math.min(step * 0.22, 26), 4), gap = Math.min(step * 0.06, 6);
+  const cx = (i: number) => L + step * (i + 0.5);
+  const showValues = step > 70;
+  const move = (e: React.PointerEvent) => {
+    const r = (e.currentTarget as SVGRectElement).getBoundingClientRect();
+    const i = Math.min(Math.max(Math.floor((e.clientX - r.left - L) / step), 0), labels.length - 1);
+    setHover(i);
+    tip.current?.show(e.clientX, e.clientY, {
+      title: labels[i],
+      rows: [
+        { label: "Revenus", value: money(income[i]), color: COLORS.income[1] },
+        { label: "Dépenses", value: money(expense[i]), color: COLORS.expense[1] },
+        { label: "Résultat", value: money(net[i]), color: "var(--heading)" },
+      ],
+    });
+  };
+  return (
+    <div ref={ref} className="cash-chart">
+      {W > 0 && (
+        <svg width={W} height={H} role="img" aria-label={`Revenus et dépenses par mois, de ${labels[0]} à ${labels.at(-1)}`}>
+          {ticks.map((v) => (
+            <g key={v}>
+              <line x1={L} x2={W} y1={Y(v)} y2={Y(v)} stroke="var(--hairline)" strokeDasharray={v === 0 ? undefined : "3 4"} />
+              <text x={L - 8} y={Y(v)} textAnchor="end" dominantBaseline="central" fontSize={11} fill="var(--faint)">{compact.format(v / 100)}</text>
+            </g>
+          ))}
+          {hover !== null && <rect x={L + step * hover + 4} y={4} width={step - 8} height={H - 8} rx={10} fill="var(--surface-secondary)" />}
+          {labels.map((l, i) => {
+            const x = cx(i);
+            const bar = (v: number, dx: number, color: string, ink: string) => (
+              <g>
+                <rect x={x + dx} y={Y(Math.max(v, 0))} width={bw} height={Math.max(Y(0) - Y(Math.max(v, 0)), 0)} rx={4} fill={color} />
+                {showValues && v > 0 && <text x={x + dx + bw / 2} y={Y(v) - 6} textAnchor="middle" fontSize={11} fontWeight={700} fill={ink}>{compact.format(v / 100)}</text>}
+              </g>
+            );
+            return (
+              <g key={l + i}>
+                {bar(income[i], -bw - gap / 2, COLORS.income[1], "var(--accent-ink)")}
+                {bar(expense[i], gap / 2, COLORS.expense[1], "var(--neg)")}
+                <text x={x} y={H - 6} textAnchor="middle" fontSize={12} fontWeight={i === labels.length - 1 ? 700 : 500} fill={i === labels.length - 1 ? "var(--heading)" : "var(--muted)"}>{l}</text>
+              </g>
+            );
+          })}
+          <polyline points={net.map((v, i) => `${cx(i)},${Y(v)}`).join(" ")} fill="none" stroke="var(--heading)" strokeWidth={1.75} strokeLinejoin="round" />
+          {net.map((v, i) => <circle key={i} cx={cx(i)} cy={Y(v)} r={hover === i ? 4.5 : 3.5} fill="var(--surface)" stroke="var(--heading)" strokeWidth={1.75} />)}
+          <rect x={L} width={W - L} height={H} fill="transparent" onPointerMove={move} onPointerLeave={leave(setHover, tip)} />
+        </svg>
+      )}
+    </div>
   );
 }

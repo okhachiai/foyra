@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { listCategories } from "@/lib/categories";
 import { formatDay } from "@/lib/ledger";
 import type { getLoan } from "@/lib/loans";
@@ -6,6 +7,10 @@ import { createLoanAction, updateLoanAction } from "@/app/actions";
 import { ActionForm, Field } from "@/app/form";
 
 export const monthYear = (d: Date) => new Intl.DateTimeFormat("fr-FR", { month: "2-digit", year: "numeric", timeZone: "UTC" }).format(d);
+
+/** Nombre d'échéances mensuelles → « 3 ans 4 mois » */
+export const duration = (months: number) =>
+  [Math.floor(months / 12) && `${Math.floor(months / 12)} an${months >= 24 ? "s" : ""}`, months % 12 && `${months % 12} mois`].filter(Boolean).join(" ") || "—";
 
 /** « 3450 » → « 3,45 » */
 export const rateToInput = (rate: number) => (rate / 1000).toString().replace(".", ",");
@@ -51,7 +56,10 @@ export function LoanForm({ loan, categories, firstDue }: {
           ])}
         </select>
       </Field>
-      <button type="submit">{loan ? "Enregistrer" : "Créer le crédit"}</button>
+      <div className="form-actions">
+        <button type="submit">{loan ? "Enregistrer" : "Créer le crédit"}</button>
+        {!loan && <Link href="/credits" className="button secondary">Annuler</Link>}
+      </div>
     </ActionForm>
   );
 }

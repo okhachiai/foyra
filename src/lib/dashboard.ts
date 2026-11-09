@@ -1,5 +1,5 @@
 import { addMonths } from "./amortization";
-import { budgetTotals, savedIn } from "./budget";
+import { budgetTotals, getBudget, groupOf, savedIn, type Node } from "./budget";
 import { chargeStatus } from "./calendar";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
@@ -124,7 +124,16 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
     };
   });
 
+  // Revenus et dépenses par mois : les douze derniers mois, le plus ancien d'abord (barres du cash-flow).
+  const last12 = Array.from({ length: 12 }, (_, i) => 11 - i);
+  const monthly = {
+    labels: last12.map((k) => fr({ month: "short" }).format(utc(y, m - k))),
+    income: last12.map((k) => sum("INCOME", utc(y, m - k), utc(y, m - k + 1))),
+    expense: last12.map((k) => sum("EXPENSE", utc(y, m - k), utc(y, m - k + 1))),
+  };
+
   return {
+    monthly,
     flows: {
       income,
       expense,
@@ -142,4 +151,41 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
     },
     seasons,
   };
+}
+
+export type PlanLine = { id: string; label: string; planned: number; actual: number; left: number };
+
+/**
+ * Plan de dépenses du budget : lignes principales de dépense incluses, charges fixes et variables (hors épargne),
+ * par prévu décroissant, avec leur réel ; totaux prévu / réel / reste de ces seules lignes.
+ */
+export function spendingPlan(tree: (Node & { actual: number })[]) {
+  const lines: PlanLine[] = tree
+    .filter((n) => n.kind === "EXPENSE" && n.included && groupOf(n) !== "savings")
+    .map((n) => ({ id: n.id, label: n.label, planned: n.total, actual: n.actual, left: n.total - n.actual }))
+    .sort((a, b) => b.planned - a.planned);
+  const planned = lines.reduce((s, l) => s + l.planned, 0), actual = lines.reduce((s, l) => s + l.actual, 0);
+  return { lines, planned, actual, left: planned - actual };
+}
+
+/** Barre latérale : plan de dépenses du mois de `today` (null sans budget) et nombre d'échéances non payées. */
+export async function getShell(householdId: string, today: Date) {
+  const month = addMonths(today, 0);
+  const [budget, charges] = await Promise.all([getBudget(householdId, month), listMonthCharges(householdId, month)]);
+  return {
+    month,
+    plan: budget && spendingPlan(budget.tree),
+    due: charges.filter((c) => c.kind === "EXPENSE" && !c.payment).length,
+  };
+}
+
+const STATUS_RANK = { late: 0, due: 1, paid: 2 } as const;
+
+/** Échéances de dépense du mois pour le tableau de bord : en retard, puis à payer, puis payées ; par date dans chaque groupe. */
+export function upcomingCharges<T extends { kind: string; payment: unknown; due: Date }>(charges: T[], today: Date, n = 5) {
+  return charges
+    .filter((c) => c.kind === "EXPENSE")
+    .map((c) => ({ ...c, status: chargeStatus(c, today) }))
+    .sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || a.due.getTime() - b.due.getTime())
+    .slice(0, n);
 }
