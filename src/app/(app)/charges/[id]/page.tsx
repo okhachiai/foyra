@@ -10,30 +10,32 @@ import { Card, SectionHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
 import { ChargeForm } from "../charge-form";
+import { getI18n } from "@/lib/i18n-server";
 
 export default async function EditChargePage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
+  const { t } = await getI18n();
   const charge = await getCharge(user.householdId, (await params).id).catch((e) => {
     if (e instanceof NotFoundError) notFound();
     throw e;
   });
-  if (charge.loan) redirect(`/credits/${charge.loan.id}`);
+  if (charge.loan) redirect(`/loans/${charge.loan.id}`);
   const categories = await listCategories(user.householdId);
 
   return (
     <>
       <PageHeader
-        eyebrow={<Link href="/charges" className="text-[inherit] no-underline hover:underline">Paramètres / Récurrences</Link>}
+        eyebrow={<Link href="/charges" className="text-[inherit] no-underline hover:underline">{t("Settings")} / {t("Recurring")}</Link>}
         title={charge.name}
-        actions={<Link href="/charges" className="button ghost"><Icon name="chevronLeft" className="size-4" />Récurrences</Link>}
+        actions={<Link href="/charges" className="button ghost"><Icon name="chevronLeft" className="size-4" />{t("Recurring")}</Link>}
       />
       <div className="grid max-w-3xl gap-4">
         <Card><ChargeForm charge={charge} categories={categories} startMonth="" /></Card>
         <Card className="danger-card">
-          <SectionHeader title="Supprimer la récurrence" subtitle="Pour l’arrêter sans perdre son suivi, désactivez-la ou renseignez son dernier mois." />
-          <ActionForm action={deleteChargeAction} confirm="Supprimer cette récurrence ? Les opérations déjà enregistrées sont conservées.">
+          <SectionHeader title={t("Delete the recurring charge")} subtitle={t("To stop it without losing its history, disable it or set its last month.")} />
+          <ActionForm action={deleteChargeAction} confirm={t("Delete this recurring charge? Transactions already recorded are kept.")}>
             <input type="hidden" name="id" value={charge.id} />
-            <div className="form-actions"><button type="submit" className="danger">Supprimer</button></div>
+            <div className="form-actions"><button type="submit" className="danger">{t("Delete")}</button></div>
           </ActionForm>
         </Card>
       </div>

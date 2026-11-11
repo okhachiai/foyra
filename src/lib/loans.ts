@@ -14,7 +14,7 @@ const loanTerms = (i: LoanInput) => ({ principal: i.principal, annualRate: i.ann
 /** Charge portée par le crédit : jour et mois de la 1ʳᵉ échéance, n mois (montant : échéancier du crédit). Sans `shared` : défaut en base à la création, inchangé ensuite. */
 function chargeOf(i: LoanInput): Omit<ChargeInput, "shared"> {
   if (i.payment !== null && i.payment <= interestOf(i.principal, i.annualRate)) {
-    throw new LedgerError("La mensualité ne couvre pas les intérêts.", "payment");
+    throw new LedgerError("The monthly payment does not cover the interest.", "payment");
   }
   const startMonth = addMonths(i.firstDue, 0);
   const dueDay = i.firstDue.getUTCDate();
@@ -91,7 +91,7 @@ export async function listLoans(householdId: string, today: Date) {
   return loans.map((l) => withSchedule(l, today));
 }
 
-const TOO_MUCH = "Montant supérieur au capital restant dû à cette date.";
+const TOO_MUCH = "Amount above the principal still owed on that date.";
 const total = (s: Schedule) => s.prepayments.reduce((sum, p) => sum + p.amount, 0);
 
 /** Tous les anticipés enregistrés s'appliquent en entier (aucun rogné par le capital restant) ; sinon LedgerError. Utilisé après un import. */
@@ -119,7 +119,7 @@ export async function prepay(householdId: string, userId: string, loanId: string
       if (total(after) < total(loan.schedule) + amount) throw new LedgerError(TOO_MUCH, "amount");
       const t = await createEntryTx(tx, householdId, userId, {
         kind: "EXPENSE", amount, occurredOn, paidById: userId, shared: loan.fixedCharge.shared, idempotencyKey,
-        note: `Remboursement anticipé · ${loan.fixedCharge.name}`, categoryId: loan.fixedCharge.categoryId,
+        note: `Early repayment · ${loan.fixedCharge.name}`, categoryId: loan.fixedCharge.categoryId,
       });
       return tx.loanPrepayment.create({ data: { householdId, loanId, transactionId: t.id, mode } });
     });

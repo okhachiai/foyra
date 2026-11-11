@@ -240,7 +240,7 @@ export async function createBudget(householdId: string, month: Date, incomes?: I
   }
 }
 
-const VALIDATED = "Ce budget est validé : repassez-le en brouillon pour le modifier.";
+const VALIDATED = "This budget is validated: switch it back to draft to edit it.";
 
 /** Verrouille le budget du foyer (FOR UPDATE) ; `draft` : refuse s'il est validé. */
 export async function lockBudget(tx: Db, householdId: string, budgetId: string, draft = true) {
@@ -263,9 +263,9 @@ export type ItemFields = { label: string; amount: number; included: boolean; rec
 /** Empreinte des valeurs affichées d'une ligne : identique à la soumission = ligne non modifiée (cases non affichées : undefined). */
 export const itemSignature = (f: ItemFields) => JSON.stringify([f.label, f.amount, f.included, f.recurring, f.shared, f.reserve]);
 
-const ONE_RESERVE = "Une seule réserve par budget.";
-const RESERVE_TOP = "La réserve doit être une ligne principale de dépense.";
-const RESERVE_INCLUDED = "La réserve doit être une ligne incluse au budget.";
+const ONE_RESERVE = "Only one reserve per budget.";
+const RESERVE_TOP = "The reserve must be a top-level expense line.";
+const RESERVE_INCLUDED = "The reserve must be a line included in the budget.";
 
 /** Une deuxième réserve (index SQL partiel) → message lisible. */
 async function oneReserve<T>(write: () => Promise<T>) {
@@ -299,7 +299,7 @@ export async function addItem(householdId: string, budgetId: string, input: Item
     if (input.parentId) {
       const parent = await tx.budgetItem.findFirst({ where: { id: input.parentId, budgetId, householdId } });
       if (!parent) throw new NotFoundError();
-      if (parent.parentId) throw new LedgerError("Une sous-catégorie ne peut pas avoir de sous-catégorie.", "parentId");
+      if (parent.parentId) throw new LedgerError("A subcategory cannot have a subcategory.", "parentId");
       kind = parent.kind;
       input = { ...input, shared: parent.shared };
       const parentCategory = parent.categoryId ?? await categoryFor(tx, householdId, kind, parent.label, null);

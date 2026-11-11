@@ -63,15 +63,15 @@ describe("gestion des membres", () => {
   it("Dernier admin : se rétrograder ou être désactivé est refusé", async () => {
     const e = await setRole(hh, adminId, adminId, "MEMBER").catch((e) => e);
     expect(e).toBeInstanceOf(LedgerError);
-    expect(e.message).toBe("Le foyer doit garder au moins un admin actif.");
+    expect(e.message).toBe("The household must keep at least one active admin.");
     // Second admin désactivé : ne compte pas.
     const c = (await createMember(hh, { name: "C", email: "c@x.fr", password: "password1", role: "ADMIN" }))!.id;
     await setDisabled(hh, adminId, c, true);
-    expect(await message(setRole(hh, adminId, adminId, "MEMBER"))).toBe("Le foyer doit garder au moins un admin actif.");
+    expect(await message(setRole(hh, adminId, adminId, "MEMBER"))).toBe("The household must keep at least one active admin.");
     // C réactivé : A peut se rétrograder ; C devient alors le dernier admin.
     await setDisabled(hh, adminId, c, false);
     await setRole(hh, adminId, adminId, "MEMBER");
-    expect(await message(setRole(hh, c, c, "MEMBER"))).toBe("Le foyer doit garder au moins un admin actif.");
+    expect(await message(setRole(hh, c, c, "MEMBER"))).toBe("The household must keep at least one active admin.");
     expect((await prisma.user.findUniqueOrThrow({ where: { id: adminId } })).role).toBe("MEMBER");
   });
 
@@ -83,7 +83,7 @@ describe("gestion des membres", () => {
 
   it("Soi-même : désactiver son propre compte est refusé", async () => {
     await setRole(hh, adminId, bobId, "ADMIN"); // même avec un autre admin
-    expect(await message(setDisabled(hh, adminId, adminId, true))).toBe("Vous ne pouvez pas désactiver votre propre compte.");
+    expect(await message(setDisabled(hh, adminId, adminId, true))).toBe("You cannot disable your own account.");
   });
 
   it("Concurrence : deux admins se rétrogradent l'un l'autre → une seule réussit", async () => {
@@ -91,7 +91,7 @@ describe("gestion des membres", () => {
     const results = await Promise.allSettled([setRole(hh, adminId, bobId, "MEMBER"), setRole(hh, bobId, adminId, "MEMBER")]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
-    expect(rejected.reason.message).toBe("Le foyer doit garder au moins un admin actif.");
+    expect(rejected.reason.message).toBe("The household must keep at least one active admin.");
     expect(await prisma.user.count({ where: { householdId: hh, role: "ADMIN", disabledAt: null } })).toBe(1);
   });
 

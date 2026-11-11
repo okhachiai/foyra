@@ -37,7 +37,7 @@ describe("totaux du budget (sans double comptage)", () => {
     expect(budgetTotals([{ ...salaire, included: false }]).income).toBe(0);
   });
 
-  it("Épargne sortie des charges fixes : reste = revenus − fixes − variables − épargne", () => {
+  it("Savings sortie des charges fixes : reste = revenus − fixes − variables − épargne", () => {
     const t = budgetTotals([
       item({ kind: "INCOME", amount: 300000 }),
       item({ amount: 100000, category: { fixed: true } }),
@@ -47,7 +47,7 @@ describe("totaux du budget (sans double comptage)", () => {
     expect(t).toEqual({ income: 300000, fixed: 100000, savings: 50000, variable: 80000, expense: 230000, remaining: 70000 });
   });
 
-  it("Épargne = max(prévu, versé)", () => {
+  it("Savings = max(prévu, versé)", () => {
     const items = [item({ kind: "INCOME", amount: 300000 }), item({ amount: 50000, category: { fixed: true, savings: true } })];
     expect(budgetTotals(items, 150000)).toMatchObject({ savings: 150000, remaining: 150000 });
     expect(budgetTotals(items, 20000)).toMatchObject({ savings: 50000, remaining: 250000 });
@@ -115,27 +115,27 @@ describe("reprise et modèles (purs)", () => {
   });
 
   it("Reprise : seules les lignes récurrentes, structure et valeurs conservées, sans identifiant", () => {
-    const loyer = item({ id: "loy", label: "Loyer", amount: 95000 });
-    const fac = item({ id: "f", label: "Factures", recurring: false, amount: 0 });
-    const elec = item({ parentId: "f", label: "Électricité", amount: 8000 });
+    const loyer = item({ id: "loy", label: "Rent", amount: 95000 });
+    const fac = item({ id: "f", label: "Bills", recurring: false, amount: 0 });
+    const elec = item({ parentId: "f", label: "Electricity", amount: 8000 });
     const cadeau = item({ parentId: "f", label: "Cadeau", recurring: false, amount: 3000 });
     const vacances = item({ label: "Vacances", recurring: false, amount: 50000 });
     const seeds = carryOver([loyer, fac, elec, cadeau, vacances]);
-    expect(seeds.map((s) => s.label)).toEqual(["Loyer", "Factures"]); // parent ramené par son enfant récurrent
+    expect(seeds.map((s) => s.label)).toEqual(["Rent", "Bills"]); // parent ramené par son enfant récurrent
     expect(seeds[0]).toMatchObject({ amount: 95000, children: [] });
-    expect(seeds[1].children).toEqual([expect.objectContaining({ label: "Électricité", amount: 8000 })]);
+    expect(seeds[1].children).toEqual([expect.objectContaining({ label: "Electricity", amount: 8000 })]);
     expect(JSON.stringify(seeds)).not.toMatch(/"id"|"parentId"/);
   });
 
   it("Modèles : catégories actives marquées modèle ; montants à 0", () => {
     const c = (o: object) => ({ id: "x", kind: "EXPENSE" as const, name: "X", enabled: true, recurring: true, isTemplate: true, sortOrder: 0, archivedAt: null, ...o });
     const seeds = fromTemplates([
-      { ...c({ id: "a", name: "Logement" }), children: [c({ id: "a1", name: "Loyer" }), c({ id: "a2", name: "Old", archivedAt: new Date() })] },
+      { ...c({ id: "a", name: "Housing" }), children: [c({ id: "a1", name: "Rent" }), c({ id: "a2", name: "Old", archivedAt: new Date() })] },
       { ...c({ id: "b", name: "Hors modèle", isTemplate: false }), children: [] },
       { ...c({ id: "d", name: "Divers", enabled: false }), children: [] },
     ]);
     expect(seeds.map((s) => [s.label, s.amount, s.included, s.children.map((k) => k.label)])).toEqual([
-      ["Logement", 0, true, ["Loyer"]],
+      ["Housing", 0, true, ["Rent"]],
       ["Divers", 0, false, []],
     ]);
   });
@@ -163,9 +163,9 @@ describe("budget mensuel", () => {
     const cat = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name } })).id;
     const op = (kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, d = "2026-11-09") =>
       createEntry(hh, user, { paidById: user, kind, amount, occurredOn: parseDay(d)!, note: null, categoryId });
-    await op("INCOME", 300000, await cat("Salaire 1"));
-    await op("EXPENSE", 90000, await cat("Loyer"));
-    await op("EXPENSE", 4000, await cat("Marché"));
+    await op("INCOME", 300000, await cat("Salary 1"));
+    await op("EXPENSE", 90000, await cat("Rent"));
+    await op("EXPENSE", 4000, await cat("Market"));
     await op("EXPENSE", 1000, null);
     await op("EXPENSE", 50000, await savingsCategory(hh));
     await op("EXPENSE", 99900, null, "2026-10-31");
@@ -177,21 +177,21 @@ describe("budget mensuel", () => {
     const b = await createBudget(hh, nov);
     const got = (await getBudget(hh, nov))!;
     expect(got).toMatchObject({ id: b.id, status: "DRAFT", totals: { income: 0, expense: 0, remaining: 0 } });
-    expect(got.tree.find((t) => t.label === "Factures")!.children.map((c) => c.label)).toEqual(["Électricité", "Gaz", "Eau", "Internet", "Téléphones"]);
+    expect(got.tree.find((t) => t.label === "Bills")!.children.map((c) => c.label)).toEqual(["Electricity", "Gas", "Water", "Internet", "Phones"]);
   });
 
   it("Ligne ajoutée : rattachée à une catégorie (existante de même nom, sinon créée) pour suivre son réel", async () => {
     const b = await createBudget(hh, nov);
-    const abos = await addItem(hh, b.id, { kind: "EXPENSE", parentId: null, label: "Abonnements", amount: 0, included: true, recurring: true });
+    const abos = await addItem(hh, b.id, { kind: "EXPENSE", parentId: null, label: "Subscriptions", amount: 0, included: true, recurring: true });
     const cookido = await addItem(hh, b.id, { kind: "EXPENSE", parentId: abos.id, label: "Cookido", amount: 600, included: true, recurring: true });
     const cat = await prisma.category.findUniqueOrThrow({ where: { id: cookido.categoryId! } });
     expect(cat).toMatchObject({ name: "Cookido", parentId: abos.categoryId, kind: "EXPENSE", isTemplate: false });
-    const factures = await find(b.id, "Factures");
-    const gaz = await addItem(hh, b.id, { kind: "EXPENSE", parentId: factures.id, label: "gaz", amount: 0, included: true, recurring: true });
-    expect(gaz.categoryId).toBe((await find(b.id, "Gaz")).categoryId);
+    const factures = await find(b.id, "Bills");
+    const gaz = await addItem(hh, b.id, { kind: "EXPENSE", parentId: factures.id, label: "gas", amount: 0, included: true, recurring: true });
+    expect(gaz.categoryId).toBe((await find(b.id, "Gas")).categoryId);
   });
 
-  it("Revenus saisis à la création : remplacent les revenus proposés ; catégorie hors foyer ignorée", async () => {
+  it("Income saisis à la création : remplacent les revenus proposés ; catégorie hors foyer ignorée", async () => {
     const proposed = incomeLines(await budgetSeeds(prisma, hh, nov));
     expect(proposed.length).toBeGreaterThan(0);
     const b = await createBudget(hh, nov, [{ label: "Salaire", amount: 250000, categoryId: proposed[0].categoryId }, { label: "Prime", amount: 30000, categoryId: "étranger" }]);
@@ -209,45 +209,45 @@ describe("budget mensuel", () => {
 
   it("Reprise du précédent : lignes récurrentes et leurs valeurs, nouveaux identifiants ; non récurrentes absentes", async () => {
     const o = await createBudget(hh, oct);
-    const loyer = await find(o.id, "Loyer");
-    const marche = await find(o.id, "Marché");
+    const loyer = await find(o.id, "Rent");
+    const marche = await find(o.id, "Market");
     await saveItems(hh, o.id, new Map([[loyer.id, fields(loyer, { amount: 95000 })], [marche.id, fields(marche, { amount: 20000, recurring: false })]]));
     await addItem(hh, o.id, { kind: "EXPENSE", parentId: null, label: "Vacances", amount: 50000, included: true, recurring: false });
 
     const nv = await createBudget(hh, nov);
     const next = await items(nv.id);
-    expect(next.find((i) => i.label === "Loyer")!.amount).toBe(95000);
-    expect(next.some((i) => i.label === "Marché" || i.label === "Vacances")).toBe(false);
+    expect(next.find((i) => i.label === "Rent")!.amount).toBe(95000);
+    expect(next.some((i) => i.label === "Market" || i.label === "Vacances")).toBe(false);
     const before = new Set((await items(o.id)).map((i) => i.id));
     expect(next.some((i) => before.has(i.id))).toBe(false);
     // Structure : Loyer reste sous Logement.
-    const logement = next.find((i) => i.label === "Logement")!;
-    expect(next.find((i) => i.label === "Loyer")!.parentId).toBe(logement.id);
+    const logement = next.find((i) => i.label === "Housing")!;
+    expect(next.find((i) => i.label === "Rent")!.parentId).toBe(logement.id);
   });
 
   it("Historique indépendant : modifier novembre ou le catalogue ne change pas octobre", async () => {
     const o = await createBudget(hh, oct);
-    const octLoyer = await find(o.id, "Loyer");
+    const octLoyer = await find(o.id, "Rent");
     await saveItems(hh, o.id, new Map([[octLoyer.id, fields(octLoyer, { amount: 90000 })]]));
     const nv = await createBudget(hh, nov);
-    const novLoyer = await find(nv.id, "Loyer");
-    await saveItems(hh, nv.id, new Map([[novLoyer.id, fields(novLoyer, { amount: 99000, label: "Loyer révisé" })]]));
-    await updateCategory(hh, octLoyer.categoryId!, { name: "Loyer renommé", enabled: false, recurring: false, isTemplate: true, sortOrder: 1 });
-    expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: octLoyer.id } })).toMatchObject({ label: "Loyer", amount: 90000, included: true });
-    expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: novLoyer.id } })).toMatchObject({ label: "Loyer révisé", amount: 99000 });
+    const novLoyer = await find(nv.id, "Rent");
+    await saveItems(hh, nv.id, new Map([[novLoyer.id, fields(novLoyer, { amount: 99000, label: "Rent révisé" })]]));
+    await updateCategory(hh, octLoyer.categoryId!, { name: "Rent renommé", enabled: false, recurring: false, isTemplate: true, sortOrder: 1 });
+    expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: octLoyer.id } })).toMatchObject({ label: "Rent", amount: 90000, included: true });
+    expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: novLoyer.id } })).toMatchObject({ label: "Rent révisé", amount: 99000 });
   });
 
   it("Réglage « modèles » : ignore le budget précédent, montants à 0 (saisis dans le budget)", async () => {
     const o = await createBudget(hh, oct);
-    const loyer = await find(o.id, "Loyer");
+    const loyer = await find(o.id, "Rent");
     await saveItems(hh, o.id, new Map([[loyer.id, fields(loyer, { amount: 95000 })]]));
     await prisma.household.update({ where: { id: hh }, data: { budgetSource: "TEMPLATES" } });
-    expect((await find((await createBudget(hh, nov)).id, "Loyer")).amount).toBe(0);
+    expect((await find((await createBudget(hh, nov)).id, "Rent")).amount).toBe(0);
   });
 
   it("Sous-ligne : type du parent, montant direct du parent remis à 0 ; pas de 3e niveau (application et SQL)", async () => {
     const b = await createBudget(hh, nov);
-    const divers = await find(b.id, "Divers et imprévus");
+    const divers = await find(b.id, "Miscellaneous and unexpected");
     await saveItems(hh, b.id, new Map([[divers.id, fields(divers, { amount: 7000 })]]));
     const sub = await addItem(hh, b.id, { kind: "INCOME", parentId: divers.id, label: "Cadeaux", amount: 2500, included: true, recurring: true });
     expect(sub.kind).toBe("EXPENSE");
@@ -264,7 +264,7 @@ describe("budget mensuel", () => {
 
   it("Ajout en dernier ; ↑/↓ échange avec la voisine, sans dépasser les bords", async () => {
     const b = await createBudget(hh, nov);
-    const divers = await find(b.id, "Divers et imprévus");
+    const divers = await find(b.id, "Miscellaneous and unexpected");
     for (const label of ["A", "B", "C"]) await addItem(hh, b.id, { kind: "EXPENSE", parentId: divers.id, label, amount: 0, included: true, recurring: true });
     const order = async () => (await getBudget(hh, nov))!.tree.find((t) => t.id === divers.id)!.children.map((c) => c.label);
     expect(await order()).toEqual(["A", "B", "C"]);
@@ -288,44 +288,44 @@ describe("budget mensuel", () => {
     expect((await group(false)).slice(0, 2)).toEqual([first, second]);
     await moveItem(hh, b.id, ecole.id, "down");
     expect((await group(false)).slice(0, 2)).toEqual([second, first]);
-    expect(await group(true)).toEqual(["Logement", "Crédits", "Assurances", "Factures", "Abonnements", "Famille au Maroc"]);
+    expect(await group(true)).toEqual(["Housing", "Loans", "Insurance", "Bills", "Subscriptions", "Family in Morocco"]);
   });
 
   it("Retirer une ligne principale retire sa branche", async () => {
     const b = await createBudget(hh, nov);
-    const factures = await find(b.id, "Factures");
+    const factures = await find(b.id, "Bills");
     await removeItem(hh, b.id, factures.id);
-    expect((await items(b.id)).some((i) => i.label === "Électricité")).toBe(false);
+    expect((await items(b.id)).some((i) => i.label === "Electricity")).toBe(false);
   });
 
   it("Validé : lignes figées ; retour en brouillon : modifiables", async () => {
     const b = await createBudget(hh, nov);
-    const loyer = await find(b.id, "Loyer");
+    const loyer = await find(b.id, "Rent");
     await setBudgetStatus(hh, b.id, "VALIDATED");
     await expect(saveItems(hh, b.id, new Map([[loyer.id, fields(loyer, { amount: 1 })]]))).rejects.toBeInstanceOf(LedgerError);
     await expect(removeItem(hh, b.id, loyer.id)).rejects.toBeInstanceOf(LedgerError);
     await setBudgetStatus(hh, b.id, "DRAFT");
     await saveItems(hh, b.id, new Map([[loyer.id, fields(loyer, { amount: 1 })]]));
-    expect((await find(b.id, "Loyer")).amount).toBe(1);
+    expect((await find(b.id, "Rent")).amount).toBe(1);
   });
 
   it("Le budget ne crée aucune opération ; le réel vient des opérations", async () => {
     const b = await createBudget(hh, nov);
-    const marche = await find(b.id, "Marché");
+    const marche = await find(b.id, "Market");
     await saveItems(hh, b.id, new Map([[marche.id, fields(marche, { amount: 40000 })]]));
     await setBudgetStatus(hh, b.id, "VALIDATED");
     expect(await prisma.transaction.count()).toBe(0);
     await createEntry(hh, user, { paidById: user, shared: true, kind: "EXPENSE", amount: 1250, occurredOn: parseDay("2026-11-03")!, note: null, categoryId: marche.categoryId });
     const tree = (await getBudget(hh, nov))!.tree;
-    const alimentation = tree.find((t) => t.label === "Alimentation")!;
-    expect(alimentation.children.find((c) => c.label === "Marché")!.actual).toBe(1250);
+    const alimentation = tree.find((t) => t.label === "Food")!;
+    expect(alimentation.children.find((c) => c.label === "Market")!.actual).toBe(1250);
     expect(alimentation.actual).toBe(1250);
   });
 
   it("réel : courses perso ne débordent pas l'enveloppe commune ; revenu perso compté sur la ligne de revenu", async () => {
     const incomeCat = (await prisma.category.findFirst({ where: { householdId: hh, kind: "INCOME" } }))!.id;
     const b = await createBudget(hh, nov, [{ label: "Salaire", amount: 250000, categoryId: incomeCat }]);
-    const marche = await find(b.id, "Marché");
+    const marche = await find(b.id, "Market");
     const day = parseDay("2026-11-03")!;
     const entry = (shared: boolean, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null) =>
       createEntry(hh, user, { paidById: user, shared, kind, amount, occurredOn: day, note: null, categoryId });
@@ -334,8 +334,8 @@ describe("budget mensuel", () => {
     await entry(false, "INCOME", 200000, incomeCat);
     await entry(true, "INCOME", 3000, incomeCat);
     const tree = (await getBudget(hh, nov))!.tree;
-    const alimentation = tree.find((t) => t.label === "Alimentation")!;
-    expect(alimentation.children.find((c) => c.label === "Marché")!.actual).toBe(1000);
+    const alimentation = tree.find((t) => t.label === "Food")!;
+    expect(alimentation.children.find((c) => c.label === "Market")!.actual).toBe(1000);
     expect(alimentation.actual).toBe(1000);
     expect(tree.find((t) => t.label === "Salaire")!.actual).toBe(203000);
     // Ligne personnelle : seules les dépenses personnelles.
@@ -345,31 +345,31 @@ describe("budget mensuel", () => {
 
   it("Réserve unique par budget ; sous-lignes alignées sur le parent (commun, jamais réserve)", async () => {
     const b = await createBudget(hh, nov);
-    const divers = await find(b.id, "Divers et imprévus");
-    const factures = await find(b.id, "Factures");
+    const divers = await find(b.id, "Miscellaneous and unexpected");
+    const factures = await find(b.id, "Bills");
     const cadeaux = { kind: "EXPENSE" as const, parentId: divers.id, label: "Cadeaux", amount: 0, included: true, recurring: true, shared: false };
-    await expect(addItem(hh, b.id, { ...cadeaux, reserve: true })).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
-    await expect(addItem(hh, b.id, { ...cadeaux, parentId: null, kind: "INCOME", reserve: true })).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
+    await expect(addItem(hh, b.id, { ...cadeaux, reserve: true })).rejects.toThrow("The reserve must be a top-level expense line.");
+    await expect(addItem(hh, b.id, { ...cadeaux, parentId: null, kind: "INCOME", reserve: true })).rejects.toThrow("The reserve must be a top-level expense line.");
     const sub = await addItem(hh, b.id, cadeaux);
     expect(sub).toMatchObject({ shared: true, reserve: false });
-    await expect(saveItems(hh, b.id, new Map([[sub.id, { ...fields(divers), reserve: true }]]))).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
+    await expect(saveItems(hh, b.id, new Map([[sub.id, { ...fields(divers), reserve: true }]]))).rejects.toThrow("The reserve must be a top-level expense line.");
     const salaire = await prisma.budgetItem.create({ data: { householdId: hh, budgetId: b.id, kind: "INCOME", label: "Salaire", sortOrder: 99 } });
-    await expect(saveItems(hh, b.id, new Map([[salaire.id, { label: "Salaire", amount: 0, included: true, recurring: true, reserve: true }]]))).rejects.toThrow("La réserve doit être une ligne principale de dépense.");
-    await expect(addItem(hh, b.id, { ...cadeaux, parentId: null, included: false, reserve: true })).rejects.toThrow("La réserve doit être une ligne incluse au budget.");
+    await expect(saveItems(hh, b.id, new Map([[salaire.id, { label: "Salaire", amount: 0, included: true, recurring: true, reserve: true }]]))).rejects.toThrow("The reserve must be a top-level expense line.");
+    await expect(addItem(hh, b.id, { ...cadeaux, parentId: null, included: false, reserve: true })).rejects.toThrow("The reserve must be a line included in the budget.");
     await saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), shared: false, reserve: true }], [sub.id, { ...fields(sub), shared: true }]]));
     // Réserve existante exclue (cases non affichées : réserve inchangée) → refusé.
-    await expect(saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), included: false }]]))).rejects.toThrow("La réserve doit être une ligne incluse au budget.");
+    await expect(saveItems(hh, b.id, new Map([[divers.id, { ...fields(divers), included: false }]]))).rejects.toThrow("The reserve must be a line included in the budget.");
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: divers.id } })).toMatchObject({ shared: false, reserve: true });
     expect(await prisma.budgetItem.findUniqueOrThrow({ where: { id: sub.id } })).toMatchObject({ shared: false, reserve: false });
-    await expect(saveItems(hh, b.id, new Map([[factures.id, { ...fields(factures), reserve: true }]]))).rejects.toThrow("Une seule réserve par budget.");
+    await expect(saveItems(hh, b.id, new Map([[factures.id, { ...fields(factures), reserve: true }]]))).rejects.toThrow("Only one reserve per budget.");
     // Déplacer la réserve d'une ligne à l'autre en un seul enregistrement.
     await saveItems(hh, b.id, new Map([[factures.id, { ...fields(factures), reserve: true }], [divers.id, { ...fields(divers), reserve: false }]]));
-    expect((await find(b.id, "Factures")).reserve).toBe(true);
+    expect((await find(b.id, "Bills")).reserve).toBe(true);
   });
 
   it("Isolation : un autre foyer ne lit ni ne modifie ce budget", async () => {
     const b = await createBudget(hh, nov);
-    const loyer = await find(b.id, "Loyer");
+    const loyer = await find(b.id, "Rent");
     const other = (await setupHousehold({ householdName: "Autre", name: "B", email: "b@test.fr", password: "password1" }, { force: true }))!.householdId;
     expect(await getBudget(other, nov)).toBeNull();
     await expect(saveItems(other, b.id, new Map([[loyer.id, fields(loyer, { amount: 1 })]]))).rejects.toBeInstanceOf(NotFoundError);
@@ -379,6 +379,6 @@ describe("budget mensuel", () => {
     // Lignes d'un autre budget glissées dans la requête : ignorées.
     const ob = await createBudget(other, nov);
     await saveItems(other, ob.id, new Map([[loyer.id, fields(loyer, { amount: 1 })]]));
-    expect((await find(b.id, "Loyer")).amount).toBe(0);
+    expect((await find(b.id, "Rent")).amount).toBe(0);
   });
 });

@@ -14,7 +14,7 @@ OUT="security-audit/$(date +%Y-%m-%d_%H%M%S)"
 
 up() {
   "${AUDIT[@]}" up -d --build db app || exit 1
-  echo "Attente de l'application…"
+  echo "Waiting for the application…"
   for _ in $(seq 60); do curl -sf -o /dev/null http://127.0.0.1:3100/login && break; sleep 2; done
   "${AUDIT[@]}" exec -T app /nodejs/bin/node --input-type=module < security/seed-fake.mjs
   echo "Instance d'audit : http://127.0.0.1:3100"
@@ -45,7 +45,7 @@ scan() {
   step vitest env DATABASE_URL_TEST=postgresql://foyra:foyra@localhost:5433/foyra_test npx vitest run
 
   echo "Rapports : $OUT"
-  if ((${#failed[@]})); then echo "Échecs / constats : ${failed[*]}"; exit 1; fi
+  if ((${#failed[@]})); then echo "Failures / findings: ${failed[*]}"; exit 1; fi
 }
 
 case ${1:-} in

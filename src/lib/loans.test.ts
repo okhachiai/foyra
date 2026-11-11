@@ -34,7 +34,7 @@ describe("crédits", () => {
     for (const data of [{ principal: 0 }, { annualRate: -1 }, { annualRate: 50_001 }, { termMonths: 0 }, { termMonths: 601 }, { payment: 0 }, { insurance: -1 }]) {
       await expect(prisma.loan.update({ where: { id: l.id }, data })).rejects.toThrow(/check constraint/i);
     }
-    await expect(loan({ payment: 10000 })).rejects.toMatchObject({ field: "payment", message: "La mensualité ne couvre pas les intérêts." });
+    await expect(loan({ payment: 10000 })).rejects.toMatchObject({ field: "payment", message: "The monthly payment does not cover the interest." });
     expect(await prisma.loan.count()).toBe(1);
   });
 
@@ -88,7 +88,7 @@ describe("crédits", () => {
     const { status } = await getLoan(hh, l.id, day("2028-01-10"));
     await prepay(hh, user, l.id, status.balance, day("2028-01-10"), "REDUCE_TERM");
     expect(await listMonthCharges(hh, parseMonth("2028-02")!)).toEqual([]);
-    await expect(payCharge(hh, user, l.fixedChargeId, parseMonth("2028-02")!, 46887, day("2028-02-05"))).rejects.toThrow("ne s’applique pas");
+    await expect(payCharge(hh, user, l.fixedChargeId, parseMonth("2028-02")!, 46887, day("2028-02-05"))).rejects.toThrow("does not apply");
     await expect(prepay(hh, user, l.id, 1, day("2028-03-01"), "REDUCE_TERM")).rejects.toMatchObject({ field: "amount" });
   });
 

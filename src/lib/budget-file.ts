@@ -96,7 +96,7 @@ export async function exportMonth(householdId: string, month: Date): Promise<Mon
 // --- Lecture du fichier (envoyé par l'utilisateur : tout est vérifié avant d'écrire) ---
 
 const fail = (what: string): never => {
-  throw new LedgerError(`Fichier invalide : ${what}.`);
+  throw new LedgerError(`Invalid file: ${what}.`);
 };
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const arr = (v: unknown, what: string) => (Array.isArray(v) ? v : fail(what));
@@ -115,22 +115,22 @@ export function parseMonthFile(raw: string): MonthFile {
   try {
     f = JSON.parse(raw);
   } catch {
-    fail("JSON illisible");
+    fail("unreadable JSON");
   }
-  if (!isObj(f) || f.version !== 1) fail("version inconnue (exportez à nouveau depuis Foyra)");
+  if (!isObj(f) || f.version !== 1) fail("unknown version (export again from Foyra)");
   const o = f as Record<string, unknown>;
   const month = typeof o.month === "string" ? parseMonth(o.month) : null;
-  if (!month) fail("mois");
+  if (!month) fail("month");
   const next = addMonths(month!, 1);
-  const members = arr(o.members, "membres").map((m, k) => {
-    if (!isObj(m)) fail(`membre ${k + 1}`);
+  const members = arr(o.members, "members").map((m, k) => {
+    if (!isObj(m)) fail(`member ${k + 1}`);
     const x = m as Record<string, unknown>;
-    return { email: text(x.email, `e-mail du membre ${k + 1}`), name: text(x.name, `nom du membre ${k + 1}`) };
+    return { email: text(x.email, `email of member ${k + 1}`), name: text(x.name, `name of member ${k + 1}`) };
   });
   const categories: MonthFile["categories"] = [];
-  arr(o.categories, "catégories").forEach((c, k) => {
-    if (!isObj(c)) fail(`catégorie ${k + 1}`);
-    const what = `catégorie ${k + 1}`;
+  arr(o.categories, "categories").forEach((c, k) => {
+    if (!isObj(c)) fail(`category ${k + 1}`);
+    const what = `category ${k + 1}`;
     const kind = oneOf(c.kind, KINDS, what);
     const parent = refOrNull(c.parent, k, what); // parent déjà lu
     if (parent !== null && categories[parent].kind !== kind) fail(what);
@@ -153,7 +153,7 @@ export function parseMonthFile(raw: string): MonthFile {
     }
     return {
       kind: oneOf(c.kind, ["EXPENSE"] as const, what), name: text(c.name, what), active: bool(c.active, what),
-      category: categories[ref(c.category, nc, what)].kind === "EXPENSE" ? (c.category as number) : fail(`${what} (catégorie de recette)`),
+      category: categories[ref(c.category, nc, what)].kind === "EXPENSE" ? (c.category as number) : fail(`${what} (income category)`),
       dueDay: int(c.dueDay, what, 1, 31), startMonth, endMonth, shared: bool(c.shared, what), loan,
     };
   });
@@ -171,29 +171,29 @@ export function parseMonthFile(raw: string): MonthFile {
   if (o.budget !== null) {
     if (!isObj(o.budget)) fail("budget");
     const b = o.budget as Record<string, unknown>;
-    const items = arr(b.items, "lignes du budget").map((i, k) => {
-      const top = line(i, `ligne ${k + 1} du budget`);
-      const children = arr((i as Record<string, unknown>).children, `ligne ${k + 1} du budget`).map((c, j) => line(c, `sous-ligne ${j + 1} de la ligne ${k + 1}`, top.kind));
-      if (children.some((c) => c.reserve)) fail(`ligne ${k + 1} du budget (réserve en sous-ligne)`);
+    const items = arr(b.items, "budget lines").map((i, k) => {
+      const top = line(i, `budget line ${k + 1}`);
+      const children = arr((i as Record<string, unknown>).children, `budget line ${k + 1}`).map((c, j) => line(c, `sub-line ${j + 1} of line ${k + 1}`, top.kind));
+      if (children.some((c) => c.reserve)) fail(`budget line ${k + 1} (reserve as a sub-line)`);
       return { ...top, children };
     });
-    if (items.filter((i) => i.reserve).length > 1) fail("plusieurs réserves");
-    budget = { status: oneOf(b.status, ["DRAFT", "VALIDATED"] as const, "statut du budget"), items };
+    if (items.filter((i) => i.reserve).length > 1) fail("several reserves");
+    budget = { status: oneOf(b.status, ["DRAFT", "VALIDATED"] as const, "budget status"), items };
   }
   const paid = new Set<number>();
-  const transactions = arr(o.transactions, "opérations").map((t, k) => {
-    if (!isObj(t)) fail(`opération ${k + 1}`);
-    const what = `opération ${k + 1}`;
+  const transactions = arr(o.transactions, "transactions").map((t, k) => {
+    if (!isObj(t)) fail(`transaction ${k + 1}`);
+    const what = `transaction ${k + 1}`;
     const day = typeof t.occurredOn === "string" ? parseDay(t.occurredOn) : null;
-    if (!day || day < month! || day >= next) fail(`${what} (date hors du mois)`);
+    if (!day || day < month! || day >= next) fail(`${what} (date outside the month)`);
     const payment = refOrNull(t.payment, charges.length, what);
-    if (payment !== null && (paid.has(payment) || !paid.add(payment))) fail(`${what} (charge déjà réglée ce mois)`);
+    if (payment !== null && (paid.has(payment) || !paid.add(payment))) fail(`${what} (charge already paid this month)`);
     let prepayment: MonthFile["transactions"][number]["prepayment"] = null;
     if (t.prepayment !== null) {
       if (!isObj(t.prepayment)) fail(what);
       const p = t.prepayment as Record<string, unknown>;
       const charge = ref(p.charge, charges.length, what);
-      if (!charges[charge].loan) fail(`${what} (crédit absent)`);
+      if (!charges[charge].loan) fail(`${what} (missing loan)`);
       prepayment = { charge, mode: oneOf(p.mode, ["REDUCE_TERM", "REDUCE_PAYMENT"] as const, what) };
     }
     return {
@@ -223,7 +223,7 @@ export async function importMonth(householdId: string, file: MonthFile) {
     const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
     const members = file.members.map((m) => {
       const u = users.find((u) => same(u.email, m.email)) ?? users.find((u) => same(u.name, m.name));
-      return u ? u.id : fail(`membre « ${m.name} » (${m.email}) introuvable : créez-le dans Membres puis importez à nouveau`);
+      return u ? u.id : fail(`member "${m.name}" (${m.email}) not found: create them in Members, then import again`);
     });
 
     const cats: string[] = [];

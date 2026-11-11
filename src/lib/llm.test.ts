@@ -66,7 +66,7 @@ describe("complete", () => {
     expect(JSON.parse(f.mock.calls[0][1].body).messages).toEqual([
       { role: "user", content: "usr" },
       { role: "assistant", content: "{}" },
-      { role: "user", content: "Réponse refusée : bad. Corrige et renvoie le JSON complet." },
+      { role: "user", content: "Response rejected: bad. Fix it and send the complete JSON again." },
     ]);
   });
 
@@ -90,30 +90,30 @@ describe("complete", () => {
     expect(init.headers.Authorization).toBe("Bearer sk");
     expect(JSON.parse(init.body).messages.slice(2)).toEqual([
       { role: "assistant", content: "p" },
-      { role: "user", content: "Réponse refusée : e. Corrige et renvoie le JSON complet." },
+      { role: "user", content: "Response rejected: e. Fix it and send the complete JSON again." },
     ]);
   });
 
   it("HTTP non 2xx et réseau en LlmError", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 429, json: async () => ({}) }));
-    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : trop de requêtes ou quota atteint (429), réessayer plus tard"));
+    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: too many requests or quota reached (429), try again later"));
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
-    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow("Fournisseur LLM injoignable");
+    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow("LLM provider unreachable");
     await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toBeInstanceOf(LlmError);
   });
 
   it("erreurs explicites : statut, détail du fournisseur, cause réseau, délai", async () => {
     const http = (status: number, body: unknown) => vi.fn().mockResolvedValue({ ok: false, status, json: async () => body });
     vi.stubGlobal("fetch", http(401, { error: { message: "invalid x-api-key" } }));
-    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow("Fournisseur LLM : clé API invalide ou absente (401) — invalid x-api-key");
+    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow("LLM provider: invalid or missing API key (401) — invalid x-api-key");
     vi.stubGlobal("fetch", http(404, { error: "model 'm' not found" }));
-    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("introuvable (404) : vérifier le nom du modèle et l'URL (sans /v1) — model 'm' not found");
+    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("not found (404): check the model name and the URL (without /v1) — model 'm' not found");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } })));
-    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("connexion refusée sur llm");
+    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("connection refused on llm");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(Object.assign(new Error("t"), { name: "TimeoutError" })));
-    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("délai dépassé");
+    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("timed out");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => { throw new SyntaxError("x"); } }));
-    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("réponse illisible");
+    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("unreadable response");
   });
 
   it("testConnection : requête d'1 token, renvoie le modèle", async () => {
@@ -127,22 +127,22 @@ describe("complete", () => {
 
   it("réponse tronquée : LlmError pour les deux fournisseurs", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ stop_reason: "max_tokens", content: [{ type: "tool_use", input: {} }] })));
-    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse tronquée."));
+    await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: truncated response."));
     expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).max_tokens).toBe(16000);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ choices: [{ finish_reason: "length", message: { content: "{" } }] })));
-    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse tronquée."));
+    await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: truncated response."));
   });
 
   it("200 sans content tableau ni choices : réponse vide, jamais TypeError", async () => {
     for (const body of [{ content: "texte" }, { content: { type: "tool_use" } }, {}, null]) {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
-      await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse vide"));
+      await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: empty response"));
     }
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ choices: [{ message: { content: "", reasoning_content: '{"a":1}' } }] })));
     expect((await complete("LOCAL", LOCAL, msgs, schema)).text).toBe('{"a":1}');
     for (const body of [{}, { choices: "x" }, { choices: [] }, { choices: [{ message: { content: "" } }] }, null]) {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
-      await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow(new LlmError("Fournisseur LLM : réponse vide"));
+      await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: empty response"));
     }
   });
 });

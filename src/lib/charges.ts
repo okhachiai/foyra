@@ -14,11 +14,11 @@ export const appliesTo = (charge: { active: boolean; startMonth: Date; endMonth:
 
 /** Période cohérente et catégorie de dépense du foyer ; FOR SHARE : la catégorie ne change pas avant l'écriture. */
 export async function checkRefs(tx: Db, householdId: string, input: Omit<ChargeInput, "shared">) {
-  if (input.endMonth && input.endMonth < input.startMonth) throw new LedgerError("Le dernier mois doit être après le mois de début.", "endMonth");
+  if (input.endMonth && input.endMonth < input.startMonth) throw new LedgerError("The last month must be after the start month.", "endMonth");
   const [c] = await tx.$queryRaw<{ kind: string }[]>`
     SELECT "kind"::text FROM "Category" WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
   if (!c) throw new NotFoundError();
-  if (c.kind !== "EXPENSE") throw new LedgerError("Choisissez une catégorie de dépense.", "categoryId");
+  if (c.kind !== "EXPENSE") throw new LedgerError("Choose an expense category.", "categoryId");
 }
 
 export function createCharge(householdId: string, input: ChargeInput) {
@@ -107,18 +107,18 @@ export async function listMonthCharges(householdId: string, month: Date) {
   });
 }
 
-const ALREADY_PAID = "Cette charge est déjà payée pour ce mois.";
+const ALREADY_PAID = "This charge is already paid for this month.";
 
 /** Marque la charge payée pour le mois (payée par `userId`) : crée la dépense et le paiement dans une seule transaction SQL. */
 export async function payCharge(householdId: string, userId: string, id: string, month: Date, amount: number, occurredOn: Date) {
   const next = addMonths(month, 1);
-  if (occurredOn < month || occurredOn >= next) throw new LedgerError("La date doit être dans le mois de l’échéance.", "occurredOn");
+  if (occurredOn < month || occurredOn >= next) throw new LedgerError("The date must be within the due month.", "occurredOn");
   try {
     return await prisma.$transaction(async (tx) => {
       const charge = await tx.fixedCharge.findFirst({ where: { id, householdId }, include: { loan: LOAN_INCLUDE } });
       if (!charge) throw new NotFoundError();
       if (!appliesTo(charge, month) || (charge.loan && !loanRow({ ...charge, loan: charge.loan }, month))) {
-        throw new LedgerError("Cette charge ne s’applique pas à ce mois.");
+        throw new LedgerError("This charge does not apply to this month.");
       }
       if (await tx.fixedChargePayment.count({ where: { fixedChargeId: id, month } })) throw new LedgerError(ALREADY_PAID);
       const t = await createEntryTx(tx, householdId, userId, {

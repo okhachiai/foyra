@@ -4,19 +4,21 @@ import { formatMonth } from "@/lib/budget";
 import type { listCategories } from "@/lib/categories";
 import { createChargeAction, updateChargeAction } from "@/app/actions";
 import { ActionForm, Field, SharedCheck } from "@/app/form";
+import { getI18n } from "@/lib/i18n-server";
 
-/** Création ou modification d'une récurrence (échéance indicative) ; `categories` = arbre du foyer. */
-export function ChargeForm({ charge, categories, startMonth }: {
+/** Creating or editing a recurring charge (indicative due date); `categories` = household tree. */
+export async function ChargeForm({ charge, categories, startMonth }: {
   charge?: FixedCharge; categories: Awaited<ReturnType<typeof listCategories>>; startMonth: string;
 }) {
+  const { t } = await getI18n();
   return (
     <ActionForm action={charge ? updateChargeAction : createChargeAction}>
       {charge && <input type="hidden" name="id" value={charge.id} />}
-      <Field name="name" label="Description"><input name="name" required maxLength={100} defaultValue={charge?.name} /></Field>
-      <Field name="dueDay" label="Jour d’échéance (1 à 31)">
+      <Field name="name" label={t("Description")}><input name="name" required maxLength={100} defaultValue={charge?.name} /></Field>
+      <Field name="dueDay" label={t("Due day (1 to 31)")}>
         <input name="dueDay" type="number" min={1} max={31} required defaultValue={charge?.dueDay} />
       </Field>
-      <Field name="categoryId" label="Catégorie">
+      <Field name="categoryId" label={t("Category")}>
         <select name="categoryId" defaultValue={charge?.categoryId}>
           {categories.filter((c) => c.kind === "EXPENSE").flatMap((c) => [
             <option key={c.id} value={c.id}>{c.name}</option>,
@@ -24,18 +26,18 @@ export function ChargeForm({ charge, categories, startMonth }: {
           ])}
         </select>
       </Field>
-      <Field name="startMonth" label="Mois de début">
+      <Field name="startMonth" label={t("Start month")}>
         <input name="startMonth" type="month" required defaultValue={charge ? formatMonth(charge.startMonth) : startMonth} />
       </Field>
-      <Field name="endMonth" label="Dernier mois (facultatif)">
+      <Field name="endMonth" label={t("Last month (optional)")}>
         <input name="endMonth" type="month" defaultValue={charge?.endMonth ? formatMonth(charge.endMonth) : ""} />
       </Field>
-      <SharedCheck label="Charge commune" checked={charge?.shared ?? true} />
-      <label className="check"><input type="checkbox" name="active" defaultChecked={charge?.active ?? true} />Active</label>
-      <p className="hint m-0">Échéance indicative : aucun paiement n’est créé automatiquement. Le montant est celui de la ligne du budget du mois de même catégorie.</p>
+      <SharedCheck label={t("Shared charge")} checked={charge?.shared ?? true} />
+      <label className="check"><input type="checkbox" name="active" defaultChecked={charge?.active ?? true} />{t("Active")}</label>
+      <p className="hint m-0">{t("Indicative due date: no payment is created automatically. The amount is that of the month’s budget line with the same category.")}</p>
       <div className="form-actions">
-        <button type="submit">{charge ? "Enregistrer" : "Créer la récurrence"}</button>
-        <Link href="/charges" className="button secondary">Annuler</Link>
+        <button type="submit">{t(charge ? "Save" : "Create the recurring charge")}</button>
+        <Link href="/charges" className="button secondary">{t("Cancel")}</Link>
       </div>
     </ActionForm>
   );

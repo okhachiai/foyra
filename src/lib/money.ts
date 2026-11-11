@@ -1,8 +1,8 @@
-export const MAX_CENTS = 2_147_483_647; // limite d'un Int PostgreSQL
+export const MAX_CENTS = 2_147_483_647; // PostgreSQL Int limit
 
 /**
- * « 1 234,56 » → 123456, « 12.5 » → 1250. Renvoie null si la saisie est invalide.
- * Par défaut le montant doit être > 0 ; `allowSigned` accepte 0 et les négatifs.
+ * "1 234,56" → 123456, "12.5" → 1250. Returns null for invalid input.
+ * By default the amount must be > 0; `allowSigned` accepts 0 and negatives.
  */
 export function parseCents(input: string, { allowSigned = false } = {}): number | null {
   let s = input.trim().replace(/[\s  ]+/g, " ");
@@ -20,25 +20,25 @@ export function parseCents(input: string, { allowSigned = false } = {}): number 
 }
 
 /**
- * Somme SQL (bigint) → centimes en number. Refuse au-delà de Number.MAX_SAFE_INTEGER plutôt que d'arrondir
- * silencieusement ; les valeurs transmises aux composants client restent ainsi sérialisables et exactes.
+ * SQL sum (bigint) → cents as number. Throws beyond Number.MAX_SAFE_INTEGER instead of silently rounding,
+ * so values passed to client components stay serializable and exact.
  */
 export function bigintToCents(v: bigint): number {
-  if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < -BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError("Montant hors limites");
+  if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < -BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError("Amount out of range");
   return Number(v);
 }
 
-/** 123456 → « 1 234,56 € » (séparateur de milliers U+202F, format fr-FR). */
-export function formatCents(cents: number, currency = "EUR"): string {
-  return new Intl.NumberFormat("fr-FR", { style: "currency", currency }).format(cents / 100);
+/** 123456 → "€1,234.56" (en-GB), "1 234,56 €" (fr-FR). `intl`: Intl locale tag, see INTL in i18n.ts. */
+export function formatCents(cents: number, currency = "EUR", intl = "en-GB"): string {
+  return new Intl.NumberFormat(intl, { style: "currency", currency }).format(cents / 100);
 }
 
-/** 123456 → « 1 235 € » : montant arrondi à l'unité, pour les synthèses et graphiques. */
-export function formatWhole(cents: number, currency = "EUR"): string {
-  return new Intl.NumberFormat("fr-FR", { style: "currency", currency, maximumFractionDigits: 0 }).format(cents / 100);
+/** 123456 → "€1,235": rounded to the unit, for summaries and charts. */
+export function formatWhole(cents: number, currency = "EUR", intl = "en-GB"): string {
+  return new Intl.NumberFormat(intl, { style: "currency", currency, maximumFractionDigits: 0 }).format(cents / 100);
 }
 
-/** Valeur pour un champ de saisie : 123456 → « 1234,56 ». */
+/** Input field value: 123456 → "1234.56" (parseCents accepts both separators). */
 export function centsToInput(cents: number): string {
-  return (cents / 100).toFixed(2).replace(".", ",");
+  return (cents / 100).toFixed(2);
 }

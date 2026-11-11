@@ -18,7 +18,7 @@ const prisma = new PrismaClient();
 try {
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
-    console.error(`Aucun utilisateur avec l'email « ${email} ». Rien n'a été modifié.`);
+    console.error(`No user with the email "${email}". Nothing was changed.`);
     process.exitCode = 1;
   } else {
     const password = randomBytes(12).toString("base64url");
@@ -27,9 +27,9 @@ try {
       prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
       prisma.session.deleteMany({ where: { userId: user.id } }),
     ]);
-    console.log(`Nouveau mot de passe provisoire pour ${email} : ${password}`);
-    console.log("Il ne sera plus affiché. Changez-le après connexion dans « Mon compte ».");
-    if (user.disabledAt) console.log("Attention : ce compte est désactivé ; un admin doit le réactiver.");
+    console.log(`New temporary password for ${email}: ${password}`);
+    console.log("It will not be shown again. Change it after signing in, under Settings → Security.");
+    if (user.disabledAt) console.log("Warning: this account is disabled; an admin must reactivate it.");
   }
 } finally {
   await prisma.$disconnect();

@@ -35,6 +35,15 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   experimental: { serverActions: { allowedOrigins: appHost ? [appHost] : [] } },
   headers: async () => [{ source: "/:path*", headers: securityHeaders }],
+  // Former French URLs (bookmarks, installed app) → English routes.
+  redirects: async () =>
+    [
+      ["/tableau-de-bord", "/dashboard"], ["/operations", "/transactions"], ["/epargne", "/savings"], ["/credits", "/loans"],
+      ["/calendrier", "/calendar"], ["/rapports", "/reports"], ["/parametres/ia", "/settings/ai"], ["/parametres", "/settings"], ["/profil", "/profile"],
+    ].flatMap(([from, to]) => [
+      { source: from, destination: to, permanent: true },
+      { source: `${from}/:path*`, destination: `${to}/:path*`, permanent: true },
+    ]),
 };
 
 export default nextConfig;

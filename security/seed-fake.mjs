@@ -45,7 +45,7 @@ async function household(tag) {
 
 try {
   if (await prisma.user.findUnique({ where: { email: "admin-a@example.test" } })) {
-    console.log("Données fictives déjà présentes.");
+    console.log("Fake data already present.");
   } else {
     await household("a");
     await household("b");

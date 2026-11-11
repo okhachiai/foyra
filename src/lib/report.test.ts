@@ -16,9 +16,9 @@ const llm = vi.mocked(complete);
 describe("pace", () => {
   it("attendu au prorata, projection, montant par jour restant, statut", () => {
     expect(pace(30000, 10000, 10, 30)).toEqual({ expected: 10000, projected: 30000, perDay: 952, status: "ok" });
-    expect(pace(30000, 14000, 10, 30).status).toBe("rapide"); // > 10 000 + 3 000
+    expect(pace(30000, 14000, 10, 30).status).toBe("fast"); // > 10 000 + 3 000
     expect(pace(30000, 12000, 10, 30).status).toBe("ok"); // dans la tolérance
-    expect(pace(30000, 31000, 10, 30)).toMatchObject({ status: "dépassé", perDay: 0 });
+    expect(pace(30000, 31000, 10, 30)).toMatchObject({ status: "over", perDay: 0 });
     expect(pace(30000, 0, 30, 30).perDay).toBe(30000); // dernier jour : tout le reste
   });
 });
@@ -45,7 +45,7 @@ describe("validateOutput", () => {
     expect(validateOutput("DAILY", input, JSON.stringify(ok))).toEqual({ ok: true, output: ok });
     expect(validateOutput("DAILY", input, "Voici :\n```json\n" + JSON.stringify(ok) + "\n```")).toEqual({ ok: true, output: ok });
     expect(validateOutput("DAILY", input, JSON.stringify({ ...ok, extra: 1 })).ok).toBe(false);
-    expect(validateOutput("DAILY", input, "pas du json")).toEqual({ ok: false, error: "Réponse non JSON." });
+    expect(validateOutput("DAILY", input, "pas du json")).toEqual({ ok: false, error: "Response is not JSON." });
     expect(validateOutput("MONTHLY", {} as MonthlyInput, JSON.stringify(ok)).ok).toBe(false);
     expect(validateOutput("MONTHLY", {} as MonthlyInput, JSON.stringify({ verdict: "v", respected: [], mistakes: ["m"], advice: [] })).ok).toBe(true);
   });
@@ -63,7 +63,7 @@ describe("validateOutput", () => {
   });
 
   it("PLAN : ligne inconnue, en double, montant négatif refusés", () => {
-    expect(validateOutput("PLAN", PLAN, lines(["zz", 1000]))).toEqual({ ok: false, error: "Ligne inconnue : zz." });
+    expect(validateOutput("PLAN", PLAN, lines(["zz", 1000]))).toEqual({ ok: false, error: "Unknown line: zz." });
     expect(validateOutput("PLAN", PLAN, lines(["a", 500], ["a", 500])).ok).toBe(false);
     expect(validateOutput("PLAN", PLAN, lines(["a", -5])).ok).toBe(false);
   });
@@ -117,7 +117,7 @@ const MONTHLY_OK = { verdict: "v", respected: [], mistakes: [], advice: [] };
 describe("rapport du jour", () => {
   it("sans budget du mois : rejet, rien de stocké", async () => {
     const { admin } = await household(oct);
-    await expect(generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" })).rejects.toThrow("Aucun budget pour ce mois.");
+    await expect(generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" })).rejects.toThrow("No budget for this month.");
     expect(llm).not.toHaveBeenCalled();
   });
 
@@ -125,11 +125,11 @@ describe("rapport du jour", () => {
     const { admin, hh, item, spend, fixedCat } = await household();
     await item("INCOME", "Salaire", 300000);
     const courses = await item("EXPENSE", "Courses", 30000);
-    const loyer = await fixedCat("Loyer");
+    const loyer = await fixedCat("Rent");
     await prisma.budgetItem.update({ where: { id: loyer.id }, data: { amount: 90000 } });
-    await createCharge(hh, { active: true, name: "Loyer", dueDay: 25, categoryId: loyer.categoryId!, startMonth: nov, endMonth: null, shared: true });
+    await createCharge(hh, { active: true, name: "Rent", dueDay: 25, categoryId: loyer.categoryId!, startMonth: nov, endMonth: null, shared: true });
     await spend(courses.categoryId, 14000, "2026-11-05");
-    await spend(courses.categoryId, 2500, "2026-11-10", "Marché");
+    await spend(courses.categoryId, 2500, "2026-11-10", "Market");
     await spend(null, 700, "2026-11-03");
     reply(DAILY_OK);
 
@@ -137,9 +137,9 @@ describe("rapport du jour", () => {
     expect(r).toMatchObject({ kind: "DAILY", trigger: "MANUAL", userId: admin.id, output: DAILY_OK, error: null });
     const input = r.input as DailyInput;
     expect(input).toMatchObject({ today: "2026-11-10", day: 10, daysInMonth: 30, uncategorized: { count: 1, amount: 700 } });
-    expect(input.lines).toEqual([{ label: "Courses", planned: 30000, actual: 16500, expected: 10000, projected: 49500, perDay: 642, status: "rapide" }]);
-    expect(input.todayOps).toEqual([{ label: "Marché", category: "Courses", amount: 2500, kind: "EXPENSE", paidBy: "Alice" }]);
-    expect(input.upcoming).toEqual([{ name: "Loyer", amount: 90000, due: "2026-11-25" }]);
+    expect(input.lines).toEqual([{ label: "Courses", planned: 30000, actual: 16500, expected: 10000, projected: 49500, perDay: 642, status: "fast" }]);
+    expect(input.todayOps).toEqual([{ label: "Market", category: "Courses", amount: 2500, kind: "EXPENSE", paidBy: "Alice" }]);
+    expect(input.upcoming).toEqual([{ name: "Rent", amount: 90000, due: "2026-11-25" }]);
     expect(input.planned).toMatchObject({ income: 300000, fixed: 90000, variable: 30000 });
     const sent = llm.mock.calls[0][2].user;
     expect(sent).toContain('"planned":300'); // euros
@@ -151,11 +151,11 @@ describe("rapport du jour", () => {
     reply("pas du json");
     reply(DAILY_OK);
     const r = await generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" });
-    expect(llm.mock.calls[1][2].retry).toEqual({ previous: "pas du json", error: "Réponse non JSON." });
+    expect(llm.mock.calls[1][2].retry).toEqual({ previous: "pas du json", error: "Response is not JSON." });
     expect(r.output).toEqual(DAILY_OK);
     reply("x");
     reply({ summary: 1 });
-    expect(await generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" })).toMatchObject({ output: null, error: "Réponse non conforme au schéma." });
+    expect(await generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" })).toMatchObject({ output: null, error: "Response does not match the schema." });
   });
 
   it("erreur du fournisseur : rapport en erreur sans relance ; aucun fournisseur : rejet", async () => {
@@ -163,7 +163,7 @@ describe("rapport du jour", () => {
     llm.mockRejectedValueOnce(new LlmError("Fournisseur LLM injoignable"));
     expect(await generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" })).toMatchObject({ output: null, error: "Fournisseur LLM injoignable" });
     expect(llm).toHaveBeenCalledTimes(1);
-    await expect(generateReport(admin, "DAILY", today, "MANUAL")).rejects.toThrow(new LedgerError("Aucun fournisseur LLM configuré."));
+    await expect(generateReport(admin, "DAILY", today, "MANUAL")).rejects.toThrow(new LedgerError("No LLM provider configured."));
   });
 });
 
@@ -194,7 +194,7 @@ describe("préparation du budget", () => {
   it("reste à répartir, historique des 3 mois précédents (sous-lignes à plat), application au budget", async () => {
     const { admin, bob, hh, budget, item, spend, fixedCat } = await household();
     await item("INCOME", "Salaire", 300000);
-    const loyer = await fixedCat("Loyer");
+    const loyer = await fixedCat("Rent");
     await prisma.budgetItem.update({ where: { id: loyer.id }, data: { amount: 150000 } });
     const courses = await item("EXPENSE", "Courses", 0);
     const loisirs = await item("EXPENSE", "Loisirs", 0);
@@ -230,13 +230,13 @@ describe("préparation du budget", () => {
     const { admin, hh, budget, item, fixedCat } = await household();
     const plan = () => generateReport(admin, "PLAN", today, "MANUAL", { provider: "CLAUDE", month: nov });
     await item("INCOME", "Salaire", 100000);
-    await expect(plan()).rejects.toThrow("Aucune ligne de charge variable dans ce budget.");
+    await expect(plan()).rejects.toThrow("No variable expense line in this budget.");
     await item("EXPENSE", "Courses", 0);
-    const loyer = await fixedCat("Loyer");
+    const loyer = await fixedCat("Rent");
     await prisma.budgetItem.update({ where: { id: loyer.id }, data: { amount: 100000 } });
-    await expect(plan()).rejects.toThrow("Rien à répartir");
+    await expect(plan()).rejects.toThrow("Nothing to allocate");
     await setBudgetStatus(hh, budget.id, "VALIDATED");
-    await expect(plan()).rejects.toThrow("validé");
+    await expect(plan()).rejects.toThrow("validated");
     expect(llm).not.toHaveBeenCalled();
   });
 });

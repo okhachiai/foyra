@@ -5,6 +5,7 @@ import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
 import { formatDay, isCode, LedgerError, NotFoundError } from "./ledger";
 import { complete, LlmError, pickProvider, type LlmConfig } from "./llm";
+import { DEFAULT_LOCALE, type Locale } from "./i18n";
 
 type Kind = "INCOME" | "EXPENSE";
 type Viewer = { id: string; role: Role; householdId: string };
@@ -13,17 +14,17 @@ type Viewer = { id: string; role: Role; householdId: string };
 export type Totals = { income: number; fixed: number; savings: number; variable: number; remaining: number };
 const totals = ({ income, fixed, savings, variable, remaining }: Totals): Totals => ({ income, fixed, savings, variable, remaining });
 
-export type Pace = "ok" | "rapide" | "dépassé";
+export type Pace = "ok" | "fast" | "over";
 
 /**
- * Rythme d'une enveloppe au jour `day` (1er = 1) d'un mois de `days` jours : dépense attendue au prorata, projection fin de mois,
- * montant par jour restant (aujourd'hui compris). « rapide » : au-dessus de l'attendu de plus de 10 % du prévu (évite le bruit des petits montants).
+ * Pace of an envelope on day `day` (1st = 1) of a `days`-day month: pro-rata expected spending, end-of-month projection,
+ * amount per remaining day (today included). "fast": above expected by more than 10% of planned (avoids noise from small amounts).
  */
 export function pace(planned: number, actual: number, day: number, days: number) {
   const expected = Math.round((planned * day) / days);
   const projected = Math.round((actual * days) / day);
   const perDay = Math.floor(Math.max(planned - actual, 0) / (days - day + 1));
-  const status: Pace = actual > planned ? "dépassé" : actual > expected + planned / 10 ? "rapide" : "ok";
+  const status: Pace = actual > planned ? "over" : actual > expected + planned / 10 ? "fast" : "ok";
   return { expected, projected, perDay, status };
 }
 
@@ -91,9 +92,9 @@ function conforms(v: unknown, s: Schema): boolean {
 function plan(i: PlanInput, o: PlanOutput): { output: PlanOutput } | { error: string } {
   const got = new Map<string, { amount: number; reason: string }>();
   for (const l of o.lines) {
-    if (!i.lines.some((x) => x.id === l.budgetItemId)) return { error: `Ligne inconnue : ${l.budgetItemId}.` };
-    if (got.has(l.budgetItemId)) return { error: `Ligne répartie deux fois : ${l.budgetItemId}.` };
-    if (l.amount < 0) return { error: `Montant négatif pour ${l.budgetItemId} : ${l.amount}.` };
+    if (!i.lines.some((x) => x.id === l.budgetItemId)) return { error: `Unknown line: ${l.budgetItemId}.` };
+    if (got.has(l.budgetItemId)) return { error: `Line allocated twice: ${l.budgetItemId}.` };
+    if (l.amount < 0) return { error: `Negative amount for ${l.budgetItemId}: ${l.amount}.` };
     got.set(l.budgetItemId, { amount: Math.round(l.amount * 100), reason: l.reason });
   }
   const lines = i.lines.map((x) => ({ budgetItemId: x.id, amount: 0, reason: "", ...got.get(x.id) }));
@@ -119,10 +120,10 @@ export function validateOutput(kind: ReportKind, input: Input, text: string): { 
     try {
       v = JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
     } catch {
-      return { ok: false, error: "Réponse non JSON." };
+      return { ok: false, error: "Response is not JSON." };
     }
   }
-  if (!conforms(v, outputSchema(kind))) return { ok: false, error: "Réponse non conforme au schéma." };
+  if (!conforms(v, outputSchema(kind))) return { ok: false, error: "Response does not match the schema." };
   if (kind !== "PLAN") return { ok: true, output: v as Output };
   const r = plan(input as PlanInput, v as PlanOutput);
   return "error" in r ? { ok: false, error: r.error } : { ok: true, output: r.output };
@@ -147,7 +148,7 @@ async function dailyInput(householdId: string, today: Date) {
       _count: true, _sum: { amount: true },
     }),
   ]);
-  if (!budget) throw new LedgerError("Aucun budget pour ce mois.");
+  if (!budget) throw new LedgerError("No budget for this month.");
   const day = today.getUTCDate();
   const daysInMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0)).getUTCDate();
   const input: DailyInput = {
@@ -167,7 +168,7 @@ const GROUPS: Group[] = ["income", "fixed", "savings", "variable"];
 /** Bilan du mois `month` : lignes principales incluses par groupe, prévu contre réel. */
 async function monthlyInput(householdId: string, month: Date) {
   const [budget, actual] = await Promise.all([getBudget(householdId, month), actualTotals(householdId, month)]);
-  if (!budget) throw new LedgerError("Aucun budget pour ce mois.");
+  if (!budget) throw new LedgerError("No budget for this month.");
   const tracked = budget.tree.filter((n) => n.kind === "EXPENSE").reduce((s, n) => s + n.actual, 0);
   const input: MonthlyInput = {
     month: formatMonth(month), planned: totals(budget.totals), actual: totals(actual),
@@ -187,64 +188,63 @@ async function planInput(householdId: string, month: Date) {
       by: ["categoryId", "shared"], where: { householdId, kind: "EXPENSE", occurredOn: { gte: m, lt: addMonths(m, 1) } }, _sum: { amount: true },
     })),
   ]);
-  if (!budget) throw new LedgerError("Aucun budget pour ce mois.");
-  if (budget.status === "VALIDATED") throw new LedgerError("Ce budget est validé : repassez-le en brouillon pour le préparer.");
+  if (!budget) throw new LedgerError("No budget for this month.");
+  if (budget.status === "VALIDATED") throw new LedgerError("This budget is validated: switch it back to draft to prepare it.");
   // Réel d'une ligne : comme getBudget, opérations de sa catégorie, communes ou personnelles selon la ligne.
   const spent = (categoryId: string | null, shared: boolean) =>
     sums.map((s) => (categoryId ? s.filter((r) => r.categoryId === categoryId && r.shared === shared).reduce((a, r) => a + (r._sum.amount ?? 0), 0) : 0));
   const lines = budget.tree.filter((n) => n.included && groupOf(n) === "variable").flatMap((n) =>
     n.children.length ? n.children.filter((c) => c.included).map((c) => ({ ...c, label: `${n.label} › ${c.label}` })) : [n],
   ).map((l) => ({ id: l.id, label: l.label, planned: l.amount, history: spent(l.categoryId, l.shared), reserve: l.reserve }));
-  if (!lines.length) throw new LedgerError("Aucune ligne de charge variable dans ce budget.");
+  if (!lines.length) throw new LedgerError("No variable expense line in this budget.");
   const { income, fixed, savings } = budget.totals;
   const toDistribute = income - fixed - savings;
-  if (toDistribute <= 0) throw new LedgerError("Rien à répartir : les revenus prévus ne couvrent pas les charges fixes et l'épargne.");
+  if (toDistribute <= 0) throw new LedgerError("Nothing to allocate: planned income does not cover fixed charges and savings.");
   const input: PlanInput = { month: formatMonth(month), income, fixed, savings, toDistribute, lines };
   return { budgetId: budget.id, input };
 }
 
 // --- Consignes ---
 
-const COMMON = `Tu es le conseiller budgétaire d'un foyer. Tu reçois en JSON des chiffres calculés par l'application.
-Montants en euros, exacts : ne les recalcule pas, ne les corrige pas. Réponds en français, phrases courtes et concrètes, ton direct et bienveillant.
-Cite les montants et les noms de lignes reçus ; n'invente aucun chiffre.`;
+const LANGUAGES: Record<Locale, string> = { en: "English", fr: "French", ar: "Arabic" };
+
+const common = (locale: Locale) => `You are a household's budget advisor. You receive figures computed by the app, as JSON.
+Amounts are in euros and exact: do not recompute or correct them. Answer in ${LANGUAGES[locale]}, with short, concrete sentences, in a direct and kind tone.
+Quote the amounts and line names you receive; never invent a figure.`;
 
 const PROMPTS: Record<ReportKind, string> = {
-  DAILY: `${COMMON}
-Rapport du jour (jour day sur daysInMonth). lines : enveloppes de charges variables ; expected = dépense attendue à ce jour au prorata,
-projected = projection fin de mois au rythme actuel, perDay = montant par jour à ne pas dépasser jusqu'à la fin du mois,
-status : ok, rapide (au-dessus du rythme) ou dépassé (prévu dépassé). planned / actual : totaux prévus et réels du mois.
-- summary : 2 phrases : où en est le mois et les dépenses du jour (todayOps).
-- alerts : une phrase par erreur de gestion constatée : enveloppe dépassée ou trop rapide (avec sa projection), grosse dépense du jour,
-  dépenses sans catégorie (uncategorized), reste réel insuffisant pour les charges à venir (upcoming). Liste vide si tout va bien.
-- advice : 1 à 3 actions concrètes pour les jours qui restent (ex. ne pas dépasser perDay par jour sur telle enveloppe).`,
-  MONTHLY: `${COMMON}
-Bilan du mois écoulé : budget prévu le 1er (planned) contre réel (actual). lines : lignes du budget, group = income, fixed, savings ou variable ;
-diff = réel − prévu (dépense positive : dépassement ; revenu négatif : manque). offBudget : dépenses non rattachées à une ligne du budget.
-- verdict : 2 à 3 phrases : le budget a-t-il été respecté, reste réel contre prévu, épargne prévue contre réalisée.
-- respected : les points tenus.
-- mistakes : chaque écart notable, du plus coûteux au moins coûteux, avec son montant.
-- advice : 2 à 4 mesures précises pour le mois prochain afin de ne pas refaire ces erreurs (ex. prévoir tel montant sur telle ligne).`,
-  PLAN: `${COMMON}
-Préparation du budget du mois : income = revenus prévus, fixed = charges fixes, savings = épargne voulue ;
-toDistribute = income − fixed − savings, à répartir entièrement entre les lignes de charges variables (lines).
-history = dépenses réelles des 3 derniers mois sur la ligne (du plus ancien au plus récent ; 0 = rien de dépensé ou ligne nouvelle), planned = montant prévu actuellement.
-- lines : chaque ligne une fois, montant en euros entiers et raison courte (appuyée sur l'historique ; garder une marge sur la réserve imprévus si reserve: true) ;
-  la somme des montants doit être égale à toDistribute.
-- advice : 2 à 3 phrases sur l'équilibre du budget (poids des charges fixes, épargne, marge restante).`,
+  DAILY: `Daily report (day "day" of "daysInMonth"). lines: variable expense envelopes; expected = expected spending to date, pro rata;
+projected = end-of-month projection at the current pace; perDay = amount per day not to exceed until the end of the month;
+status: ok, fast (above pace) or over (planned amount exceeded). planned / actual: the month's planned and actual totals.
+- summary: 2 sentences: where the month stands and today's spending (todayOps).
+- alerts: one sentence per management mistake found: envelope exceeded or too fast (with its projection), large expense today,
+  uncategorized expenses (uncategorized), actual remainder insufficient for upcoming charges (upcoming). Empty list if all is well.
+- advice: 1 to 3 concrete actions for the remaining days (e.g. do not exceed perDay per day on a given envelope).`,
+  MONTHLY: `Review of the past month: budget planned on the 1st (planned) against actual (actual). lines: budget lines, group = income, fixed, savings or variable;
+diff = actual − planned (positive expense: overspend; negative income: shortfall). offBudget: expenses not linked to a budget line.
+- verdict: 2 to 3 sentences: was the budget kept, actual remainder vs planned, planned vs achieved savings.
+- respected: the points that were kept.
+- mistakes: each notable gap, most to least costly, with its amount.
+- advice: 2 to 4 precise measures for next month so these mistakes are not repeated (e.g. plan a given amount on a given line).`,
+  PLAN: `Preparing the month's budget: income = planned income, fixed = fixed charges, savings = desired savings;
+toDistribute = income − fixed − savings, to be fully allocated across the variable expense lines (lines).
+history = actual spending over the last 3 months on the line (oldest to newest; 0 = nothing spent or new line), planned = currently planned amount.
+- lines: each line once, amount in whole euros and a short reason (based on history; keep a margin on the contingency reserve if reserve: true);
+  the amounts must add up to toDistribute.
+- advice: 2 to 3 sentences on the budget's balance (weight of fixed charges, savings, remaining margin).`,
 };
 
-/** Clés monétaires de l'entrée : centimes → euros dans la demande au LLM. */
+/** Money keys of the input: cents → euros in the LLM request. */
 const MONEY = new Set(["planned", "actual", "expected", "projected", "perDay", "amount", "income", "fixed", "savings", "variable", "remaining", "diff", "offBudget", "toDistribute", "history"]);
 export const toEuros = (input: Input) =>
   JSON.stringify(input, (k, v) => (!MONEY.has(k) ? v : typeof v === "number" ? v / 100 : Array.isArray(v) ? v.map((x: number) => x / 100) : v));
 
 /** Appel au LLM avec une nouvelle tentative si la sortie est refusée ; une erreur du fournisseur devient l'erreur du rapport. */
-async function ask(provider: LlmProvider, config: LlmConfig, kind: ReportKind, input: Input) {
+async function ask(provider: LlmProvider, config: LlmConfig, kind: ReportKind, input: Input, locale: Locale) {
   let model = "", retry: { previous: string; error: string } | undefined;
   for (let n = 0; n < 2; n++) {
     try {
-      const r = await complete(provider, config, { system: PROMPTS[kind], user: toEuros(input), retry }, outputSchema(kind, input));
+      const r = await complete(provider, config, { system: `${common(locale)}\n${PROMPTS[kind]}`, user: toEuros(input), retry }, outputSchema(kind, input));
       model = r.model;
       const v = validateOutput(kind, input, r.text);
       if (v.ok) return { model, output: v.output, error: null };
@@ -266,7 +266,7 @@ const auto = (householdId: string, day: Date, kind: ReportKind) => prisma.report
  * Sortie refusée deux fois ou fournisseur en échec : rapport stocké avec `error`. Sans budget du mois : LedgerError, rien n'est stocké.
  */
 export async function generateReport(
-  viewer: Viewer, kind: ReportKind, today: Date, trigger: ReportTrigger, opts: { provider?: LlmProvider; month?: Date } = {},
+  viewer: Viewer, kind: ReportKind, today: Date, trigger: ReportTrigger, opts: { provider?: LlmProvider; month?: Date; locale?: Locale } = {},
 ): Promise<Report> {
   const householdId = viewer.householdId;
   if (trigger === "AUTO") {
@@ -275,12 +275,12 @@ export async function generateReport(
   }
   const config = await prisma.household.findUniqueOrThrow({ where: { id: householdId } });
   const provider = opts.provider ?? pickProvider(config);
-  if (!provider) throw new LedgerError("Aucun fournisseur LLM configuré.");
+  if (!provider) throw new LedgerError("No LLM provider configured.");
   const { budgetId, input } =
     kind === "DAILY" ? await dailyInput(householdId, today)
     : kind === "MONTHLY" ? await monthlyInput(householdId, addMonths(today, -1))
     : await planInput(householdId, opts.month ?? addMonths(today, 0));
-  const { model, output, error } = await ask(provider, config, kind, input);
+  const { model, output, error } = await ask(provider, config, kind, input, opts.locale ?? DEFAULT_LOCALE);
   try {
     return await prisma.report.create({
       data: {
@@ -315,7 +315,7 @@ export async function generateAutoReports(today: Date): Promise<number> {
         created++;
       } catch (e) {
         // Pas de budget du mois : silencieux. Toute autre erreur est journalisée sans bloquer les autres foyers.
-        if (!(e instanceof LedgerError)) console.error(`Rapport automatique : foyer ${h.id} en échec :`, e instanceof Error ? e.message : e);
+        if (!(e instanceof LedgerError)) console.error(`Automatic report: household ${h.id} failed:`, e instanceof Error ? e.message : e);
       }
     }
   }
@@ -337,7 +337,7 @@ export async function applyPlan(viewer: Viewer, reportId: string): Promise<numbe
     include: { budget: { select: { month: true } } },
   });
   if (!r) throw new NotFoundError();
-  if (!r.output) throw new LedgerError("Ce rapport n'a pas de proposition.");
+  if (!r.output) throw new LedgerError("This report has no proposal.");
   const budget = await getBudget(r.householdId, r.budget.month);
   const leaves = new Map(budget!.tree.flatMap((n) => (n.children.length ? n.children : [n])).map((n) => [n.id, n]));
   const items = new Map<string, ItemFields>();

@@ -44,6 +44,7 @@ import {
   useState,
 } from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/app/i18n";
 
 const SIZE = 240;
 const C = SIZE / 2;
@@ -120,6 +121,7 @@ export default function SpendingRing({
   categories,
   currency,
 }: SpendingRingProps) {
+  const { t, intl } = useI18n();
   const [selected, setSelected] = useState(0);
   const [spinning, setSpinning] = useState(false);
   const ringRef = useRef<SVGGElement>(null);
@@ -157,13 +159,13 @@ export default function SpendingRing({
 
   const money = useMemo(
     () =>
-      new Intl.NumberFormat("fr-FR", {
+      new Intl.NumberFormat(intl, {
         style: "currency",
         currency,
         maximumFractionDigits: 2,
         minimumFractionDigits: 2,
       }),
-    [currency]
+    [currency, intl]
   );
 
   const paint = useCallback(() => {
@@ -374,7 +376,7 @@ export default function SpendingRing({
       </div>
 
       <div
-        aria-label="Dépenses par catégorie. Flèches pour tourner l’anneau."
+        aria-label={t("Spending by category. Arrow keys turn the ring.")}
         aria-valuemax={categories.length}
         aria-valuemin={1}
         aria-valuenow={selected + 1}
@@ -438,7 +440,7 @@ export default function SpendingRing({
               {current ? money.format(current.amount) : ""}
             </p>
             <p className="m-0 mt-0.5 text-xs text-muted tabular-nums">
-              {share.toFixed(0)} % du total
+              {t("{pct}% of total", { pct: share.toFixed(0) })}
             </p>
             {change !== undefined && (
               <p
@@ -450,8 +452,8 @@ export default function SpendingRing({
                 )}
               >
                 {change === 0
-                  ? "Comme le mois dernier"
-                  : `${change > 0 ? "▲" : "▼"} ${Math.abs(change).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} % vs mois dernier`}
+                  ? t("Same as last month")
+                  : `${change > 0 ? "▲" : "▼"} ${t("{pct}% vs last month", { pct: Math.abs(change).toLocaleString(intl, { maximumFractionDigits: 1 }) })}`}
               </p>
             )}
           </div>
@@ -464,7 +466,7 @@ export default function SpendingRing({
             <button
               aria-pressed={i === selected}
               className={cn(
-                "flex min-h-0 w-full items-center justify-start gap-2 border-0 px-2 py-1.5 text-left font-normal text-xs transition-colors duration-150 ease-out hover:translate-y-0 hover:shadow-none",
+                "flex min-h-0 w-full items-center justify-start gap-2 border-0 px-2 py-1.5 text-start font-normal text-xs transition-colors duration-150 ease-out hover:translate-y-0 hover:shadow-none",
                 i === selected
                   ? "bg-raised text-heading"
                   : "bg-transparent text-muted hover:bg-raised hover:text-heading"
@@ -479,7 +481,7 @@ export default function SpendingRing({
               />
               <span className="min-w-0 flex-1 truncate">{category.name}</span>
               <span className="tabular-nums">
-                {money.format(Math.round(category.amount)).replace(",00", "")}
+                {money.format(Math.round(category.amount)).replace(/[.,]00(?!\d)/, "")}
               </span>
             </button>
           </li>

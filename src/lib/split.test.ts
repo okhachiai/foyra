@@ -68,16 +68,16 @@ describe("getSplit", () => {
     const entry = (paidById: string, kind: "INCOME" | "EXPENSE", amount: number, categoryId: string | null, shared?: boolean, on = "2026-11-09") =>
       createEntry(all, admin.id, { paidById, kind, amount, occurredOn: day(on), note: null, categoryId, shared });
 
-    await entry(admin.id, "INCOME", 300000, await cat("Salaire 1"));
+    await entry(admin.id, "INCOME", 300000, await cat("Salary 1"));
     await entry(admin.id, "INCOME", 50000, null); // sans catégorie : ignoré
     await entry(admin.id, "EXPENSE", 7000, null); // dépense sans catégorie (perso) : comptée
     await entry(admin.id, "EXPENSE", 2000, null, true); // dépense commune sans catégorie : contribution
-    await entry(admin.id, "INCOME", 99999, await cat("Salaire 1"), undefined, "2026-10-31"); // hors mois
-    await entry(admin.id, "EXPENSE", 11000, await cat("Supermarché"), true);
-    await entry(admin.id, "EXPENSE", 5000, await cat("Supermarché"), false);
-    await entry(admin.id, "INCOME", 20000, await cat("Autres revenus"), true); // recette commune
-    await entry(bob.id, "EXPENSE", 50000, await cat("Loyer"), true); // saisie par Alice, payée par Bob
-    await entry(bob.id, "INCOME", 200000, await cat("Salaire 2"));
+    await entry(admin.id, "INCOME", 99999, await cat("Salary 1"), undefined, "2026-10-31"); // hors mois
+    await entry(admin.id, "EXPENSE", 11000, await cat("Supermarket"), true);
+    await entry(admin.id, "EXPENSE", 5000, await cat("Supermarket"), false);
+    await entry(admin.id, "INCOME", 20000, await cat("Other income"), true); // recette commune
+    await entry(bob.id, "EXPENSE", 50000, await cat("Rent"), true); // saisie par Alice, payée par Bob
+    await entry(bob.id, "INCOME", 200000, await cat("Salary 2"));
     await entry(ex.id, "EXPENSE", 9000, null, true);
     await prisma.user.update({ where: { id: ex.id }, data: { disabledAt: new Date() } });
     const budget = await createBudget(hh, nov);

@@ -50,8 +50,11 @@ describe("conversion exacte en centimes (sans flottant)", () => {
 });
 
 describe("formatCents", () => {
-  it("formate en fr-FR avec U+202F", () => {
-    expect(formatCents(123456)).toBe("1 234,56 €");
-    expect(formatCents(-2000)).toBe("-20,00 €");
+  it("formats in English by default", () => {
+    expect(formatCents(123456)).toBe("€1,234.56");
+  });
+  it("formats in fr-FR with U+202F", () => {
+    expect(formatCents(123456, "EUR", "fr-FR")).toBe("1 234,56 €");
+    expect(formatCents(-2000, "EUR", "fr-FR")).toBe("-20,00 €");
   });
 });

@@ -97,8 +97,8 @@ describe("ledger", () => {
   });
 
   it("Paiement de charge : type et mois figés ; supprimer la dépense supprime le paiement", async () => {
-    const loyer = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name: "Loyer" } })).id;
-    const ch = await createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: loyer, startMonth: oct, endMonth: null, shared: true });
+    const loyer = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, name: "Rent" } })).id;
+    const ch = await createCharge(hh, { active: true, name: "Rent", dueDay: 5, categoryId: loyer, startMonth: oct, endMonth: null, shared: true });
     const p = await payCharge(hh, user, ch.id, oct, 95000, parseDay("2026-10-05")!);
     const t = await prisma.transaction.findUniqueOrThrow({ where: { id: p.transactionId } });
     expect(t).toMatchObject({ paidById: user, shared: true });

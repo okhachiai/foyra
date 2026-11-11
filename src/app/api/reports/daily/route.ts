@@ -8,7 +8,7 @@ export async function POST(req: Request) {
   const expected = Buffer.from(process.env.CRON_TOKEN ?? "");
   const given = Buffer.from((req.headers.get("authorization") ?? "").replace(/^Bearer /, ""));
   if (!expected.length || given.length !== expected.length || !timingSafeEqual(given, expected)) {
-    return NextResponse.json({ error: "Non autorisé" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const created = await generateAutoReports(parseDay(todayIn(process.env.TZ ?? "Europe/Paris"))!);
   return NextResponse.json({ created });

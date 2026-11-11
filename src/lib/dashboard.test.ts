@@ -14,11 +14,11 @@ const today = parseDay("2026-11-10")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(hh, { active: true, name: "Rent", dueDay: 5, categoryId: await byName("Rent"), startMonth: nov, endMonth: null, shared: true, ...over });
 /** Budget du mois : lignes de dépense (libellé = nom de la récurrence) dans la catégorie Loyer. */
 const plan = async (lines: [string, number][], month = nov) => {
   const b = await createBudget(hh, month);
-  const categoryId = await byName("Loyer");
+  const categoryId = await byName("Rent");
   await prisma.budgetItem.deleteMany({ where: { budgetId: b.id } });
   await prisma.budgetItem.createMany({ data: lines.map(([label, amount]) => ({ householdId: hh, budgetId: b.id, kind: "EXPENSE" as const, label, amount, categoryId })) });
 };
@@ -33,8 +33,8 @@ beforeEach(async () => {
 });
 
 describe("tableau de bord", () => {
-  it("À payer : 110 €, retard (Assurance) en tête, Internet à payer, Loyer payé absent", async () => {
-    await plan([["Loyer", 95000], ["Assurance", 8000], ["Internet", 3000]]);
+  it("À payer : 110 €, retard (Assurance) en tête, Internet à payer, Rent payé absent", async () => {
+    await plan([["Rent", 95000], ["Assurance", 8000], ["Internet", 3000]]);
     const loyer = await charge();
     await charge({ name: "Assurance", dueDay: 8 });
     await charge({ name: "Internet", dueDay: 20 });
@@ -48,16 +48,16 @@ describe("tableau de bord", () => {
   it("Montants lus dans le budget du mois, jamais dans la récurrence ; sans ligne : 0, « absente du budget »", async () => {
     await charge();
     await charge({ name: "Assurance", dueDay: 20 });
-    expect((await getDashboard(hh, today)).unpaid.map((c) => `${c.name}:${c.amount}:${c.budgeted}`)).toEqual(["Loyer:0:false", "Assurance:0:false"]);
-    await plan([["Loyer", 90000]]);
+    expect((await getDashboard(hh, today)).unpaid.map((c) => `${c.name}:${c.amount}:${c.budgeted}`)).toEqual(["Rent:0:false", "Assurance:0:false"]);
+    await plan([["Rent", 90000]]);
     const d = await getDashboard(hh, today);
     // Deux récurrences dans la même catégorie : le libellé départage, sinon première ligne de la catégorie.
-    expect(d.unpaid.map((c) => `${c.name}:${c.amount}:${c.budgeted}`)).toEqual(["Loyer:90000:true", "Assurance:90000:true"]);
+    expect(d.unpaid.map((c) => `${c.name}:${c.amount}:${c.budgeted}`)).toEqual(["Rent:90000:true", "Assurance:90000:true"]);
   });
 
   it("Crédit : échéance du mois non payée comptée (assurance incluse)", async () => {
     await createLoan(hh, {
-      name: "Maison", categoryId: await byName("Loyer"), firstDue: day("2026-11-15"),
+      name: "Maison", categoryId: await byName("Rent"), firstDue: day("2026-11-15"),
       principal: 10_000_000, annualRate: 1200, termMonths: 240, payment: null, insurance: 1000,
     });
     const d = await getDashboard(hh, today);
@@ -66,9 +66,9 @@ describe("tableau de bord", () => {
   });
 
   it("Mois : revenus du budget, dépenses enregistrées, résultat, net des opérations ; autres mois exclus", async () => {
-    await createEntry(hh, user, { paidById: user, kind: "INCOME", amount: 250000, occurredOn: day("2026-11-02"), note: "Salaire", categoryId: await byName("Salaire 1") });
-    await spend("Marché", 4500);
-    await spend("Carburant", 6000);
+    await createEntry(hh, user, { paidById: user, kind: "INCOME", amount: 250000, occurredOn: day("2026-11-02"), note: "Salaire", categoryId: await byName("Salary 1") });
+    await spend("Market", 4500);
+    await spend("Fuel", 6000);
     await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 99900, occurredOn: day("2026-10-31"), note: null, categoryId: null });
     expect((await getDashboard(hh, today)).income).toBe(0); // sans budget : opération de revenu ignorée
     await createBudget(hh, nov, [{ label: "Salaire", amount: 300000, categoryId: null }]);
@@ -93,7 +93,7 @@ describe("tableau de bord", () => {
 describe("graphiques du tableau de bord", () => {
   const f = (d: string, kind: Flow["kind"], amount: number, over: Partial<Flow> = {}): Flow =>
     ({ day: day(d).getTime(), kind, categoryId: "c1", amount, ...over });
-  const cats = [{ id: "p", name: "Logement", parentId: null }, { id: "c1", name: "Loyer", parentId: "p" }];
+  const cats = [{ id: "p", name: "Housing", parentId: null }, { id: "c1", name: "Rent", parentId: "p" }];
 
   it("cumuls, catégories et saisonnalité", () => {
     const flows = [
@@ -108,16 +108,16 @@ describe("graphiques du tableau de bord", () => {
     expect(c.flows.income[0][1]).toBe(200000);
     expect(c.flows.expense[0][30]).toBe(96000);
     expect(c.flows.expense[1][30]).toBe(90000);
-    expect(c.categories.items.map((i) => `${i.name}/${i.group}:${i.values}`)).toEqual(["Loyer/p:95000,90000,185000", "Sans catégorie/none:1000,0,0"]);
-    expect(c.categories.groups.map((g) => g.name)).toEqual(["Logement", "Sans catégorie"]);
+    expect(c.categories.items.map((i) => `${i.name}/${i.group}:${i.values}`)).toEqual(["Rent/p:95000,90000,185000", "Uncategorized/none:1000,0,0"]);
+    expect(c.categories.groups.map((g) => g.name)).toEqual(["Housing", "Uncategorized"]);
     expect(c.categories.periods[0]).toMatchObject({ total: 96000, previous: 90000 });
     expect(c.seasons[0].values[10]).toBe(96000);
     expect(c.seasons[0].average).toBe(Math.round(186000 / 11));
     expect(c.seasons[1]).toMatchObject({ total: 50000, delta: null });
-    expect(c.seasons[0].top).toEqual([{ label: "Loyer", value: 185000 }, { label: "Sans catégorie", value: 1000 }]);
+    expect(c.seasons[0].top).toEqual([{ label: "Rent", value: 185000 }, { label: "Uncategorized", value: 1000 }]);
     // Mois : douze derniers, novembre en dernier, égal aux cumuls de fin de mois.
     expect(c.monthly.labels).toHaveLength(12);
-    expect(c.monthly.labels.at(-1)).toBe("nov.");
+    expect(c.monthly.labels.at(-1)).toBe("Nov");
     expect(c.monthly.income.at(-1)).toBe(c.flows.income[0][30]);
     expect(c.monthly.expense.slice(-2)).toEqual([90000, 96000]);
     expect(c.monthly.expense.slice(0, 10).every((v) => v === 0)).toBe(true);
@@ -133,12 +133,12 @@ describe("plan de dépenses", () => {
     const p = spendingPlan([
       node("Revenu", "INCOME", 300000, 300000),
       node("Courses", "EXPENSE", 70000, 62000),
-      node("Loyer", "EXPENSE", 140000, 130000, { category: { fixed: true } }),
+      node("Rent", "EXPENSE", 140000, 130000, { category: { fixed: true } }),
       node("Livret", "EXPENSE", 50000, 50000, { category: { fixed: true, savings: true } }),
       node("Exclue", "EXPENSE", 10000, 0, { included: false }),
       node("Loisirs", "EXPENSE", 10000, 15000),
     ]);
-    expect(p.lines.map((l) => `${l.label}:${l.left}`)).toEqual(["Loyer:10000", "Courses:8000", "Loisirs:-5000"]);
+    expect(p.lines.map((l) => `${l.label}:${l.left}`)).toEqual(["Rent:10000", "Courses:8000", "Loisirs:-5000"]);
     expect(p).toMatchObject({ planned: 220000, actual: 207000, left: 13000 });
   });
 });
@@ -152,10 +152,10 @@ describe("barre latérale", () => {
     expect(s.due).toBe(2);
   });
   it("avec budget : plan des lignes de dépense", async () => {
-    await plan([["Loyer", 90000]]);
+    await plan([["Rent", 90000]]);
     // Ligne commune : seul le réel commun compte (logique de getBudget).
-    await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 30000, occurredOn: day("2026-11-09"), note: null, categoryId: await byName("Loyer"), shared: true });
-    await spend("Loyer", 5000);
+    await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 30000, occurredOn: day("2026-11-09"), note: null, categoryId: await byName("Rent"), shared: true });
+    await spend("Rent", 5000);
     const s = await getShell(hh, today);
     expect(s.plan).toMatchObject({ planned: 90000, actual: 30000, left: 60000 });
   });

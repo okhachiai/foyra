@@ -12,7 +12,7 @@ const oct = parseMonth("2026-10")!;
 const nov = parseMonth("2026-11")!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(hh, { active: true, name: "Rent", dueDay: 5, categoryId: await byName("Rent"), startMonth: nov, endMonth: null, shared: true, ...over });
 const pay = (id: string, amount: number, day: string, month = nov) => payCharge(hh, user, id, month, amount, parseDay(day)!);
 
 beforeEach(async () => {
@@ -25,10 +25,10 @@ beforeEach(async () => {
 describe("charges fixes", () => {
   it("Créer : active dès le mois de début ; jour, catégorie de revenu refusés", async () => {
     await charge();
-    expect((await listMonthCharges(hh, nov)).map((c) => c.name)).toEqual(["Loyer"]);
+    expect((await listMonthCharges(hh, nov)).map((c) => c.name)).toEqual(["Rent"]);
     await expect(charge({ dueDay: 32 })).rejects.toThrow();
     await expect(charge({ dueDay: 0 })).rejects.toThrow();
-    await expect(charge({ categoryId: await byName("Salaire 1") })).rejects.toMatchObject({ field: "categoryId" });
+    await expect(charge({ categoryId: await byName("Salary 1") })).rejects.toMatchObject({ field: "categoryId" });
   });
 
   it("Échéance : jour 31 en février 2027 → 28/02/2027", () => {
@@ -51,7 +51,7 @@ describe("charges fixes", () => {
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
     expect(rejected.reason).toBeInstanceOf(LedgerError);
-    expect(rejected.reason.message).toBe("Cette charge est déjà payée pour ce mois.");
+    expect(rejected.reason.message).toBe("This charge is already paid for this month.");
     const [listed] = await listMonthCharges(hh, nov);
     expect(listed.payment?.transaction).toMatchObject({ amount: 95000, paidById: user, categoryId: c.categoryId, kind: "EXPENSE" });
     expect(await prisma.transaction.count()).toBe(1);
@@ -74,7 +74,7 @@ describe("charges fixes", () => {
   });
 
   it("Catégorie de revenu refusée", async () => {
-    await expect(charge({ categoryId: await byName("Salaire 1") })).rejects.toMatchObject({ field: "categoryId" });
+    await expect(charge({ categoryId: await byName("Salary 1") })).rejects.toMatchObject({ field: "categoryId" });
   });
 
   it("Désactivée : absente des échéances du mois ; réactivée : de retour", async () => {

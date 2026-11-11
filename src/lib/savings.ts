@@ -3,7 +3,7 @@ import { buildTree, formatMonth } from "./budget";
 import { prisma } from "./db";
 import { createEntry, isCode, type EntryInput } from "./ledger";
 
-const NAME = "Épargne";
+const NAME = "Savings";
 
 /**
  * Catégorie d'épargne du foyer (dépense fixe de premier niveau) : la première marquée, sinon « Épargne »

@@ -1,308 +1,308 @@
 <div align="center">
 
-<img src="src/app/icon0.svg" alt="Logo Foyra" width="112" height="112">
+<img src="src/app/icon0.svg" alt="Foyra logo" width="112" height="112">
 
 # Foyra
 
-**Le budget mensuel du foyer, auto-hébergé et privé.**
+**Self-hosted, private monthly budgeting for your household.**
 
-Prévoyez le budget du mois, suivez le réel et partagez équitablement les dépenses communes,<br>
-sans jamais connecter de compte bancaire.
+Plan the month's budget, track what actually happens and split shared expenses fairly,<br>
+without ever connecting a bank account.
 
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org)
 [![React 19](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 [![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![Licence MIT](https://img.shields.io/badge/licence-MIT-147D69)](LICENSE)
+[![MIT License](https://img.shields.io/badge/license-MIT-147D69)](LICENSE)
 
-[Démarrage rapide](#démarrage-rapide) ·
+[Quick start](#quick-start) ·
 [Configuration](#configuration) ·
-[Exploitation](#exploitation) ·
-[Contribuer](#contribuer) ·
-[Sécurité](#sécurité)
+[Operations](#operations) ·
+[Contributing](#contributing) ·
+[Security](#security)
 
 </div>
 
 ---
 
-## Pourquoi Foyra ?
+## Why Foyra?
 
-La plupart des applications de budget exigent un accès à vos comptes bancaires et hébergent vos données chez un tiers. Foyra prend le parti inverse :
+Most budgeting apps want access to your bank accounts and store your data with a third party. Foyra takes the opposite approach:
 
-- **Vos données restent chez vous** : une seule instance Docker, une base PostgreSQL, aucun service externe obligatoire.
-- **Pensé pour le foyer, pas pour un individu** : plusieurs membres, des dépenses communes et une répartition au prorata des revenus.
-- **Prévu contre réel** : on planifie le mois, on saisit ce qui se passe, on compare.
-- **Sécurisé par défaut** : image distroless non-root, mots de passe Argon2, sessions côté serveur, aucune inscription publique.
+- **Your data stays with you**: one Docker instance, one PostgreSQL database, no required external service.
+- **Built for a household, not an individual**: multiple members, shared expenses and a split proportional to income.
+- **Planned vs. actual**: plan the month, record what happens, compare.
+- **Secure by default**: distroless non-root image, Argon2 passwords, server-side sessions, no public sign-up.
 
-> Interface en français, montants en euros, fuseau Europe/Paris par défaut.
+> The interface is in English by default; French and Arabic (right-to-left) can be chosen in **Settings → General** or on the sign-in page. Amounts are in euros, and the default time zone is Europe/Paris.
 
-## Sommaire
+## Contents
 
-- [Fonctionnalités](#fonctionnalités)
+- [Features](#features)
 - [Architecture](#architecture)
-- [Démarrage rapide](#démarrage-rapide)
-- [Homelab](#homelab-image-prête-sans-cloner) : image prête, `docker compose` ou `docker run`
+- [Quick start](#quick-start)
+- [Homelab](#homelab-prebuilt-image-no-clone-needed): prebuilt image, `docker compose` or `docker run`
 - [Configuration](#configuration)
-- [Exploitation](#exploitation) : HTTPS, mise à jour, sauvegarde, mot de passe oublié
-- [Rapports IA](#rapports-ia)
-- [Développement](#développement)
-- [Règles métier](#règles-métier)
-- [Contribuer](#contribuer)
-- [Sécurité](#sécurité)
-- [Licence](#licence)
+- [Operations](#operations): HTTPS, updates, backups, forgotten password
+- [AI reports](#ai-reports)
+- [Development](#development)
+- [Business rules](#business-rules)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
 
-## Fonctionnalités
+## Features
 
-- **Budget mensuel** : un budget par mois, brouillon ou validé, repris du mois précédent ou de modèles.
-- **Recettes et dépenses réelles** saisies à la main : aucune connexion bancaire, aucune donnée envoyée à un tiers.
-- **Charges récurrentes et crédits**, avec échéances à marquer « payée » ou « reçue ».
-- **Partage équitable** des dépenses communes au prorata des revenus de chaque membre.
-- **Plusieurs membres par foyer**, rôles admin / membre, pas d'inscription publique.
-- **Rapports IA optionnels** (Claude ou modèle local compatible OpenAI) : suivi quotidien, bilan mensuel, proposition de répartition du budget.
-- **Import / export JSON** du budget.
-- Thème clair et sombre (suit le système).
+- **Monthly budget**: one budget per month, draft or approved, carried over from the previous month or from templates.
+- **Actual income and expenses** entered by hand: no bank connection, no data sent to a third party.
+- **Recurring bills and loans**, with due items to mark as "paid" or "received".
+- **Fair split** of shared expenses, proportional to each member's income.
+- **Multiple members per household**, admin / member roles, no public sign-up.
+- **Optional AI reports** (Claude or a local OpenAI-compatible model): daily tracking, monthly review, suggested budget allocation.
+- **JSON import / export** of the budget.
+- Light and dark theme (follows the system).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    U[Navigateur] -- HTTPS via proxy --> A[app<br/>Next.js 15 · Server Actions]
+    U[Browser] -- HTTPS via proxy --> A[app<br/>Next.js 15 · Server Actions]
     A -- Prisma 6 --> D[(db<br/>PostgreSQL 17)]
     C[cron] -- POST /api/reports/daily --> A
-    A -. optionnel .-> L[Claude ou LLM local<br/>compatible OpenAI]
+    A -. optional .-> L[Claude or local LLM<br/>OpenAI-compatible]
 ```
 
-| Couche | Technologie |
+| Layer | Technology |
 | --- | --- |
-| Interface | Next.js 15 (App Router), React 19, Tailwind CSS 4 |
-| Logique serveur | Server Actions, TypeScript strict |
-| Données | Prisma 6, PostgreSQL 17 |
-| Authentification | Sessions maison, Argon2 |
-| Exécution | Docker Compose, image distroless, utilisateur non-root |
-| Qualité | Vitest, typecheck, audit local (gitleaks, semgrep, trivy, ZAP) |
+| UI | Next.js 15 (App Router), React 19, Tailwind CSS 4 |
+| Server logic | Server Actions, strict TypeScript |
+| Data | Prisma 6, PostgreSQL 17 |
+| Authentication | Custom sessions, Argon2 |
+| Runtime | Docker Compose, distroless image, non-root user |
+| Quality | Vitest, typecheck, local audit (gitleaks, semgrep, trivy, ZAP) |
 
-## Démarrage rapide
+## Quick start
 
-Prérequis : [Docker](https://docs.docker.com/get-docker/) avec Docker Compose v2.
+Requirements: [Docker](https://docs.docker.com/get-docker/) with Docker Compose v2.
 
 ```sh
 git clone https://github.com/okhachiai/foyra.git
 cd foyra
-cp .env.example .env        # changez au moins POSTGRES_PASSWORD
+cp .env.example .env        # change at least POSTGRES_PASSWORD
 docker compose up -d
 ```
 
-1. Ouvrez `http://localhost:3000/`. La première visite mène à `/setup`.
-2. Saisissez le jeton d'installation : `SETUP_TOKEN` du `.env`, ou à défaut celui affiché par `docker compose logs app`.
-3. Créez le foyer et le compte admin.
-4. Ajoutez les autres membres dans **Membres**.
+1. Open `http://localhost:3000/`. The first visit takes you to `/setup`.
+2. Enter the setup token: `SETUP_TOKEN` from `.env`, or otherwise the one shown by `docker compose logs app`.
+3. Create the household and the admin account.
+4. Add the other members under **Membres** (Members).
 
-Au démarrage, le conteneur `app` attend PostgreSQL, applique les migrations (`prisma migrate deploy`) puis lance le serveur. Les données vivent dans le volume `pgdata` : `docker compose down` les conserve, seul `docker compose down -v` les efface.
+On startup, the `app` container waits for PostgreSQL, applies migrations (`prisma migrate deploy`) and then starts the server. Data lives in the `pgdata` volume: `docker compose down` keeps it, only `docker compose down -v` deletes it.
 
-## Homelab (image prête, sans cloner)
+## Homelab (prebuilt image, no clone needed)
 
-L'image `ghcr.io/okhachiai/foyra` est publiée pour `amd64` et `arm64` (PC, NAS, Raspberry Pi 4/5, Mac). Tags : `latest` (branche `main`) ou une version (`0.1.0`).
+The `ghcr.io/okhachiai/foyra` image is published for `amd64` and `arm64` (PC, NAS, Raspberry Pi 4/5, Mac). Tags: `latest` (`main` branch) or a version (`0.1.0`).
 
-### Docker Compose (recommandé)
+### Docker Compose (recommended)
 
 ```sh
 mkdir foyra && cd foyra
 curl -O https://raw.githubusercontent.com/okhachiai/foyra/main/compose.homelab.yml
 echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" > .env
 docker compose -f compose.homelab.yml up -d
-docker compose -f compose.homelab.yml logs app   # jeton d'installation
+docker compose -f compose.homelab.yml logs app   # setup token
 ```
 
-Ouvrez `http://<ip-du-serveur>:3000/`. Ce fichier écoute sur toutes les interfaces (`APP_BIND=0.0.0.0`) pour être joignable depuis le réseau local. Toutes les variables de [Configuration](#configuration) s'ajoutent au `.env`, plus `TZ` (fuseau, défaut `Europe/Paris`) et `FOYRA_VERSION` (tag d'image, défaut `latest`). Mise à jour : `docker compose -f compose.homelab.yml pull && docker compose -f compose.homelab.yml up -d`. Fonctionne tel quel dans Portainer, Dockge, CasaOS (pile « compose »).
+Open `http://<server-ip>:3000/`. This file listens on all interfaces (`APP_BIND=0.0.0.0`) so it is reachable from the local network. Every variable from [Configuration](#configuration) can be added to `.env`, plus `TZ` (time zone, default `Europe/Paris`) and `FOYRA_VERSION` (image tag, default `latest`). To update: `docker compose -f compose.homelab.yml pull && docker compose -f compose.homelab.yml up -d`. Works as-is in Portainer, Dockge and CasaOS ("compose" stack).
 
 ### `docker run`
 
-Foyra a besoin de PostgreSQL. Avec une base existante, un seul conteneur suffit :
+Foyra needs PostgreSQL. With an existing database, a single container is enough:
 
 ```sh
 docker run -d --name foyra --restart unless-stopped -p 3000:3000 \
-  -e DATABASE_URL=postgresql://foyra:MOTDEPASSE@hote-postgres:5432/foyra \
+  -e DATABASE_URL=postgresql://foyra:PASSWORD@postgres-host:5432/foyra \
   -e TZ=Europe/Paris \
   ghcr.io/okhachiai/foyra:latest
 ```
 
-Sans base existante, créez-la à côté :
+Without an existing database, create one alongside it:
 
 ```sh
 docker network create foyra
 docker run -d --name foyra-db --network foyra --restart unless-stopped \
-  -e POSTGRES_USER=foyra -e POSTGRES_PASSWORD=MOTDEPASSE -e POSTGRES_DB=foyra \
+  -e POSTGRES_USER=foyra -e POSTGRES_PASSWORD=PASSWORD -e POSTGRES_DB=foyra \
   -v foyra-db:/var/lib/postgresql/data postgres:17-alpine
 docker run -d --name foyra --network foyra --restart unless-stopped -p 3000:3000 \
-  -e DATABASE_URL=postgresql://foyra:MOTDEPASSE@foyra-db:5432/foyra \
+  -e DATABASE_URL=postgresql://foyra:PASSWORD@foyra-db:5432/foyra \
   ghcr.io/okhachiai/foyra:latest
-docker logs foyra   # jeton d'installation
+docker logs foyra   # setup token
 ```
 
-Le conteneur redémarre tant que la base n'est pas prête, puis applique les migrations. Les autres variables passent en `-e NOM=valeur`.
+The container restarts until the database is ready, then applies migrations. Other variables are passed as `-e NAME=value`.
 
-> **Reverse proxy et image publiée** : `APP_URL` est lu au build pour autoriser l'origine des Server Actions. Avec l'image publiée, le proxy doit transmettre l'en-tête `Host` d'origine (comportement par défaut de Caddy, Traefik, Nginx Proxy Manager). Sinon, construisez l'image depuis les sources avec `APP_URL`.
+> **Reverse proxy and the published image**: `APP_URL` is read at build time to allow the Server Actions origin. With the published image, the proxy must forward the original `Host` header (the default for Caddy, Traefik and Nginx Proxy Manager). Otherwise, build the image from source with `APP_URL`.
 
 ## Configuration
 
-Toute la configuration passe par `.env` (voir [`.env.example`](.env.example), commenté).
+All configuration goes through `.env` (see the commented [`.env.example`](.env.example)).
 
-| Variable | Défaut | Rôle |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `POSTGRES_PASSWORD` | `change-me-please` | **À changer.** Lettres et chiffres uniquement (inséré dans une URL). |
-| `POSTGRES_USER` / `POSTGRES_DB` | `foyra` | Utilisateur et base PostgreSQL. |
-| `APP_PORT` | `3000` | Port publié sur l'hôte. |
-| `APP_BIND` | `127.0.0.1` | Interface d'écoute. `0.0.0.0` pour exposer sur le réseau (de préférence derrière un proxy TLS). |
-| `APP_URL` | vide | URL publique derrière un reverse proxy. Lue au build. |
-| `COOKIE_SECURE` | déduit de `APP_URL` | Force le cookie « Secure » (`true` / `false`). |
-| `SETUP_TOKEN` | aléatoire | Jeton exigé par `/setup`. Vide : généré et affiché dans les journaux. |
-| `LLM_ALLOWED_HOSTS` | vide | Hôtes autorisés pour un modèle local (`nom:port`, séparés par des virgules). Vide : modèle local désactivé. |
-| `LLM_KEY_SECRET` | vide | Clé de chiffrement AES-256-GCM des clés API en base (`openssl rand -hex 32`). **Ne plus la changer ensuite.** |
-| `CRON_TOKEN` | vide | Jeton du rapport automatique, **hexadécimal** (`openssl rand -hex 32`). Vide : rapport automatique refusé. |
-| `REPORT_CRON` | `0 20 * * *` | Horaire du rapport automatique (fuseau Europe/Paris). |
+| `POSTGRES_PASSWORD` | `change-me-please` | **Change it.** Letters and digits only (it is inserted into a URL). |
+| `POSTGRES_USER` / `POSTGRES_DB` | `foyra` | PostgreSQL user and database. |
+| `APP_PORT` | `3000` | Port published on the host. |
+| `APP_BIND` | `127.0.0.1` | Listening interface. `0.0.0.0` to expose it on the network (preferably behind a TLS proxy). |
+| `APP_URL` | empty | Public URL behind a reverse proxy. Read at build time. |
+| `COOKIE_SECURE` | derived from `APP_URL` | Forces the "Secure" cookie flag (`true` / `false`). |
+| `SETUP_TOKEN` | random | Token required by `/setup`. Empty: generated and printed in the logs. |
+| `LLM_ALLOWED_HOSTS` | empty | Allowed hosts for a local model (`name:port`, comma-separated). Empty: local model disabled. |
+| `LLM_KEY_SECRET` | empty | AES-256-GCM key used to encrypt API keys stored in the database (`openssl rand -hex 32`). **Never change it afterwards.** |
+| `CRON_TOKEN` | empty | Token for the automatic report, **hexadecimal** (`openssl rand -hex 32`). Empty: automatic report rejected. |
+| `REPORT_CRON` | `0 20 * * *` | Automatic report schedule (Europe/Paris time zone). |
 
-Générer les secrets :
+Generate secrets:
 
 ```sh
-openssl rand -hex 32   # pour LLM_KEY_SECRET, CRON_TOKEN, SETUP_TOKEN
+openssl rand -hex 32   # for LLM_KEY_SECRET, CRON_TOKEN, SETUP_TOKEN
 ```
 
-## Exploitation
+## Operations
 
-### Derrière un reverse proxy HTTPS
+### Behind an HTTPS reverse proxy
 
-Dans `.env` :
+In `.env`:
 
 ```sh
 APP_URL=https://foyra.example.org
-APP_BIND=127.0.0.1   # si le proxy tourne sur la même machine
+APP_BIND=127.0.0.1   # if the proxy runs on the same machine
 ```
 
-Puis reconstruisez : `docker compose up -d --build` (`APP_URL` est lu au build). `APP_URL` rend le cookie « Secure » et fait lire l'IP client dans `X-Forwarded-For` (limitation des tentatives de connexion). L'app ne doit alors être joignable **que** par le proxy, sinon cet en-tête peut être falsifié.
+Then rebuild: `docker compose up -d --build` (`APP_URL` is read at build time). `APP_URL` makes the cookie "Secure" and makes the app read the client IP from `X-Forwarded-For` (login rate limiting). The app must then be reachable **only** through the proxy, otherwise that header can be spoofed.
 
-### Mise à jour
+### Updating
 
 ```sh
 git pull
 docker compose up -d --build
 ```
 
-Les migrations s'appliquent automatiquement au démarrage, sans jamais réinitialiser la base. **Faites une sauvegarde avant chaque mise à jour.**
+Migrations are applied automatically on startup and never reset the database. **Back up before every update.**
 
-### Sauvegarde et restauration
+### Backup and restore
 
 ```sh
-# Sauvegarde
+# Backup
 docker compose exec -T db pg_dump -U foyra -Fc foyra > foyra-$(date +%F).dump
 
-# Restauration (écrase la base)
-docker compose exec -T db pg_restore -U foyra -d foyra --clean --if-exists < foyra-AAAA-MM-JJ.dump
+# Restore (overwrites the database)
+docker compose exec -T db pg_restore -U foyra -d foyra --clean --if-exists < foyra-YYYY-MM-DD.dump
 ```
 
-Adaptez `-U` / `-d` si vous avez changé `POSTGRES_USER` / `POSTGRES_DB`.
+Adjust `-U` / `-d` if you changed `POSTGRES_USER` / `POSTGRES_DB`.
 
-### Mot de passe oublié
+### Forgotten password
 
-Chacun change son mot de passe dans **Mon compte**. Un mot de passe perdu (y compris celui de l'unique admin) se réinitialise depuis le serveur :
+Each user changes their own password under **Mon compte** (My account). A lost password (including the only admin's) is reset from the server:
 
 ```sh
-docker compose exec app /nodejs/bin/node scripts/reset-password.mjs admin@exemple.fr
+docker compose exec app /nodejs/bin/node scripts/reset-password.mjs admin@example.com
 ```
 
-Un mot de passe provisoire s'affiche une seule fois et toutes les sessions de l'utilisateur sont fermées. Sans email en argument, il est demandé. Un compte désactivé reste désactivé : un admin le réactive dans **Membres**.
+A temporary password is shown only once and all of the user's sessions are closed. If no email is given as an argument, the script prompts for it. A deactivated account stays deactivated: an admin reactivates it under **Membres** (Members).
 
-## Rapports IA
+## AI reports
 
-Fonction **optionnelle** : sans fournisseur configuré, l'application fonctionne normalement.
+This feature is **optional**: with no provider configured, the app works normally.
 
-Un rapport (dépenses du jour, répartition du budget, planning, conseils) est généré à la demande ou chaque soir. Les fournisseurs se règlent dans l'application (admin), **Paramètres → Rapport LLM** :
+A report (today's expenses, budget allocation, schedule, advice) is generated on demand or every evening. Providers are configured in the app (admin), under **Settings → AI**:
 
-- **Claude** : clé API et modèle.
-- **Modèle local compatible OpenAI** (Ollama, LM Studio…) : URL, modèle, clé facultative. L'hôte doit figurer dans `LLM_ALLOWED_HOSTS` (ex. `host.docker.internal:11434`), pour qu'un admin ne puisse pas faire appeler une adresse interne quelconque par le serveur.
+- **Claude**: API key and model.
+- **Local OpenAI-compatible model** (Ollama, LM Studio…): URL, model, optional key. The host must be listed in `LLM_ALLOWED_HOSTS` (e.g. `host.docker.internal:11434`), so that an admin cannot make the server call an arbitrary internal address.
 
-**Rapport automatique** : le service `cron` appelle `POST /api/reports/daily` avec `Authorization: Bearer $CRON_TOKEN` à l'heure `REPORT_CRON`. Chaque appel produit le rapport du jour et, le 1er du mois, le bilan du mois écoulé (prévu contre réel). Un seul rapport automatique par foyer, jour et type. Journaux : `docker compose logs cron`.
+**Automatic report**: the `cron` service calls `POST /api/reports/daily` with `Authorization: Bearer $CRON_TOKEN` at the `REPORT_CRON` time. Each call produces the daily report and, on the 1st of the month, the review of the previous month (planned vs. actual). At most one automatic report per household, day and type. Logs: `docker compose logs cron`.
 
-## Développement
+## Development
 
-Prérequis : Node.js 22 LTS et Docker.
+Requirements: Node.js 22 LTS and Docker.
 
 ```sh
 npm install
-docker compose --profile test up -d db-test   # PostgreSQL de test sur localhost:5433
-npm test                                       # applique les migrations puis lance Vitest
+docker compose --profile test up -d db-test   # test PostgreSQL on localhost:5433
+npm test                                       # applies migrations, then runs Vitest
 npm run typecheck
 ```
 
-`npm run dev` nécessite `DATABASE_URL` vers une base PostgreSQL (par ex. celle de test).
+`npm run dev` requires `DATABASE_URL` pointing to a PostgreSQL database (e.g. the test one).
 
-### Avec Docker et rechargement à chaud
+### With Docker and hot reload
 
 ```sh
-make dev        # sources montées, next dev, migrations au démarrage
-make dev-logs   # suivre les logs
-make dev-stop   # arrêter (la base est conservée)
-make up         # revenir à l'image de production
-make help       # toutes les commandes
+make dev        # mounted sources, next dev, migrations on startup
+make dev-logs   # follow the logs
+make dev-stop   # stop (the database is kept)
+make up         # switch back to the production image
+make help       # all commands
 ```
 
-Après un changement de `package.json`, relancez `make dev`. La production n'utilise jamais `docker-compose.dev.yml`.
+After changing `package.json`, rerun `make dev`. Production never uses `docker-compose.dev.yml`.
 
-### Tests dans Docker
+### Tests in Docker
 
 ```sh
 docker compose --profile test up -d db-test
 docker compose --profile test run --rm tests   # typecheck + tests
 ```
 
-### Audit de sécurité local
+### Local security audit
 
 ```sh
-make audit-up   # instance jetable (127.0.0.1:3100) + données fictives
-make audit      # gitleaks, semgrep, trivy, ZAP baseline, vitest (FULL=1 : ZAP actif)
+make audit-up   # throwaway instance (127.0.0.1:3100) + fake data
+make audit      # gitleaks, semgrep, trivy, ZAP baseline, vitest (FULL=1: active ZAP scan)
 make audit-down
 ```
 
-### Déploiement distant par SSH (optionnel)
+### Remote deployment over SSH (optional)
 
-`make deploy-remote` envoie le code sur un serveur, y lance typecheck et tests dans une base jetable, écrit une sauvegarde `pg_dump` vérifiée dans `backups/`, puis remplace le conteneur. Rien n'est remplacé en cas d'échec.
+`make deploy-remote` uploads the code to a server, runs typecheck and tests there against a throwaway database, writes a verified `pg_dump` backup to `backups/`, then replaces the container. Nothing is replaced if any step fails.
 
 ```sh
 cp .deploy.env.example .deploy.env   # REMOTE_HOST, REMOTE_DIR, REMOTE_PROJECT
-INIT=1 make deploy-remote            # première installation (crée la base)
-make deploy-remote                   # déploiements suivants
+INIT=1 make deploy-remote            # first install (creates the database)
+make deploy-remote                   # subsequent deployments
 ```
 
-Prérequis : connexion SSH par clé, dossier `REMOTE_DIR` existant avec son `.env` de production. Si un verrou `.deploy-lock` subsiste, vérifiez qu'aucun déploiement ne tourne avant de le retirer.
+Requirements: key-based SSH access, and an existing `REMOTE_DIR` folder with its production `.env`. If a `.deploy-lock` file is left behind, make sure no deployment is running before removing it.
 
-## Règles métier
+## Business rules
 
-- **Membres** : l'admin change les rôles et désactive / réactive les comptes (jamais de suppression). Un compte désactivé perd ses sessions mais ses opérations sont conservées. Le foyer garde toujours au moins un admin actif. Tout membre gère budgets, opérations, récurrences et crédits ; catégories, membres et réglages sont réservés aux admins.
-- **Montants** en centimes entiers, toujours > 0 (contrainte `CHECK`) ; le sens découle du type.
-- **Pas de comptes bancaires** : chaque opération porte un « payé / reçu par » et une case « commune ». Le net du mois (recettes − dépenses) est calculé, jamais stocké.
-- **Partage** : dépenses communes prévues moins recettes communes, réparties au prorata des revenus personnels.
-- **Budget mensuel** : au plus un par mois, créé explicitement. Les lignes sont copiées : modifier le catalogue ne change jamais un budget existant. Un parent avec sous-lignes vaut la somme de ses sous-lignes. Le budget ne crée aucune opération.
-- **Récurrences** : échéances indicatives ; seule l'action « marquer payée / reçue » enregistre l'opération.
-- **Opérations** : clé d'idempotence par formulaire (un double clic ne crée pas de doublon).
+- **Members**: the admin changes roles and deactivates / reactivates accounts (never deletes them). A deactivated account loses its sessions but its transactions are kept. The household always keeps at least one active admin. Any member manages budgets, transactions, recurring items and loans; categories, members and settings are admin-only.
+- **Amounts** are stored as integer cents, always > 0 (`CHECK` constraint); the direction comes from the type.
+- **No bank accounts**: each transaction has a "paid / received by" field and a "shared" checkbox. The month's net (income − expenses) is computed, never stored.
+- **Split**: planned shared expenses minus shared income, divided in proportion to personal income.
+- **Monthly budget**: at most one per month, created explicitly. Lines are copied, so editing the catalog never changes an existing budget. A parent line with sub-lines equals the sum of its sub-lines. The budget never creates transactions.
+- **Recurring items**: due dates are indicative; only the "mark as paid / received" action records the transaction.
+- **Transactions**: one idempotency key per form (a double click does not create a duplicate).
 
-## Contribuer
+## Contributing
 
-Les contributions sont les bienvenues.
+Contributions are welcome.
 
-1. Ouvrez une issue pour discuter d'un changement important avant de coder.
-2. Forkez, créez une branche (`feat/…`, `fix/…`).
-3. Vérifiez que `npm run typecheck` et `npm test` passent.
-4. Messages de commit au format [Conventional Commits](https://www.conventionalcommits.org/) (`feat(scope): …`, `fix(scope): …`).
-5. Ouvrez une pull request en décrivant le changement et comment le tester.
+1. Open an issue to discuss any significant change before coding.
+2. Fork and create a branch (`feat/…`, `fix/…`).
+3. Make sure `npm run typecheck` and `npm test` pass.
+4. Write commit messages in [Conventional Commits](https://www.conventionalcommits.org/) format (`feat(scope): …`, `fix(scope): …`).
+5. Open a pull request describing the change and how to test it.
 
-Toute migration Prisma doit être non destructive et reprendre les données existantes.
+Every Prisma migration must be non-destructive and preserve existing data.
 
-## Sécurité
+## Security
 
-**Ne signalez pas une vulnérabilité dans une issue publique.** Utilisez le [signalement privé de GitHub](https://github.com/okhachiai/foyra/security/advisories/new).
+**Do not report a vulnerability in a public issue.** Use [GitHub private vulnerability reporting](https://github.com/okhachiai/foyra/security/advisories/new).
 
-Bonnes pratiques de déploiement : changez `POSTGRES_PASSWORD`, gardez `APP_BIND=127.0.0.1` derrière un proxy HTTPS, renseignez `LLM_KEY_SECRET` si vous enregistrez des clés API, et sauvegardez régulièrement.
+Deployment best practices: change `POSTGRES_PASSWORD`, keep `APP_BIND=127.0.0.1` behind an HTTPS proxy, set `LLM_KEY_SECRET` if you store API keys, and back up regularly.
 
-## Licence
+## License
 
 [MIT](LICENSE) © 2026 KHACHIAI Oussama.

@@ -1,7 +1,10 @@
-/** Chargement d'une page connectée : squelette sobre (titre, 3 chiffres, un bloc). */
-export default function Loading() {
+import { getI18n } from "@/lib/i18n-server";
+
+/** Loading a signed-in page: plain skeleton (title, 3 figures, one block). */
+export default async function Loading() {
+  const { t } = await getI18n();
   return (
-    <div role="status" aria-label="Chargement" className="flex flex-col gap-4 pt-2">
+    <div role="status" aria-label={t("Loading")} className="flex flex-col gap-4 pt-2">
       <div className="skeleton h-3 w-24" />
       <div className="skeleton h-8 w-64 max-w-full" />
       <div className="grid gap-4 sm:grid-cols-3">

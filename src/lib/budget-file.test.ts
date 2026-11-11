@@ -45,7 +45,7 @@ describe("export / import d'un mois", () => {
   it("Le mois importé redevient identique à l'export (budget, opérations, charges, crédit) ; les autres mois ne bougent pas", async () => {
     const rent = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, kind: "EXPENSE", parentId: null, fixed: true } })).id;
     await createBudget(hh, nov, [{ label: "Salaire", amount: 250000, categoryId: null }]);
-    const charge = await createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: rent, startMonth: nov, endMonth: null, shared: true });
+    const charge = await createCharge(hh, { active: true, name: "Rent", dueDay: 5, categoryId: rent, startMonth: nov, endMonth: null, shared: true });
     await payCharge(hh, admin, charge.id, nov, 80000, day("2026-11-05"));
     const loan = await createLoan(hh, { name: "Auto", categoryId: rent, firstDue: day("2026-10-10"), principal: 1000000, annualRate: 3000, termMonths: 48, payment: null, insurance: 500 });
     await prepay(hh, bob, loan.id, 50000, day("2026-11-12"), "REDUCE_TERM");
@@ -85,11 +85,11 @@ describe("export / import d'un mois", () => {
   });
 
   it("Fichier invalide : message lisible", () => {
-    expect(() => parseMonthFile("pas du json")).toThrow(/JSON illisible/);
+    expect(() => parseMonthFile("pas du json")).toThrow(/unreadable JSON/);
     expect(() => parseMonthFile(JSON.stringify({ version: 2 }))).toThrow(/version/);
     const base = { version: 1, month: "2026-11", members: [{ email: "a@test.fr", name: "A" }], categories: [], charges: [], budget: null };
     const t = { kind: "EXPENSE", amount: 5, occurredOn: "2026-12-01", note: null, category: null, shared: true, paidBy: 0, createdBy: 0, payment: null, prepayment: null };
-    expect(() => parseMonthFile(JSON.stringify({ ...base, transactions: [t] }))).toThrow(/hors du mois/);
-    expect(() => parseMonthFile(JSON.stringify({ ...base, transactions: [{ ...t, occurredOn: "2026-11-01", paidBy: 3 }] }))).toThrow(/opération 1/);
+    expect(() => parseMonthFile(JSON.stringify({ ...base, transactions: [t] }))).toThrow(/outside the month/);
+    expect(() => parseMonthFile(JSON.stringify({ ...base, transactions: [{ ...t, occurredOn: "2026-11-01", paidBy: 3 }] }))).toThrow(/transaction 1/);
   });
 });

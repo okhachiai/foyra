@@ -43,14 +43,14 @@ async function checkCategory(tx: Db, householdId: string, input: EntryInput, cur
     SELECT "kind"::text, "archivedAt" IS NOT NULL AS archived FROM "Category"
     WHERE "id" = ${input.categoryId} AND "householdId" = ${householdId} FOR SHARE`;
   if (!c) throw new NotFoundError();
-  if (c.kind !== input.kind) throw new LedgerError("Catégorie incompatible avec le type d’opération.", "categoryId");
-  if (c.archived && input.categoryId !== current) throw new LedgerError("Cette catégorie est archivée.", "categoryId");
+  if (c.kind !== input.kind) throw new LedgerError("Category incompatible with the transaction type.", "categoryId");
+  if (c.archived && input.categoryId !== current) throw new LedgerError("This category is archived.", "categoryId");
 }
 
 /** « Payé par » : membre actif du foyer (un membre désactivé reste accepté s'il était déjà choisi). */
 async function checkPayer(tx: Db, householdId: string, paidById: string, current?: string) {
   if (paidById === current) return;
-  if (!(await tx.user.count({ where: { id: paidById, householdId, disabledAt: null } }))) throw new LedgerError("Membre inconnu.", "paidById");
+  if (!(await tx.user.count({ where: { id: paidById, householdId, disabledAt: null } }))) throw new LedgerError("Unknown member.", "paidById");
 }
 
 /** Choix du « payé par » : membres actifs, plus `keep` (payeur actuel, même désactivé). */
@@ -89,16 +89,16 @@ export async function updateEntry(householdId: string, id: string, input: EntryI
     // Opération réglant une récurrence : même sens, dans le mois de l'échéance.
     const payment = await tx.fixedChargePayment.findUnique({ where: { transactionId: id } });
     if (payment) {
-      if (input.kind !== current.kind) throw new LedgerError("Cette opération règle une récurrence : son type ne peut pas changer.", "kind");
+      if (input.kind !== current.kind) throw new LedgerError("This transaction settles a recurring charge: its type cannot change.", "kind");
       const m = payment.month;
       if (input.occurredOn < m || input.occurredOn >= addMonths(m, 1)) {
-        throw new LedgerError("Cette opération règle une récurrence : la date doit rester dans le mois de l’échéance.", "occurredOn");
+        throw new LedgerError("This transaction settles a recurring charge: the date must stay within the due month.", "occurredOn");
       }
     }
     // Dépense d'un remboursement anticipé : montant et date contrôlés à la saisie, donc figés.
     if (await tx.loanPrepayment.count({ where: { transactionId: id } })) {
-      if (input.kind !== "EXPENSE") throw new LedgerError("Cette dépense est un remboursement anticipé : elle doit rester une dépense.", "kind");
-      const redo = "Remboursement anticipé : pour changer son montant ou sa date, supprimez-le et saisissez-le à nouveau.";
+      if (input.kind !== "EXPENSE") throw new LedgerError("This expense is an early repayment: it must remain an expense.", "kind");
+      const redo = "Early repayment: to change its amount or date, delete it and enter it again.";
       if (input.amount !== current.amount) throw new LedgerError(redo, "amount");
       if (input.occurredOn.getTime() !== current.occurredOn.getTime()) throw new LedgerError(redo, "occurredOn");
     }
@@ -127,7 +127,7 @@ export function parseDay(s: string): Date | null {
 
 export const formatDay = (d: Date) => d.toISOString().slice(0, 10);
 
-/** Format de date français, en UTC (dates @db.Date à minuit UTC). */
-export const frDate = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
-/** « novembre 2026 ». */
-export const monthLabel = (month: Date) => frDate({ month: "long", year: "numeric" }).format(month);
+/** Date format in UTC (@db.Date columns are UTC midnight); `intl`: Intl locale tag, see INTL in i18n.ts. */
+export const dateFmt = (opts: Intl.DateTimeFormatOptions, intl = "en-GB") => new Intl.DateTimeFormat(intl, { ...opts, timeZone: "UTC" });
+/** "November 2026". */
+export const monthLabel = (month: Date, intl = "en-GB") => dateFmt({ month: "long", year: "numeric" }, intl).format(month);

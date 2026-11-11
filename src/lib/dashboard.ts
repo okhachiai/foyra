@@ -3,7 +3,7 @@ import { getBudget, groupOf, type Node } from "./budget";
 import { chargeStatus } from "./calendar";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
-import { frDate } from "./ledger";
+import { dateFmt } from "./ledger";
 import { bigintToCents } from "./money";
 
 /**
@@ -57,7 +57,7 @@ const NONE = "none";
 export type Flow = { day: number; kind: "INCOME" | "EXPENSE"; categoryId: string | null; amount: number };
 
 /** Graphiques du tableau de bord : opérations du foyer depuis le 1er janvier de l'an dernier. */
-export async function getDashboardCharts(householdId: string, today: Date) {
+export async function getDashboardCharts(householdId: string, today: Date, intl?: string) {
   const from = new Date(utc(today.getUTCFullYear() - 1, 0));
   const [rows, categories] = await Promise.all([
     prisma.$queryRaw<(Omit<Flow, "day" | "amount"> & { day: Date; amount: bigint })[]>`
@@ -67,12 +67,12 @@ export async function getDashboardCharts(householdId: string, today: Date) {
       GROUP BY 1, 2, 3`,
     prisma.category.findMany({ where: { householdId }, select: { id: true, name: true, parentId: true } }),
   ]);
-  return buildCharts(rows.map((r) => ({ ...r, day: r.day.getTime(), amount: bigintToCents(r.amount) })), categories, today);
+  return buildCharts(rows.map((r) => ({ ...r, day: r.day.getTime(), amount: bigintToCents(r.amount) })), categories, today, intl);
 }
 
 export type DashboardCharts = ReturnType<typeof buildCharts>;
 
-export function buildCharts(flows: Flow[], categories: { id: string; name: string; parentId: string | null }[], today: Date) {
+export function buildCharts(flows: Flow[], categories: { id: string; name: string; parentId: string | null }[], today: Date, intl = "en-GB") {
   const y = today.getUTCFullYear(), m = today.getUTCMonth(), t = today.getTime();
   const sum = (kind: "INCOME" | "EXPENSE", from: number, to: number, pick: (f: Flow) => boolean = () => true) =>
     flows.reduce((s, f) => (f.kind === kind && f.day >= from && f.day < to && pick(f) ? s + f.amount : s), 0);
@@ -84,12 +84,12 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
 
   // Dépenses par catégorie ; le groupe est la catégorie parente.
   const byId = new Map(categories.map((c) => [c.id, c]));
-  const nameOf = (id: string | null) => (id && byId.get(id)?.name) || "Sans catégorie";
+  const nameOf = (id: string | null) => (id && byId.get(id)?.name) || "Uncategorized";
   const yearAgo = utc(y - 1, m, today.getUTCDate() + 1);
   const periods = [
-    { label: "Ce mois", from: utc(y, m), to: utc(y, m + 1), prev: [utc(y, m - 1), utc(y, m)], compare: "le mois dernier" },
-    { label: "Mois dernier", from: utc(y, m - 1), to: utc(y, m), prev: [utc(y, m - 2), utc(y, m - 1)], compare: "le mois précédent" },
-    { label: "Cette année", from: utc(y, 0), to: t + DAY, prev: [utc(y - 1, 0), yearAgo], compare: "l’an dernier à date" },
+    { label: "This month", from: utc(y, m), to: utc(y, m + 1), prev: [utc(y, m - 1), utc(y, m)], compare: "last month" },
+    { label: "Last month", from: utc(y, m - 1), to: utc(y, m), prev: [utc(y, m - 2), utc(y, m - 1)], compare: "the previous month" },
+    { label: "This year", from: utc(y, 0), to: t + DAY, prev: [utc(y - 1, 0), yearAgo], compare: "last year to date" },
   ];
   const ids = [...new Set(flows.filter((f) => f.kind === "EXPENSE").map((f) => f.categoryId))];
   const items = ids
@@ -101,7 +101,7 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
     }))
     .filter((i) => i.values.some((v) => v > 0))
     .sort((a, b) => b.values[0] - a.values[0] || b.values[2] - a.values[2]);
-  const groups = [...new Set(items.map((i) => i.group))].map((id) => ({ id, name: id === NONE ? "Sans catégorie" : nameOf(id) }));
+  const groups = [...new Set(items.map((i) => i.group))].map((id) => ({ id, name: id === NONE ? "Uncategorized" : nameOf(id) }));
 
   // Saisonnalité des dépenses : douze mois de cette année et de l'an dernier.
   const seasons = [y, y - 1].map((yy) => {
@@ -126,7 +126,7 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
   // Revenus et dépenses par mois : les douze derniers mois, le plus ancien d'abord (barres du cash-flow).
   const last12 = Array.from({ length: 12 }, (_, i) => 11 - i);
   const monthly = {
-    labels: last12.map((k) => frDate({ month: "short" }).format(utc(y, m - k))),
+    labels: last12.map((k) => dateFmt({ month: "short" }, intl).format(utc(y, m - k))),
     income: last12.map((k) => sum("INCOME", utc(y, m - k), utc(y, m - k + 1))),
     expense: last12.map((k) => sum("EXPENSE", utc(y, m - k), utc(y, m - k + 1))),
   };
@@ -136,7 +136,7 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
     flows: {
       income,
       expense,
-      months: [0, 1, 2].map((k) => frDate({ month: "long" }).format(utc(y, m - k))),
+      months: [0, 1, 2].map((k) => dateFmt({ month: "long" }, intl).format(utc(y, m - k))),
       monthIncome: income[0][30],
       monthExpense: expense[0][30],
     },

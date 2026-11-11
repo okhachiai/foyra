@@ -4,7 +4,8 @@ import { requireUser } from "@/lib/auth";
 import { parseMonth } from "@/lib/budget";
 import { chargeStatus } from "@/lib/calendar";
 import { listMonthCharges } from "@/lib/charges";
-import { formatDay, monthLabel, parseDay, todayIn } from "@/lib/ledger";
+import { dateFmt, monthLabel, parseDay, todayIn } from "@/lib/ledger";
+import { getI18n } from "@/lib/i18n-server";
 import { formatCents } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
@@ -17,11 +18,12 @@ import { Stat } from "@/components/ui/stat";
 import { SettingsNav } from "@/app/nav";
 import { PayCharge } from "./pay-form";
 
-const frDay = (d: Date) => formatDay(d).split("-").reverse().join("/");
-const STATUS = { paid: ["success", "Payée"], due: ["warning", "À payer"], late: ["danger", "En retard"] } as const;
+const STATUS = { paid: ["success", "Paid"], due: ["warning", "To pay"], late: ["danger", "Late"] } as const;
 
 export default async function ChargesPage({ searchParams }: { searchParams: Promise<{ m?: string }> }) {
   const user = await requireUser();
+  const { t, intl } = await getI18n();
+  const shortDay = (d: Date) => dateFmt({ dateStyle: "short" }, intl).format(d);
   const todayStr = todayIn(user.household.timezone);
   const today = parseDay(todayStr)!;
   const month = parseMonth((await searchParams).m) ?? parseMonth(todayStr.slice(0, 7))!;
@@ -30,7 +32,7 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
     prisma.fixedCharge.findMany({ where: { householdId: user.householdId, active: false }, orderBy: { name: "asc" } }),
   ]);
   const charges = list.map((c) => ({ ...c, status: chargeStatus(c, today) }));
-  const money = (cents: number) => formatCents(cents, user.household.currency);
+  const money = (cents: number) => formatCents(cents, user.household.currency, intl);
   const sum = (unpaidOnly = false) => charges.reduce((s, c) => s + (unpaidOnly && c.payment ? 0 : c.amount), 0);
   const late = charges.filter((c) => c.status === "late");
   const paidCount = charges.filter((c) => c.payment).length;
@@ -38,42 +40,42 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
   return (
     <>
       <PageHeader
-        eyebrow="Paramètres / Récurrences"
-        title="Charges récurrentes"
-        subtitle={`Échéances de ${monthLabel(month)}. Indicatives : rien n’est payé automatiquement.`}
+        eyebrow={`${t("Settings")} / ${t("Recurring")}`}
+        title={t("Recurring charges")}
+        subtitle={t("Payments for {month}. Indicative: nothing is paid automatically.", { month: monthLabel(month, intl) })}
         actions={
           <>
             <MonthNav path="/charges" month={month} />
-            <Link href="/charges/new" className="button"><Icon name="plus" className="size-4" />Ajouter</Link>
+            <Link href="/charges/new" className="button"><Icon name="plus" className="size-4" />{t("Add")}</Link>
           </>
         }
       />
       <SettingsNav admin={user.role === "ADMIN"} />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-3">
-        <Stat label="Dépenses récurrentes du mois" value={money(sum())} note="Montants lus dans le budget du mois" />
-        <Stat label="Reste à payer" value={money(sum(true))} tone={sum(true) > 0 ? "neg" : undefined} note={`${charges.length - paidCount} échéance${charges.length - paidCount > 1 ? "s" : ""} non payée${charges.length - paidCount > 1 ? "s" : ""}`} />
-        <Stat label="Payées" value={`${paidCount} / ${charges.length}`} tone="pos" note="Opérations réelles enregistrées" />
+        <Stat label={t("Recurring spending this month")} value={money(sum())} note={t("Amounts read from the month’s budget")} />
+        <Stat label={t("Left to pay")} value={money(sum(true))} tone={sum(true) > 0 ? "neg" : undefined} note={t(charges.length - paidCount > 1 ? "{n} unpaid payments" : "{n} unpaid payment", { n: charges.length - paidCount })} />
+        <Stat label={t("Paid")} value={`${paidCount} / ${charges.length}`} tone="pos" note={t("Actual transactions recorded")} />
       </div>
 
       {late.length > 0 && (
         <div role="alert" className="alert danger mb-4">
           <Icon name="alert" className="size-5 shrink-0" />
           <p className="m-0">
-            <b>{late.length} échéance{late.length > 1 ? "s" : ""} en retard</b> · {money(late.reduce((s, c) => s + c.amount, 0))}
+            <b>{t(late.length > 1 ? "{n} late payments" : "{n} late payment", { n: late.length })}</b> · {money(late.reduce((s, c) => s + c.amount, 0))}
             <span className="block text-label">{late.map((c) => c.name).join(", ")}</span>
           </p>
         </div>
       )}
 
       <Card>
-        <SectionHeader title="Échéances" subtitle="« Marquer payée » enregistre l’opération réelle. Montant : ligne du budget de même catégorie." />
+        <SectionHeader title={t("Payments")} subtitle={t("“Mark paid” records the actual transaction. Amount: the budget line with the same category.")} />
         {charges.length === 0 ? (
-          <EmptyState title="Aucune récurrence active pour ce mois" action={<Link href="/charges/new">Ajouter une récurrence</Link>} />
+          <EmptyState title={t("No active recurring charge for this month")} action={<Link href="/charges/new">{t("Add a recurring charge")}</Link>} />
         ) : (
           <ul className="due-list">
             {charges.map((c) => {
-              const t = c.payment?.transaction;
+              const paid = c.payment?.transaction;
               const [tone, label] = STATUS[c.status];
               return (
                 <li key={c.id} className={c.status === "late" ? "is-late" : undefined}>
@@ -83,17 +85,17 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
                       <Link href={`/charges/${c.id}`} className="block truncate font-bold text-heading no-underline hover:underline">{c.name}</Link>
                       <small className="block truncate text-label text-faint">
                         {c.category.parent ? `${c.category.parent.name} › ` : ""}{c.category.name}
-                        {c.loanId && " · crédit"}
+                        {c.loanId && ` · ${t("loan")}`}
                       </small>
                     </span>
                     <span className="flex shrink-0 flex-col items-end gap-1">
-                      {c.budgeted ? <b className="ab-num text-heading">{money(c.amount)}</b> : <small className="text-label text-faint">Absente du budget</small>}
-                      <Badge dot tone={tone}>{label}</Badge>
+                      {c.budgeted ? <b className="ab-num text-heading">{money(c.amount)}</b> : <small className="text-label text-faint">{t("Not in the budget")}</small>}
+                      <Badge dot tone={tone}>{t(label)}</Badge>
                     </span>
                   </div>
-                  {t ? (
+                  {paid ? (
                     <p className="due-meta">
-                      Payée {money(t.amount)} le {frDay(t.occurredOn)} · <Link href={`/operations/${t.id}`}>voir l’opération</Link>
+                      {t("Paid {amount} on {date}", { amount: money(paid.amount), date: shortDay(paid.occurredOn) })} · <Link href={`/transactions/${paid.id}`}>{t("see the transaction")}</Link>
                     </p>
                   ) : (
                     <div className="due-meta"><PayCharge id={c.id} month={month} amount={c.amount} due={c.due} late={c.status === "late"} /></div>
@@ -107,11 +109,11 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
 
       {inactive.length > 0 && (
         <details>
-          <summary>Récurrences désactivées ({inactive.length})</summary>
+          <summary>{t("Disabled recurring charges ({n})", { n: inactive.length })}</summary>
           <ul className="list">
             {inactive.map((c) => (
               <li key={c.id}>
-                <Link href={`/charges/${c.id}`}><span>{c.name}<small className="muted">Le {c.dueDay}</small></span><Icon name="chevron" className="size-4" /></Link>
+                <Link href={`/charges/${c.id}`}><span>{c.name}<small className="muted">{t("On the {day}", { day: c.dueDay })}</small></span><Icon name="chevron" className="size-4" /></Link>
               </li>
             ))}
           </ul>

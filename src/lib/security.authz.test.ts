@@ -37,7 +37,7 @@ async function seed(tag: string) {
   const member = (await createMember(hh, { name: `Membre ${tag}`, email: `member-${tag}@example.test`, password: "fictif-pass-1", role: "MEMBER" }))!;
   const expense = (await prisma.category.findFirst({ where: { householdId: hh, kind: "EXPENSE", parentId: null } }))!;
   const tx = await createEntry(hh, admin.id, { kind: "EXPENSE", amount: 4200, occurredOn: D("2026-03-10"), note: `secret ${tag}`, categoryId: expense.id, paidById: admin.id });
-  const charge = await createCharge(hh, { active: true, name: `Loyer ${tag}`, dueDay: 5, categoryId: expense.id, startMonth: MONTH, endMonth: null, shared: true });
+  const charge = await createCharge(hh, { active: true, name: `Rent ${tag}`, dueDay: 5, categoryId: expense.id, startMonth: MONTH, endMonth: null, shared: true });
   const loan = await createLoan(hh, { name: `Prêt ${tag}`, categoryId: expense.id, firstDue: D("2026-01-05"), principal: 1_000_000, annualRate: 0, termMonths: 10, payment: null, insurance: 0 });
   const budget = await createBudget(hh, MONTH);
   const item = (await prisma.budgetItem.findFirst({ where: { budgetId: budget.id } }))!;
@@ -84,7 +84,7 @@ describe("IDOR : un foyer A n'atteint jamais les objets du foyer B", () => {
     for (const [name, p] of attempts) {
       const e = await err(p());
       expect(e, name).not.toBeNull();
-      expect(e instanceof NotFoundError || (e as Error).message === "Membre inconnu.", `${name}: ${(e as Error)?.message}`).toBe(true);
+      expect(e instanceof NotFoundError || (e as Error).message === "Unknown member.", `${name}: ${(e as Error)?.message}`).toBe(true);
     }
     // État de B inchangé.
     expect((await prisma.transaction.findUnique({ where: { id: B.tx.id } }))?.amount).toBe(4200);
@@ -106,7 +106,7 @@ describe("IDOR : un foyer A n'atteint jamais les objets du foyer B", () => {
   it("un fichier importé dans A n'écrit que dans A (rapprochement par nom/e-mail du foyer)", async () => {
     const file = await exportMonth(B.hh, MONTH);
     const e = await err(importMonth(A.hh, file));
-    expect((e as Error).message).toMatch(/introuvable/); // membres de B inconnus dans A
+    expect((e as Error).message).toMatch(/not found/); // membres de B inconnus dans A
     expect(await prisma.transaction.count({ where: { householdId: B.hh } })).toBe(1);
   });
 });
@@ -162,7 +162,7 @@ describe("FOY-004 / FOY-005 : l'import refuse ce que la saisie refuse (LedgerErr
       categories: [{ kind: "INCOME", name: "Salaire", parent: null, fixed: false, savings: false }],
       charges: [{ kind: "EXPENSE", name: "x", category: 0, active: true, dueDay: 1, startMonth: "2026-03", endMonth: null, shared: true, loan: null }],
     });
-    expect(() => parseMonthFile(raw)).toThrow(/recette/);
+    expect(() => parseMonthFile(raw)).toThrow(/income category/);
   });
 
   it("remboursement anticipé supérieur au capital restant refusé, rien n'est écrit", async () => {
@@ -171,7 +171,7 @@ describe("FOY-004 / FOY-005 : l'import refuse ce que la saisie refuse (LedgerErr
     file.transactions.push({ kind: "EXPENSE", amount: 2_000_000, occurredOn: "2026-03-20", note: null, category: null, shared: true, paidBy: 0, createdBy: 0, payment: null, prepayment: { charge: ci, mode: "REDUCE_TERM" } });
     const e = (await err(importMonth(A.hh, parseMonthFile(JSON.stringify(file))))) as Error;
     expect(e).toBeInstanceOf(LedgerError);
-    expect(e.message).toMatch(/capital restant/);
+    expect(e.message).toMatch(/principal still owed/);
     expect(await prisma.loanPrepayment.count({ where: { loanId: A.loan.id } })).toBe(0);
     expect(await prisma.transaction.count({ where: { id: A.tx.id } })).toBe(1); // rollback
   });
@@ -198,7 +198,7 @@ describe("FOY-002 : URL du modèle local limitée à LLM_ALLOWED_HOSTS", () => {
     fd.set("localLlmModel", "m");
     fd.set("intent", "test");
     const res = await updateLlmAction({}, fd);
-    expect(res?.fields?.localLlmUrl).toMatch(/non autorisé/);
+    expect(res?.fields?.localLlmUrl).toMatch(/not allowed/);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(localHostAllowed("http://host.docker.internal:11434")).toBe(true);
     expect(localHostAllowed("http://host.docker.internal:11435")).toBe(false);

@@ -145,7 +145,7 @@ export function setupToken() {
   if (process.env.SETUP_TOKEN) return process.env.SETUP_TOKEN;
   if (!g.setupToken) {
     g.setupToken = randomBytes(16).toString("hex");
-    console.log(`Jeton d'installation (/setup) : ${g.setupToken}`);
+    console.log(`Setup token (/setup): ${g.setupToken}`);
   }
   return g.setupToken;
 }
@@ -189,7 +189,7 @@ export async function createMember(householdId: string, input: { name: string; e
   }
 }
 
-const LAST_ADMIN = "Le foyer doit garder au moins un admin actif.";
+const LAST_ADMIN = "The household must keep at least one active admin.";
 
 /**
  * Change le rôle et/ou l'état actif d'un utilisateur du foyer, sans jamais laisser zéro admin actif.
@@ -204,7 +204,7 @@ async function updateUser(householdId: string, actorId: string, userId: string, 
     await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} AND "householdId" = ${householdId} FOR UPDATE`;
     const target = await tx.user.findFirst({ where: { id: userId, householdId } });
     if (!target) throw new NotFoundError();
-    if (change.disabled && userId === actorId) throw new LedgerError("Vous ne pouvez pas désactiver votre propre compte.");
+    if (change.disabled && userId === actorId) throw new LedgerError("You cannot disable your own account.");
     const role = change.role ?? target.role;
     const disabled = change.disabled ?? target.disabledAt !== null;
     const losesAdmin = admins.some((a) => a.id === userId) && (role !== "ADMIN" || disabled);
@@ -239,7 +239,7 @@ export async function updateDisplayName(userId: string, name: string) {
 /** Change son mot de passe (actuel exigé) ; supprime ses autres sessions, garde celle du cookie courant. */
 export async function changePassword(userId: string, current: string, next: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  if (!(await verifyPassword(user.passwordHash, current))) throw new LedgerError("Mot de passe actuel incorrect.", "current");
+  if (!(await verifyPassword(user.passwordHash, current))) throw new LedgerError("Incorrect current password.", "current");
   const token = (await cookies()).get(SESSION_COOKIE)?.value ?? "";
   const passwordHash = await hashPassword(next);
   await prisma.$transaction([

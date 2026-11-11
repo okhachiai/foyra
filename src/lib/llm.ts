@@ -30,15 +30,15 @@ export function openSecret(value: string | null) {
     d.setAuthTag(raw.subarray(12, 28));
     return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString("utf8");
   } catch {
-    throw new LlmError("Clé API illisible : LLM_KEY_SECRET absent ou modifié. Saisissez à nouveau la clé dans Paramètres → Rapport LLM.");
+    throw new LlmError("Unreadable API key: LLM_KEY_SECRET missing or changed. Enter the key again in Settings → AI.");
   }
 }
 
-const EMPTY = "Fournisseur LLM : réponse vide", TRUNCATED = "Fournisseur LLM : réponse tronquée.";
+const EMPTY = "LLM provider: empty response", TRUNCATED = "LLM provider: truncated response.";
 
 type Messages = { system: string; user: string; retry?: { previous: string; error: string } };
 
-export const PROVIDER_LABELS: Record<LlmProvider, string> = { CLAUDE: "Claude (Anthropic)", LOCAL: "Modèle local" };
+export const PROVIDER_LABELS: Record<LlmProvider, string> = { CLAUDE: "Claude (Anthropic)", LOCAL: "Local model" };
 
 /** Réglages LLM du foyer, saisis dans Paramètres. */
 export type LlmConfig = Pick<Household, "llmProvider" | "claudeApiKey" | "claudeModel" | "localLlmUrl" | "localLlmModel" | "localLlmApiKey">;
@@ -64,7 +64,7 @@ function turns({ user, retry }: Messages) {
   const m = [{ role: "user", content: user }];
   if (retry) {
     m.push({ role: "assistant", content: retry.previous });
-    m.push({ role: "user", content: `Réponse refusée : ${retry.error}. Corrige et renvoie le JSON complet.` });
+    m.push({ role: "user", content: `Response rejected: ${retry.error}. Fix it and send the complete JSON again.` });
   }
   return m;
 }
@@ -72,27 +72,27 @@ function turns({ user, retry }: Messages) {
 /** Message lisible pour un statut HTTP du fournisseur, complété du détail renvoyé s'il existe. */
 function httpError(status: number, detail: string) {
   const why =
-    status === 401 ? "clé API invalide ou absente (401)" :
-    status === 403 ? "accès refusé : clé sans droit sur ce modèle ou compte restreint (403)" :
-    status === 404 ? "introuvable (404) : vérifier le nom du modèle et l'URL (sans /v1)" :
-    status === 400 ? "requête refusée (400) : modèle ou paramètres non acceptés" :
-    status === 402 || status === 529 ? `crédit épuisé ou service surchargé (${status})` :
-    status === 429 ? "trop de requêtes ou quota atteint (429), réessayer plus tard" :
-    status >= 500 ? `erreur du serveur du fournisseur (${status}), réessayer plus tard` :
-    `erreur ${status}`;
-  return new LlmError(`Fournisseur LLM : ${why}${detail ? ` — ${detail.slice(0, 300)}` : ""}`);
+    status === 401 ? "invalid or missing API key (401)" :
+    status === 403 ? "access denied: key has no access to this model or the account is restricted (403)" :
+    status === 404 ? "not found (404): check the model name and the URL (without /v1)" :
+    status === 400 ? "request rejected (400): model or parameters not accepted" :
+    status === 402 || status === 529 ? `credit exhausted or service overloaded (${status})` :
+    status === 429 ? "too many requests or quota reached (429), try again later" :
+    status >= 500 ? `provider server error (${status}), try again later` :
+    `error ${status}`;
+  return new LlmError(`LLM provider: ${why}${detail ? ` — ${detail.slice(0, 300)}` : ""}`);
 }
 
 /** Cause d'un échec réseau (fetch lève TypeError, la cause porte le code système). */
 function networkError(e: unknown, url: string) {
   const err = e as { name?: string; cause?: { code?: string } };
-  if (err?.name === "TimeoutError") return new LlmError("Fournisseur LLM : délai dépassé, le serveur ne répond pas.");
+  if (err?.name === "TimeoutError") return new LlmError("LLM provider: timed out, the server is not responding.");
   const host = URL.canParse(url) ? new URL(url).host : url;
   const code = err?.cause?.code;
-  if (code === "ECONNREFUSED") return new LlmError(`Fournisseur LLM injoignable : connexion refusée sur ${host} (serveur arrêté ou mauvais port ?)`);
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return new LlmError(`Fournisseur LLM injoignable : adresse ${host} inconnue (vérifier l'URL).`);
-  if (code?.startsWith("ERR_TLS") || code?.includes("CERT")) return new LlmError(`Fournisseur LLM injoignable : certificat TLS refusé pour ${host}.`);
-  return new LlmError(`Fournisseur LLM injoignable${code ? ` (${code})` : ""} : ${host}`);
+  if (code === "ECONNREFUSED") return new LlmError(`LLM provider unreachable: connection refused on ${host} (server stopped or wrong port?)`);
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return new LlmError(`LLM provider unreachable: unknown address ${host} (check the URL).`);
+  if (code?.startsWith("ERR_TLS") || code?.includes("CERT")) return new LlmError(`LLM provider unreachable: TLS certificate rejected for ${host}.`);
+  return new LlmError(`LLM provider unreachable${code ? ` (${code})` : ""}: ${host}`);
 }
 
 async function post(url: string, headers: Record<string, string>, body: unknown, timeout = 600_000) {
@@ -117,7 +117,7 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
   try {
     return await res.json();
   } catch {
-    throw new LlmError("Fournisseur LLM : réponse illisible (pas du JSON). L'URL pointe-t-elle vers une API compatible OpenAI ?");
+    throw new LlmError("LLM provider: unreadable response (not JSON). Does the URL point to an OpenAI-compatible API?");
   }
 }
 
@@ -133,7 +133,7 @@ export function localHostAllowed(url: string) {
 }
 const localUrl = (c: LlmConfig) => {
   const base = (c.localLlmUrl ?? "").replace(/\/+$/, "");
-  if (!localHostAllowed(base)) throw new LlmError("Modèle local : hôte non autorisé (LLM_ALLOWED_HOSTS).");
+  if (!localHostAllowed(base)) throw new LlmError("Local model: host not allowed (LLM_ALLOWED_HOSTS).");
   return `${base}/v1/chat/completions`;
 };
 const localHeaders = (c: LlmConfig): Record<string, string> => (c.localLlmApiKey ? { Authorization: `Bearer ${openSecret(c.localLlmApiKey)}` } : {});
@@ -162,7 +162,7 @@ export async function complete(provider: LlmProvider, c: LlmConfig, messages: Me
         max_tokens: 16000,
         system: messages.system,
         messages: turns(messages),
-        tools: [{ name: "rapport", description: "Rapport budgétaire", input_schema: schema }],
+        tools: [{ name: "rapport", description: "Budget report", input_schema: schema }],
         tool_choice: { type: "tool", name: "rapport" },
       },
     );
@@ -180,7 +180,7 @@ export async function complete(provider: LlmProvider, c: LlmConfig, messages: Me
       // json_schema : accepté par OpenAI, LM Studio, Ollama, vLLM, llama.cpp (LM Studio refuse json_object).
       response_format: { type: "json_schema", json_schema: { name: "rapport", schema } },
       messages: [
-        { role: "system", content: `${messages.system}\n\nRéponds uniquement par un objet JSON conforme à ce schéma :\n${JSON.stringify(schema)}` },
+        { role: "system", content: `${messages.system}\n\nReply only with a JSON object matching this schema:\n${JSON.stringify(schema)}` },
         ...turns(messages),
       ],
     },

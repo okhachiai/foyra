@@ -27,9 +27,9 @@ describe("catégories", () => {
   it("Setup : modèles de la spécification, ordonnés", async () => {
     const list = await listCategories(hh);
     expect(list.filter((c) => c.kind === "EXPENSE").map((c) => c.name)).toEqual(DEFAULT_CATEGORIES.EXPENSE.map(([n]) => n));
-    expect(list.find((c) => c.name === "Revenus")!.children.map((c) => c.name)).toEqual(["Salaire 1", "Salaire 2", "Autres revenus"]);
-    expect(list.find((c) => c.name === "Famille au Maroc")!.children.map((c) => c.name)).toEqual(["Envois réguliers", "Frais de transfert"]);
-    expect(list.find((c) => c.name === "Factures")!.children.every((c) => c.kind === "EXPENSE")).toBe(true);
+    expect(list.find((c) => c.name === "Income")!.children.map((c) => c.name)).toEqual(["Salary 1", "Salary 2", "Other income"]);
+    expect(list.find((c) => c.name === "Family in Morocco")!.children.map((c) => c.name)).toEqual(["Regular transfers", "Transfer fees"]);
+    expect(list.find((c) => c.name === "Bills")!.children.every((c) => c.kind === "EXPENSE")).toBe(true);
     expect(list.filter((c) => c.kind === "EXPENSE" && c.fixed).map((c) => c.name)).toEqual([...FIXED_DEFAULTS]);
     const all = await prisma.category.findMany({ where: { householdId: hh } });
     expect(all.every((c) => c.enabled && c.recurring && c.isTemplate && !c.archivedAt)).toBe(true);
@@ -42,14 +42,14 @@ describe("catégories", () => {
   });
 
   it("Doublon insensible à la casse au même niveau → erreur sur name ; même nom sous un autre parent accepté", async () => {
-    await expect(cat("logement")).rejects.toMatchObject({ field: "name", message: "Ce nom existe déjà." });
-    await expect(cat("Pharmacie", "EXPENSE", await byName("Factures"))).resolves.toBeTruthy();
+    await expect(cat("housing")).rejects.toMatchObject({ field: "name", message: "This name already exists." });
+    await expect(cat("Pharmacy", "EXPENSE", await byName("Bills"))).resolves.toBeTruthy();
     const vacances = await cat("Vacances");
     await expect(updateCategory(hh, vacances.id, { ...base, name: "TRANSPORT" })).rejects.toMatchObject({ field: "name" });
   });
 
   it("Sous-catégorie : sens hérité du parent ; pas de 3e niveau ni de sens différent (contraintes SQL)", async () => {
-    const divers = await byName("Divers et imprévus");
+    const divers = await byName("Miscellaneous and unexpected");
     const sub = await cat("Cadeaux", "INCOME", divers);
     expect(sub.kind).toBe("EXPENSE");
     await expect(cat("Anniversaires", "EXPENSE", sub.id)).rejects.toMatchObject({ field: "parentId" });
@@ -57,33 +57,33 @@ describe("catégories", () => {
     // Garanties en base même sans passer par l'application.
     await expect(prisma.category.create({ data: { householdId: hh, kind: "EXPENSE", name: "Profond", parentId: sub.id } })).rejects.toThrow();
     await expect(prisma.category.create({ data: { householdId: hh, kind: "INCOME", name: "Sens", parentId: divers } })).rejects.toThrow();
-    await expect(prisma.category.update({ where: { id: divers }, data: { parentId: await byName("Logement") } })).rejects.toThrow(); // parent avec enfants
+    await expect(prisma.category.update({ where: { id: divers }, data: { parentId: await byName("Housing") } })).rejects.toThrow(); // parent avec enfants
   });
 
   it("Modifier : inclusion, reprise, modèle, ordre", async () => {
-    const id = await byName("Divers et imprévus");
+    const id = await byName("Miscellaneous and unexpected");
     await updateCategory(hh, id, { name: "Divers", enabled: false, recurring: false, isTemplate: false, sortOrder: 99 });
     expect(await getCategory(hh, id)).toMatchObject({ name: "Divers", enabled: false, recurring: false, isTemplate: false, sortOrder: 99 });
   });
 
   it("Rattacher : catégorie de revenu refusée sur une dépense", async () => {
-    const marche = await byName("Marché");
+    const marche = await byName("Market");
     const t = await expense(marche);
     expect(t.categoryId).toBe(marche);
-    await expect(expense(await byName("Salaire 1"))).rejects.toMatchObject({ field: "categoryId", message: "Catégorie incompatible avec le type d’opération." });
+    await expect(expense(await byName("Salary 1"))).rejects.toMatchObject({ field: "categoryId", message: "Category incompatible with the transaction type." });
     await expect(updateEntry(hh, t.id, { paidById: user, kind: "INCOME", amount: 100, occurredOn: day, note: null, categoryId: marche })).rejects.toBeInstanceOf(LedgerError);
   });
 
   it("Archiver : historique conservé, nouvelles saisies refusées, branche archivée, réactivation", async () => {
-    const alimentation = await byName("Alimentation");
-    const marche = await byName("Marché");
+    const alimentation = await byName("Food");
+    const marche = await byName("Market");
     const t = await expense(marche);
     await setCategoryArchived(hh, alimentation, true);
     expect((await prisma.transaction.findUniqueOrThrow({ where: { id: t.id } })).categoryId).toBe(marche);
-    expect((await listCategories(hh)).some((x) => x.name === "Alimentation")).toBe(false);
-    await expect(expense(marche)).rejects.toMatchObject({ field: "categoryId", message: "Cette catégorie est archivée." });
+    expect((await listCategories(hh)).some((x) => x.name === "Food")).toBe(false);
+    await expect(expense(marche)).rejects.toMatchObject({ field: "categoryId", message: "This category is archived." });
     await updateEntry(hh, t.id, { paidById: user, kind: "EXPENSE", amount: 100, occurredOn: day, note: "ok", categoryId: marche }); // inchangée : acceptée
-    await expect(setCategoryArchived(hh, marche, false)).rejects.toThrow("Réactivez d’abord la catégorie parente.");
+    await expect(setCategoryArchived(hh, marche, false)).rejects.toThrow("Reactivate the parent category first.");
     await setCategoryArchived(hh, alimentation, false);
     expect((await getCategory(hh, alimentation)).archivedAt).toBeNull();
   });
@@ -93,18 +93,18 @@ describe("catégories", () => {
     await expect(updateCategory(hh, "autre", { ...base, name: "X" })).rejects.toBeInstanceOf(NotFoundError);
     await expect(setCategoryArchived(hh, "autre", true)).rejects.toBeInstanceOf(NotFoundError);
     await expect(expense("autre")).rejects.toBeInstanceOf(NotFoundError);
-    const loyer = await byName("Loyer");
+    const loyer = await byName("Rent");
     await expect(getCategory("autre-foyer", loyer)).rejects.toBeInstanceOf(NotFoundError);
     await expect(setCategoryArchived("autre-foyer", loyer, true)).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("Modèles manquants : ajoutés sans doublon ni modification des existantes, double clic sûr", async () => {
     const total = await prisma.category.count();
-    await prisma.category.updateMany({ where: { name: "Loyer" }, data: { sortOrder: 42 } });
-    await prisma.category.deleteMany({ where: { name: { in: ["Streaming", "Logiciels"] } } });
+    await prisma.category.updateMany({ where: { name: "Rent" }, data: { sortOrder: 42 } });
+    await prisma.category.deleteMany({ where: { name: { in: ["Streaming", "Software"] } } });
     await Promise.all([addDefaultCategories(hh), addDefaultCategories(hh)]);
     expect(await prisma.category.count()).toBe(total);
-    expect((await prisma.category.findFirstOrThrow({ where: { name: "Loyer" } })).sortOrder).toBe(42);
+    expect((await prisma.category.findFirstOrThrow({ where: { name: "Rent" } })).sortOrder).toBe(42);
   });
 
   it("Supprimer : parent et sous-catégories partent, l'opération reste sans catégorie ; refusé si une récurrence l'utilise", async () => {
@@ -114,9 +114,9 @@ describe("catégories", () => {
     expect(await prisma.category.count({ where: { id: { in: [parent.id, sub.id] } } })).toBe(0);
     expect((await prisma.transaction.findUniqueOrThrow({ where: { id: t.id } })).categoryId).toBeNull();
 
-    const loyer = await byName("Loyer");
-    await prisma.fixedCharge.create({ data: { householdId: hh, name: "Loyer", dueDay: 1, categoryId: loyer, startMonth: parseDay("2026-10-01")! } });
-    await expect(deleteCategory(hh, await byName("Logement"))).rejects.toThrow(LedgerError);
+    const loyer = await byName("Rent");
+    await prisma.fixedCharge.create({ data: { householdId: hh, name: "Rent", dueDay: 1, categoryId: loyer, startMonth: parseDay("2026-10-01")! } });
+    await expect(deleteCategory(hh, await byName("Housing"))).rejects.toThrow(LedgerError);
     await expect(deleteCategory(hh, "absent")).rejects.toThrow(NotFoundError);
   });
 });

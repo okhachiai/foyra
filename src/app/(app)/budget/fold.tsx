@@ -4,8 +4,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Card, CardTitle } from "@/components/ui/card";
 
 /**
- * <details> dont l'état ouvert est mémorisé dans le navigateur (sous `storageKey`), fermé par défaut :
- * il survit aux changements de mois et aux enregistrements, qui recréent le formulaire.
+ * <details> whose open state is remembered in the browser (under `storageKey`), closed by default:
+ * it survives month changes and saves, which re-create the form.
  */
 function Remembered({ storageKey, className, summary, children }: { storageKey: string; className?: string; summary: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -34,20 +34,20 @@ function Remembered({ storageKey, className, summary, children }: { storageKey: 
   );
 }
 
-/** Carte pliable (mémorisée par titre). */
-export function Fold({ title, aside, className, children }: { title: string; aside?: ReactNode; className?: string; children: ReactNode }) {
+/** Collapsible card (remembered by `id`, else by title). */
+export function Fold({ id, title, aside, className, children }: { id?: string; title: string; aside?: ReactNode; className?: string; children: ReactNode }) {
   return (
     <Card className={className}>
       <Remembered
-        storageKey={`budget-fold:${title}`}
+        storageKey={`budget-fold:${id ?? title}`}
         className="group mt-0"
         summary={
           <summary className="m-0 flex list-none flex-wrap items-start justify-between gap-2 [&::-webkit-details-marker]:hidden">
             <CardTitle>
-              <span aria-hidden className="mr-2 inline-block transition-transform group-open:rotate-90">›</span>
+              <span aria-hidden className="me-2 inline-block transition-transform group-open:rotate-90">›</span>
               {title}
             </CardTitle>
-            {/* Fragment : `aside` vient du serveur (parfois en référence différée) ; seul enfant, il échappe au faux avertissement « key » de React. */}
+            {/* Fragment: `aside` comes from the server (sometimes as a deferred reference); as an only child it avoids React's spurious "key" warning. */}
             <>{aside}</>
           </summary>
         }
@@ -59,18 +59,18 @@ export function Fold({ title, aside, className, children }: { title: string; asi
 }
 
 /**
- * Sous-catégories d'une ligne, repliables (mémorisées par `id` : catégorie ou libellé, stables d'un mois à l'autre).
- * `aside` (cases à cocher) est posé sur la ligne du <summary> mais hors de lui : un clic dans un <summary> replie le bloc.
+ * A line's subcategories, collapsible (remembered by `id`: category or label, stable from one month to the next).
+ * `aside` (checkboxes) sits on the <summary> row but outside it: a click inside a <summary> collapses the block.
  */
 export function SubFold({ id, summary, aside, children }: { id: string; summary: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
     <div className="relative">
-      {aside && <div className="absolute top-0 right-0 flex h-8 items-center">{aside}</div>}
+      {aside && <div className="absolute top-0 end-0 flex h-8 items-center">{aside}</div>}
       <Remembered
         storageKey={`budget-sub:${id}`}
         className="group/sub mt-0 pb-1"
         summary={
-          <summary className="flex min-h-8 w-fit cursor-pointer list-none items-center gap-1.5 pl-9 text-label text-muted hover:text-heading [&::-webkit-details-marker]:hidden">
+          <summary className="flex min-h-8 w-fit cursor-pointer list-none items-center gap-1.5 ps-9 text-label text-muted hover:text-heading [&::-webkit-details-marker]:hidden">
             <span aria-hidden className="inline-block transition-transform group-open/sub:rotate-90">›</span>
             {summary}
           </summary>

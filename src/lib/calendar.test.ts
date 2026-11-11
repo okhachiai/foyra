@@ -13,11 +13,11 @@ const nov = parseMonth("2026-11")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(hh, { active: true, name: "Rent", dueDay: 5, categoryId: await byName("Rent"), startMonth: nov, endMonth: null, shared: true, ...over });
 /** Budget du mois : lignes de dépense (libellé = nom de la récurrence) dans la catégorie Loyer. */
 const plan = async (lines: [string, number][], month = nov) => {
   const b = await createBudget(hh, month);
-  const categoryId = await byName("Loyer");
+  const categoryId = await byName("Rent");
   await prisma.budgetItem.deleteMany({ where: { budgetId: b.id } });
   await prisma.budgetItem.createMany({ data: lines.map(([label, amount]) => ({ householdId: hh, budgetId: b.id, kind: "EXPENSE" as const, label, amount, categoryId })) });
 };
@@ -43,7 +43,7 @@ describe("calendrier", () => {
     const p = await payCharge(hh, user, loyer.id, nov, 95000, day("2026-11-05"));
     const cal = await getCalendar(hh, nov, day("2026-11-10"));
     expect(summary(cal)).toEqual([
-      { day: "2026-11-05", charges: ["Loyer:paid"], transactions: [] },
+      { day: "2026-11-05", charges: ["Rent:paid"], transactions: [] },
       { day: "2026-11-08", charges: ["Assurance:late"], transactions: [] },
       { day: "2026-11-20", charges: ["Internet:due"], transactions: [] },
     ]);
@@ -52,7 +52,7 @@ describe("calendrier", () => {
 
   it("Crédit : échéance au 05/11, montant = échéance du mois", async () => {
     await createLoan(hh, {
-      name: "Maison", categoryId: await byName("Loyer"), firstDue: day("2026-11-05"),
+      name: "Maison", categoryId: await byName("Rent"), firstDue: day("2026-11-05"),
       principal: 10_000_000, annualRate: 1200, termMonths: 240, payment: null, insurance: 1000,
     });
     const cal = await getCalendar(hh, nov, day("2026-11-01"));
@@ -66,22 +66,22 @@ describe("calendrier", () => {
     expect(cal.days.map((d) => formatDay(d.day))).toEqual(["2027-02-28"]);
   });
 
-  it("Opérations : dépenses du jour ; dépense du Loyer non répétée", async () => {
+  it("Opérations : dépenses du jour ; dépense du Rent non répétée", async () => {
     const loyer = await charge();
     await payCharge(hh, user, loyer.id, nov, 95000, day("2026-11-12"));
     await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 4000, occurredOn: day("2026-11-12"), note: "Courses", categoryId: null });
-    await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 10000, occurredOn: day("2026-11-12"), note: "Pharmacie", categoryId: null });
+    await createEntry(hh, user, { paidById: user, kind: "EXPENSE", amount: 10000, occurredOn: day("2026-11-12"), note: "Pharmacy", categoryId: null });
     const cal = await getCalendar(hh, nov, day("2026-11-15"));
     const d12 = cal.days.find((d) => formatDay(d.day) === "2026-11-12")!;
-    expect(d12.transactions.map((t) => `${t.note}:${t.amount}`)).toEqual(["Courses:4000", "Pharmacie:10000"]);
+    expect(d12.transactions.map((t) => `${t.note}:${t.amount}`)).toEqual(["Courses:4000", "Pharmacy:10000"]);
     expect(d12.transactions[0].paidBy.name).toBe("Admin");
   });
 
   it("À venir : aujourd’hui 28/11 → retard du mois + échéance du 02/12, quel que soit le mois consulté", async () => {
     await charge({ name: "Assurance", dueDay: 8 });
-    await charge({ name: "Gaz", dueDay: 2 });
+    await charge({ name: "Gas", dueDay: 2 });
     const today = day("2026-11-28");
-    const expected = ["Gaz:2026-11-02:late", "Assurance:2026-11-08:late", "Gaz:2026-12-02:due"];
+    const expected = ["Gas:2026-11-02:late", "Assurance:2026-11-08:late", "Gas:2026-12-02:due"];
     for (const m of ["2026-11", "2026-12", "2026-09"]) {
       const cal = await getCalendar(hh, parseMonth(m)!, today);
       expect(cal.upcoming.map((c) => `${c.name}:${formatDay(c.due)}:${c.status}`)).toEqual(expected);
@@ -92,7 +92,7 @@ describe("calendrier", () => {
     const c = await charge();
     await expect(payCharge(hh, user, c.id, nov, 95000, day("2026-12-01"))).rejects.toMatchObject({ field: "occurredOn" });
     await payCharge(hh, user, c.id, nov, 95000, day("2026-11-05"));
-    await expect(payCharge(hh, user, c.id, nov, 95000, day("2026-11-05"))).rejects.toThrow("déjà payée");
+    await expect(payCharge(hh, user, c.id, nov, 95000, day("2026-11-05"))).rejects.toThrow("already paid");
     expect((await getCalendar(hh, nov, day("2026-11-10"))).days[0].charges[0].status).toBe("paid");
   });
 

@@ -15,24 +15,24 @@ export function parseForecast(raw: string): number | undefined {
 
 /** Modèles de catégories : [nom, sous-catégories]. Inclus, repris le mois suivant. */
 export const DEFAULT_CATEGORIES: Record<CategoryKind, [string, string[]][]> = {
-  INCOME: [["Revenus", ["Salaire 1", "Salaire 2", "Autres revenus"]]],
+  INCOME: [["Income", ["Salary 1", "Salary 2", "Other income"]]],
   EXPENSE: [
-    ["Logement", ["Loyer", "Charges locatives"]],
-    ["Crédits", ["Mensualités de crédits"]],
-    ["Assurances", ["Habitation", "Voiture", "Mutuelle"]],
-    ["Factures", ["Électricité", "Gaz", "Eau", "Internet", "Téléphones"]],
-    ["Abonnements", ["Streaming", "Logiciels", "Autres"]],
-    ["École et enfants", ["Cantine", "Fournitures", "Activités", "Couches et soins"]],
-    ["Famille au Maroc", ["Envois réguliers", "Frais de transfert"]],
-    ["Alimentation", ["Marché", "Supermarché", "Autres courses"]],
-    ["Transport", ["Carburant", "Transports en commun"]],
-    ["Santé et hygiène", ["Pharmacie", "Hygiène familiale"]],
-    ["Divers et imprévus", []],
+    ["Housing", ["Rent", "Service charges"]],
+    ["Loans", ["Loan repayments"]],
+    ["Insurance", ["Home", "Car", "Health insurance"]],
+    ["Bills", ["Electricity", "Gas", "Water", "Internet", "Phones"]],
+    ["Subscriptions", ["Streaming", "Software", "Other"]],
+    ["School and children", ["School meals", "Supplies", "Activities", "Nappies and care"]],
+    ["Family in Morocco", ["Regular transfers", "Transfer fees"]],
+    ["Food", ["Market", "Supermarket", "Other groceries"]],
+    ["Transport", ["Fuel", "Public transport"]],
+    ["Health and hygiene", ["Pharmacy", "Family hygiene"]],
+    ["Miscellaneous and unexpected", []],
   ],
 };
 
 /** Modèles de dépenses classés en charges fixes ; les autres sont variables. */
-export const FIXED_DEFAULTS = new Set(["Logement", "Crédits", "Assurances", "Factures", "Abonnements", "Famille au Maroc"]);
+export const FIXED_DEFAULTS = new Set(["Housing", "Loans", "Insurance", "Bills", "Subscriptions", "Family in Morocco"]);
 
 /** Crée les modèles absents (nom insensible à la casse, par parent) ; les catégories existantes ne sont pas modifiées. */
 export async function createDefaultCategories(tx: Db, householdId: string) {
@@ -61,7 +61,7 @@ async function uniqueName<T>(fn: () => Promise<T>) {
   try {
     return await fn();
   } catch (e) {
-    if (isCode(e, "P2002")) throw new LedgerError("Ce nom existe déjà.", "name");
+    if (isCode(e, "P2002")) throw new LedgerError("This name already exists.", "name");
     throw e;
   }
 }
@@ -94,8 +94,8 @@ export function createCategory(householdId: string, input: CategoryInput) {
         const [parent] = await tx.$queryRaw<{ kind: CategoryKind; parentId: string | null; archivedAt: Date | null }[]>`
           SELECT "kind", "parentId", "archivedAt" FROM "Category" WHERE "id" = ${input.parentId} AND "householdId" = ${householdId} FOR SHARE`;
         if (!parent) throw new NotFoundError();
-        if (parent.parentId) throw new LedgerError("Une sous-catégorie ne peut pas avoir de sous-catégorie.", "parentId");
-        if (parent.archivedAt) throw new LedgerError("Cette catégorie est archivée.", "parentId");
+        if (parent.parentId) throw new LedgerError("A subcategory cannot have a subcategory.", "parentId");
+        if (parent.archivedAt) throw new LedgerError("This category is archived.", "parentId");
         kind = parent.kind;
       }
       return tx.category.create({ data: { ...input, kind, householdId } });
@@ -117,7 +117,7 @@ export async function setCategoryArchived(householdId: string, id: string, archi
   await prisma.$transaction(async (tx) => {
     const c = await tx.category.findFirst({ where: { id, householdId }, include: { parent: true } });
     if (!c) throw new NotFoundError();
-    if (!archived && c.parent?.archivedAt) throw new LedgerError("Réactivez d’abord la catégorie parente.");
+    if (!archived && c.parent?.archivedAt) throw new LedgerError("Reactivate the parent category first.");
     const archivedAt = archived ? new Date() : null;
     await tx.category.updateMany({ where: { householdId, OR: [{ id }, ...(archived ? [{ parentId: id }] : [])] }, data: { archivedAt } });
   });
@@ -144,4 +144,4 @@ export async function deleteCategory(householdId: string, id: string) {
   }
 }
 
-const IN_USE = "Une récurrence utilise cette catégorie : modifiez-la ou supprimez-la d’abord, ou archivez la catégorie.";
+const IN_USE = "A recurring charge uses this category: edit or delete it first, or archive the category.";

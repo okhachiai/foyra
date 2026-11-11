@@ -3,55 +3,59 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icon, type IconName } from "@/components/ui/icon";
+import type { T } from "@/lib/i18n";
+import { useI18n } from "./i18n";
 
 type Entry = readonly [href: string, label: string, icon: IconName];
 
-/** Menu principal, par groupes (titres discrets dans la barre latérale). */
+/** Main menu, by group (discreet titles in the sidebar). Labels are English source text, translated on render. */
 const GROUPS = [
-  ["Suivi", [["/tableau-de-bord", "Tableau de bord", "dashboard"], ["/budget", "Budget", "wallet"], ["/operations", "Opérations", "transfers"]]],
-  ["Patrimoine", [["/epargne", "Épargne", "savings"], ["/credits", "Crédits", "bank"]]],
-  ["Planification", [["/calendrier", "Calendrier", "calendar"], ["/rapports", "Rapports", "reports"]]],
+  ["Tracking", [["/dashboard", "Dashboard", "dashboard"], ["/budget", "Budget", "wallet"], ["/transactions", "Transactions", "transfers"]]],
+  ["Assets", [["/savings", "Savings", "savings"], ["/loans", "Loans", "bank"]]],
+  ["Planning", [["/calendar", "Calendar", "calendar"], ["/reports", "Reports", "reports"]]],
 ] as const satisfies readonly (readonly [string, readonly Entry[]])[];
 const MAIN: readonly Entry[] = GROUPS.flatMap(([, items]): readonly Entry[] => items);
 
-/** Barre inférieure mobile : destinations principales ; le reste passe dans « Plus ». */
-const TABS = ["/tableau-de-bord", "/budget", "/operations", "/calendrier"];
-const SHORT: Record<string, string> = { "/tableau-de-bord": "Accueil" };
+/** Mobile bottom bar: main destinations; the rest goes into "More". */
+const TABS = ["/dashboard", "/budget", "/transactions", "/calendar"];
+const SHORT: Record<string, string> = { "/dashboard": "Home" };
 
-/** Pages rattachées à « Paramètres » ; `admin` : réservée aux administrateurs. */
+/** Pages under "Settings"; `admin`: admins only. */
 const SETTINGS = [
-  ["/parametres", "Général", false],
-  ["/categories", "Catégories", false],
-  ["/charges", "Récurrences", false],
-  ["/members", "Membres", true],
-  ["/parametres/ia", "IA", true],
-  ["/profil", "Sécurité", false],
+  ["/settings", "General", false],
+  ["/categories", "Categories", false],
+  ["/charges", "Recurring", false],
+  ["/members", "Members", true],
+  ["/settings/ai", "AI", true],
+  ["/profile", "Security", false],
 ] as const;
 
 const isActive = (path: string, href: string) => path === href || path.startsWith(href + "/");
 const inSettings = (path: string) => SETTINGS.some(([href]) => isActive(path, href));
-const dueLabel = (n: number) => `${n} échéance${n > 1 ? "s" : ""} à payer`;
+const dueLabel = (t: T, n: number) => t(n > 1 ? "{n} payments due" : "{n} payment due", { n });
 
 function Item({ href, label, icon, active, count, onClick }: { href: string; label: string; icon: IconName; active: boolean; count?: number; onClick?: () => void }) {
+  const { t } = useI18n();
   return (
     <Link href={href} aria-current={active ? "page" : undefined} onClick={onClick}>
       <Icon name={icon} />
-      {label}
-      {!!count && <span className="side-count" aria-label={dueLabel(count)}>{count}</span>}
+      {t(label)}
+      {!!count && <span className="side-count" aria-label={dueLabel(t, count)}>{count}</span>}
     </Link>
   );
 }
 
-/** Menu principal de la barre latérale ; `due` : échéances du mois non payées, affichées sur Calendrier. */
+/** Sidebar main menu; `due`: unpaid payments of the month, shown on Calendar. */
 export function Nav({ due }: { due: number }) {
   const path = usePathname();
+  const { t } = useI18n();
   return (
-    <nav aria-label="Navigation principale">
+    <nav aria-label={t("Main navigation")}>
       {GROUPS.map(([title, items]) => (
-        <div key={title} className="side-group" role="group" aria-label={title}>
-          <span className="side-label" aria-hidden>{title}</span>
+        <div key={title} className="side-group" role="group" aria-label={t(title)}>
+          <span className="side-label" aria-hidden>{t(title)}</span>
           {items.map(([href, label, icon]) => (
-            <Item key={href} href={href} label={label} icon={icon} active={isActive(path, href)} count={href === "/calendrier" ? due : undefined} />
+            <Item key={href} href={href} label={label} icon={icon} active={isActive(path, href)} count={href === "/calendar" ? due : undefined} />
           ))}
         </div>
       ))}
@@ -59,41 +63,43 @@ export function Nav({ due }: { due: number }) {
   );
 }
 
-/** Lien Paramètres du bas de la barre latérale, actif sur toutes ses sous-pages. */
+/** Settings link at the bottom of the sidebar, active on all its sub-pages. */
 export function PrefsNav() {
   const path = usePathname();
+  const { t } = useI18n();
   return (
-    <nav aria-label="Préférences">
-      <Item href="/parametres" label="Paramètres" icon="settings" active={inSettings(path)} />
+    <nav aria-label={t("Preferences")}>
+      <Item href="/settings" label="Settings" icon="settings" active={inSettings(path)} />
     </nav>
   );
 }
 
-/** Barre de navigation inférieure (mobile) + menu « Plus » (popover natif : Échap, clic extérieur, focus gérés par le navigateur). */
+/** Mobile bottom navigation + "More" menu (native popover: Escape, outside click, focus handled by the browser). */
 export function TabBar({ due, logout }: { due: number; logout: React.ReactNode }) {
   const path = usePathname();
-  const more = [...MAIN.filter(([href]) => !TABS.includes(href)), ["/parametres", "Paramètres", "settings"] as const];
-  const moreActive = more.some(([href]) => (href === "/parametres" ? inSettings(path) : isActive(path, href)));
+  const { t } = useI18n();
+  const more = [...MAIN.filter(([href]) => !TABS.includes(href)), ["/settings", "Settings", "settings"] as const];
+  const moreActive = more.some(([href]) => (href === "/settings" ? inSettings(path) : isActive(path, href)));
   const close = () => document.getElementById("more-menu")?.hidePopover();
   return (
-    <nav className="tabbar" aria-label="Navigation mobile">
+    <nav className="tabbar" aria-label={t("Mobile navigation")}>
       {MAIN.filter(([href]) => TABS.includes(href)).map(([href, label, icon]) => (
         <Link key={href} href={href} aria-current={isActive(path, href) ? "page" : undefined}>
           <span className="tab-icon">
             <Icon name={icon} />
-            {href === "/calendrier" && due > 0 && <span className="tab-dot" aria-label={dueLabel(due)} />}
+            {href === "/calendar" && due > 0 && <span className="tab-dot" aria-label={dueLabel(t, due)} />}
           </span>
-          {SHORT[href] ?? label}
+          {t(SHORT[href] ?? label)}
         </Link>
       ))}
       <button type="button" popoverTarget="more-menu" className={moreActive ? "is-active" : undefined}>
         <span className="tab-icon"><Icon name="more" /></span>
-        Plus
+        {t("More")}
       </button>
       <div id="more-menu" popover="auto" className="more-menu">
         {more.map(([href, label, icon]) => (
           <Item key={href} href={href} label={label} icon={icon} onClick={close}
-            active={href === "/parametres" ? inSettings(path) : isActive(path, href)} />
+            active={href === "/settings" ? inSettings(path) : isActive(path, href)} />
         ))}
         {logout}
       </div>
@@ -101,38 +107,41 @@ export function TabBar({ due, logout }: { due: number; logout: React.ReactNode }
   );
 }
 
-/** Fil d'Ariane de la barre du haut : foyer / page courante. */
+/** Top bar breadcrumb: household / current page. */
 export function Crumbs({ root }: { root: string }) {
   const path = usePathname();
-  // Dernière correspondance : /parametres/ia l'emporte sur /parametres.
+  const { t } = useI18n();
+  // Last match: /settings/ai wins over /settings.
   const page = [...MAIN, ...SETTINGS].findLast(([href]) => isActive(path, href))?.[1];
   return (
-    <nav aria-label="Fil d’Ariane" className="crumbs">
-      <Link href="/tableau-de-bord">{root}</Link>
-      {page && <><Icon name="chevron" className="size-3.5" /><span aria-current="page">{page}</span></>}
+    <nav aria-label={t("Breadcrumb")} className="crumbs">
+      <Link href="/dashboard">{root}</Link>
+      {page && <><Icon name="chevron" className="size-3.5" /><span aria-current="page">{t(page)}</span></>}
     </nav>
   );
 }
 
-/** Action contextuelle de la barre du haut : ajout rapide, sauf là où la page la porte déjà. */
+/** Contextual top bar action: quick add, except where the page already carries it. */
 export function TopActions() {
   const path = usePathname();
-  if (path === "/tableau-de-bord" || isActive(path, "/operations")) return null;
+  const { t } = useI18n();
+  if (path === "/dashboard" || isActive(path, "/transactions")) return null;
   return (
-    <Link href="/operations/new" className="button top-add" aria-label="Ajouter une opération">
-      <Icon name="plus" className="size-4" /><span>Opération</span>
+    <Link href="/transactions/new" className="button top-add" aria-label={t("Add a transaction")}>
+      <Icon name="plus" className="size-4" /><span>{t("Transaction")}</span>
     </Link>
   );
 }
 
-/** Sous-navigation des paramètres (onglets) ; Membres et IA réservés aux admins. */
+/** Settings sub-navigation (tabs); Members and AI for admins only. */
 export function SettingsNav({ admin }: { admin: boolean }) {
   const path = usePathname();
+  const { t } = useI18n();
   const current = SETTINGS.findLast(([href]) => isActive(path, href))?.[0];
   return (
-    <nav aria-label="Paramètres" className="subnav">
+    <nav aria-label={t("Settings")} className="subnav">
       {SETTINGS.filter(([, , adminOnly]) => admin || !adminOnly).map(([href, label]) => (
-        <Link key={href} href={href} aria-current={href === current ? "page" : undefined}>{label}</Link>
+        <Link key={href} href={href} aria-current={href === current ? "page" : undefined}>{t(label)}</Link>
       ))}
     </nav>
   );
