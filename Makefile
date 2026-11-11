@@ -2,7 +2,7 @@
 
 DEV = docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
-.PHONY: help dev dev-logs dev-stop up logs deploy-remote
+.PHONY: help dev dev-logs dev-stop up logs deploy-remote audit-up audit audit-down
 
 help: ## Afficher les commandes disponibles
 	@awk 'BEGIN { FS = ":.*## " } /^[a-z-]+:.*## / { printf "  make %-14s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -24,3 +24,12 @@ logs: ## Suivre les logs de l'application
 
 deploy-remote: ## Envoyer, tester, sauvegarder et déployer sur le Mac mini via SSH
 	@bash scripts/deploy-remote.sh
+
+audit-up: ## Audit : instance locale jetable (127.0.0.1:3100) + données fictives
+	@bash security/audit.sh up
+
+audit: ## Audit : gitleaks, semgrep, trivy, ZAP baseline, vitest (FULL=1 : ZAP actif)
+	@bash security/audit.sh scan $(if $(FULL),--full)
+
+audit-down: ## Audit : supprimer l'instance et ses données
+	@bash security/audit.sh down

@@ -83,5 +83,15 @@ services:
       - /app/.next
     command: sh -c "npm run typecheck && npm test"
 
+  # Scan DAST OWASP ZAP contre le service interne app (security/audit.sh scan).
+  # ZAP_SCRIPT=zap-full-scan.py pour le scan actif ; rapports dans ZAP_OUT.
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    profiles: [audit]
+    depends_on: [app]
+    volumes:
+      - ${ZAP_OUT:-./security-audit/zap}:/zap/wrk:rw
+    command: ["${ZAP_SCRIPT:-zap-baseline.py}", "-t", "http://app:3000", "-r", "report.html", "-J", "report.json", "-I"]
+
 volumes:
   pgdata:

@@ -1,0 +1,7 @@
+# Règles gitleaks par défaut ; on ignore les artefacts de build Next (identifiants générés, pas des secrets du dépôt).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Artefacts de build"
+paths = ['''(^|/)\.next/''']

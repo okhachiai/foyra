@@ -28,7 +28,7 @@ docker compose up -d --build
 Chacun change son mot de passe dans **Mon compte**. Un mot de passe perdu (y compris celui de l'unique admin) se réinitialise depuis le serveur :
 
 ```sh
-docker compose exec app npm run reset-password admin@exemple.fr
+docker compose exec app /nodejs/bin/node scripts/reset-password.mjs admin@exemple.fr
 ```
 
 Un mot de passe provisoire aléatoire s'affiche une seule fois ; toutes les sessions de l'utilisateur sont fermées. Un compte désactivé reste désactivé (un admin le réactive dans **Membres**). Sans email en argument, il est demandé.
