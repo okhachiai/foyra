@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-export type ProgressTone = "accent" | "expense" | "warning" | "info";
+type ProgressTone = "accent" | "expense" | "warning" | "info";
 
 /**
  * Barre réel / prévu (<progress> natif, cf. .progress). Au-delà du prévu : pleine, couleur dépense en texte (--neg).

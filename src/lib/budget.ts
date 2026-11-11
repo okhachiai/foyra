@@ -1,9 +1,7 @@
-import type { BudgetStatus, CategoryKind, Prisma } from "@prisma/client";
+import type { BudgetStatus, CategoryKind } from "@prisma/client";
 import { addMonths } from "./amortization";
-import { prisma } from "./db";
+import { prisma, type Db } from "./db";
 import { isCode, LedgerError, NotFoundError, parseDay } from "./ledger";
-
-type Db = Prisma.TransactionClient;
 
 /** « AAAA-MM » (années 2000–2099) → Date UTC du 1er du mois (colonne @db.Date), ou null si invalide. */
 export const parseMonth = (s: string | undefined) => (s && /^20\d{2}-(0[1-9]|1[0-2])$/.test(s) ? parseDay(`${s}-01`) : null);
@@ -64,6 +62,11 @@ export function budgetTotals(items: Item[], saved = 0) {
   const t: Record<Group, number> = { income: 0, fixed: 0, savings: 0, variable: 0 };
   for (const n of buildTree(items)) if (n.included) t[groupOf(n)] += n.total;
   t.savings = Math.max(t.savings, saved);
+  return withRemaining(t);
+}
+
+/** Dépenses = fixes + variables + épargne ; reste = revenus − dépenses. */
+function withRemaining(t: Record<Group, number>) {
   const expense = t.fixed + t.variable + t.savings;
   return { ...t, expense, remaining: t.income - expense };
 }
@@ -144,8 +147,7 @@ export async function actualTotals(householdId: string, month: Date) {
   const top = new Map(categories.map((c) => [c.id, c.parent ?? c]));
   const t: Record<Group, number> = { income: 0, fixed: 0, savings: 0, variable: 0 };
   for (const s of sums) t[groupOf({ kind: s.kind, category: s.categoryId ? top.get(s.categoryId) : null })] += s._sum.amount ?? 0;
-  const expense = t.fixed + t.variable + t.savings;
-  return { ...t, expense, remaining: t.income - expense };
+  return withRemaining(t);
 }
 
 const ITEM_ORDER = [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }];

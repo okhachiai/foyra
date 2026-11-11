@@ -6,8 +6,8 @@ import { budgetSeeds, formatMonth, getBudget, groupOf, incomeLines, itemSignatur
 import { spendingPlan } from "@/lib/dashboard";
 import { configuredProviders } from "@/lib/llm";
 import { prisma } from "@/lib/db";
-import { todayIn } from "@/lib/ledger";
-import { centsToInput, formatCents } from "@/lib/money";
+import { monthLabel, todayIn } from "@/lib/ledger";
+import { centsToInput, formatCents, formatWhole } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -20,7 +20,6 @@ import { budgetAction, createBudgetAction, importBudgetAction, planAction } from
 import { ActionForm, Field } from "@/app/form";
 import { Fold, SubFold } from "./fold";
 
-const monthLabel = (month: Date) => new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(month);
 /** Lignes prévues réparties selon le type de leur catégorie (voir groupOf) ; une ligne sans catégorie est variable. */
 const SECTIONS: [Group, string][] = [
   ["income", "Revenus"],
@@ -128,8 +127,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
   const plan = spendingPlan(budget.tree);
   const overruns = plan.lines.filter((l) => l.left < 0);
   const used = plan.planned ? Math.round((plan.actual / plan.planned) * 100) : null;
-  const whole = new Intl.NumberFormat("fr-FR", { style: "currency", currency: user.household.currency, maximumFractionDigits: 0 });
-  const round = (cents: number) => whole.format(cents / 100);
+  const round = (cents: number) => formatWhole(cents, user.household.currency);
   const signed = (cents: number) => `${cents > 0 ? "+" : ""}${money(cents)}`;
 
   const currency = new Intl.NumberFormat("fr-FR", { style: "currency", currency: user.household.currency }).formatToParts(0).find((x) => x.type === "currency")?.value;

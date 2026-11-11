@@ -6,4 +6,4 @@ export function middleware(req: NextRequest) {
 }
 
 // Exclut « / » (qui choisit entre /setup et /login), /login, /setup, les fichiers statiques (dont manifest et icônes de l'app installable) et /api/ (les routes vérifient elles-mêmes leur jeton).
-export const config = { matcher: ["/((?!_next/|api/|favicon.ico|manifest.webmanifest|icon0.svg|icon1.png|apple-icon.png|brand/|login|setup).+)"] };
+export const config = { matcher: ["/((?!_next/|api/|favicon.ico|manifest.webmanifest|icon0.svg|icon1.png|apple-icon.png|login|setup).+)"] };

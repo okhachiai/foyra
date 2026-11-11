@@ -33,7 +33,7 @@ export default async function MembersPage() {
                   </span>
                   <span className="flex shrink-0 items-center gap-2">
                     {m.disabledAt && <Badge tone="warning" dot>Désactivé</Badge>}
-                    <Badge tone={m.role === "ADMIN" ? "default" : "muted"}>{m.role === "ADMIN" ? "Admin" : "Membre"}</Badge>
+                    <Badge tone={m.role === "ADMIN" ? "success" : "muted"}>{m.role === "ADMIN" ? "Admin" : "Membre"}</Badge>
                     <Icon name="chevron" className="size-4 text-faint" />
                   </span>
                 </Link>

@@ -18,7 +18,7 @@ export type MonthFile = {
   month: string; // AAAA-MM
   members: { email: string; name: string }[];
   categories: { kind: Kind; name: string; parent: Ref | null; fixed: boolean; savings: boolean }[]; // parent toujours avant ses enfants
-  charges: { kind: Kind; name: string; category: Ref; active: boolean; dueDay: number; startMonth: string; endMonth: string | null; shared: boolean; loan: Loan | null }[];
+  charges: { kind: "EXPENSE"; name: string; category: Ref; active: boolean; dueDay: number; startMonth: string; endMonth: string | null; shared: boolean; loan: Loan | null }[];
   budget: { status: BudgetStatus; items: (FileLine & { children: FileLine[] })[] } | null;
   transactions: {
     kind: Kind; amount: number; occurredOn: string; note: string | null; category: Ref | null; shared: boolean; paidBy: Ref; createdBy: Ref;
@@ -69,9 +69,9 @@ export async function exportMonth(householdId: string, month: Date): Promise<Mon
   const members = indexer((id) => ({ email: userById.get(id)!.email, name: userById.get(id)!.name }));
   const chargeById = new Map(chargeRows.map((c) => [c.id, c]));
   const charges = indexer((id) => {
-    const { kind, name, categoryId, active, dueDay, startMonth, endMonth, shared, loan: l } = chargeById.get(id)!;
+    const { name, categoryId, active, dueDay, startMonth, endMonth, shared, loan: l } = chargeById.get(id)!;
     const loan = l && { principal: l.principal, annualRate: l.annualRate, termMonths: l.termMonths, payment: l.payment, insurance: l.insurance };
-    return { kind, name, category: cats.ref(categoryId), active, dueDay, startMonth: formatMonth(startMonth), endMonth: endMonth && formatMonth(endMonth), shared, loan };
+    return { kind: "EXPENSE" as const, name, category: cats.ref(categoryId), active, dueDay, startMonth: formatMonth(startMonth), endMonth: endMonth && formatMonth(endMonth), shared, loan };
   });
   chargeRows.forEach((c) => charges.ref(c.id));
 
@@ -149,7 +149,7 @@ export function parseMonthFile(raw: string): MonthFile {
       };
     }
     return {
-      kind: oneOf(c.kind, KINDS, what), name: text(c.name, what), category: ref(c.category, nc, what), active: bool(c.active, what),
+      kind: oneOf(c.kind, ["EXPENSE"] as const, what), name: text(c.name, what), category: ref(c.category, nc, what), active: bool(c.active, what),
       dueDay: int(c.dueDay, what, 1, 31), startMonth, endMonth, shared: bool(c.shared, what), loan,
     };
   });
@@ -234,9 +234,9 @@ export async function importMonth(householdId: string, file: MonthFile) {
     const catId = (r: Ref | null) => (r === null ? null : cats[r]);
 
     const charges: string[] = [], loans: (string | null)[] = [];
-    for (const { loan, category, startMonth, endMonth, ...c } of file.charges) {
+    for (const { kind: _, loan, category, startMonth, endMonth, ...c } of file.charges) {
       const data = { ...c, categoryId: cats[category], startMonth: parseMonth(startMonth)!, endMonth: endMonth ? parseMonth(endMonth) : null };
-      const found = await tx.fixedCharge.findFirst({ where: { householdId, kind: c.kind, name: ci(c.name) }, select: { id: true } });
+      const found = await tx.fixedCharge.findFirst({ where: { householdId, name: ci(c.name) }, select: { id: true } });
       const id = found ? (await tx.fixedCharge.update({ where: { id: found.id }, data })).id : (await tx.fixedCharge.create({ data: { ...data, householdId } })).id;
       charges.push(id);
       loans.push(loan ? (await tx.loan.upsert({ where: { fixedChargeId: id }, create: { ...loan, householdId, fixedChargeId: id }, update: loan })).id : null);

@@ -227,7 +227,6 @@ model BudgetItem {
 model FixedCharge {
   id          String       @id @default(cuid())
   householdId String
-  kind        CategoryKind @default(EXPENSE)
   active      Boolean      @default(true)
   name        String
   dueDay      Int // 1–31 (CHECK SQL) ; échéance = min(jour, dernier jour du mois)

@@ -127,7 +127,7 @@ describe("rapport du jour", () => {
     const courses = await item("EXPENSE", "Courses", 30000);
     const loyer = await fixedCat("Loyer");
     await prisma.budgetItem.update({ where: { id: loyer.id }, data: { amount: 90000 } });
-    await createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 25, categoryId: loyer.categoryId!, startMonth: nov, endMonth: null, shared: true });
+    await createCharge(hh, { active: true, name: "Loyer", dueDay: 25, categoryId: loyer.categoryId!, startMonth: nov, endMonth: null, shared: true });
     await spend(courses.categoryId, 14000, "2026-11-05");
     await spend(courses.categoryId, 2500, "2026-11-10", "Marché");
     await spend(null, 700, "2026-11-03");

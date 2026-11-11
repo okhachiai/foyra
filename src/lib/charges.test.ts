@@ -12,7 +12,7 @@ const oct = parseMonth("2026-10")!;
 const nov = parseMonth("2026-11")!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 const pay = (id: string, amount: number, day: string, month = nov) => payCharge(hh, user, id, month, amount, parseDay(day)!);
 
 beforeEach(async () => {
@@ -73,19 +73,17 @@ describe("charges fixes", () => {
     await expect(updateEntry(hh, p.transactionId, { ...base, kind: "INCOME", categoryId: null })).rejects.toMatchObject({ field: "kind" });
   });
 
-  it("Catégorie de revenu refusée ; récurrence de revenu refusée en base", async () => {
+  it("Catégorie de revenu refusée", async () => {
     await expect(charge({ categoryId: await byName("Salaire 1") })).rejects.toMatchObject({ field: "categoryId" });
-    const c = await charge();
-    await expect(prisma.fixedCharge.update({ where: { id: c.id }, data: { kind: "INCOME" } })).rejects.toThrow();
   });
 
   it("Désactivée : absente des échéances du mois ; réactivée : de retour", async () => {
     const c = await charge();
-    await updateCharge(hh, c.id, { ...c, kind: "EXPENSE", active: false });
+    await updateCharge(hh, c.id, { ...c, active: false });
     expect(await listMonthCharges(hh, nov)).toEqual([]);
     expect(appliesTo({ ...c, active: false }, nov)).toBe(false);
     await expect(pay(c.id, 95000, "2026-11-05")).rejects.toBeInstanceOf(LedgerError);
-    await updateCharge(hh, c.id, { ...c, kind: "EXPENSE", active: true });
+    await updateCharge(hh, c.id, { ...c, active: true });
     expect(await listMonthCharges(hh, nov)).toHaveLength(1);
   });
 

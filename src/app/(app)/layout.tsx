@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { getShell } from "@/lib/dashboard";
-import { parseDay, todayIn } from "@/lib/ledger";
+import { monthLabel, parseDay, todayIn } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
 import { logoutAction } from "@/app/actions";
 import { Crumbs, Nav, PrefsNav, TabBar, TopActions } from "@/app/nav";
@@ -9,7 +9,6 @@ import { Icon } from "@/components/ui/icon";
 import { LogoMark } from "@/components/ui/logo";
 import { ProgressBar } from "@/components/ui/progress";
 
-const monthLabel = (month: Date) => new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(month);
 
 /** Coquille des pages connectées (groupe de routes (app)) : barre latérale + barre du haut. */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {

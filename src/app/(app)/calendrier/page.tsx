@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { addMonths } from "@/lib/amortization";
 import { formatMonth, parseMonth } from "@/lib/budget";
 import { getCalendar, type ChargeStatus } from "@/lib/calendar";
-import { formatDay, parseDay, todayIn } from "@/lib/ledger";
+import { formatDay, frDate, monthLabel, parseDay, todayIn } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
@@ -14,9 +14,7 @@ import { MonthNav } from "@/components/ui/month-nav";
 import { PageHeader } from "@/components/ui/page-header";
 import { PayCharge } from "../charges/pay-form";
 
-const fmt = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
-const monthLabel = (month: Date) => fmt({ month: "long", year: "numeric" }).format(month);
-const dayLabel = (d: Date) => fmt({ weekday: "long", day: "numeric", month: "long" }).format(d);
+const dayLabel = (d: Date) => frDate({ weekday: "long", day: "numeric", month: "long" }).format(d);
 const frDay = (d: Date) => formatDay(d).split("-").reverse().join("/");
 const WEEKDAYS = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."];
 /** Codes couleur communs (tableau de bord, charges) : payée vert, à payer ambre, en retard corail. */

@@ -4,6 +4,7 @@ import * as React from "react";
 import type { DashboardCharts } from "@/lib/dashboard";
 import SpendingRing from "@/components/ui/kokonut-spending-ring";
 import { Icon, type IconName } from "@/components/ui/icon";
+import { formatWhole } from "@/lib/money";
 
 /*
  * Bento analytique (adapté de « Analytics Bento », vasnev.art) : entrées/sorties, dépenses par catégorie, saisonnalité.
@@ -386,10 +387,7 @@ function Radar({ values, year, tip }: { values: number[]; year: string; tip: Tip
 /* ---------------- le bento ---------------- */
 
 export function AnalyticsBento({ currency, data, aside }: { currency: string; data: DashboardCharts; aside?: React.ReactNode }) {
-  const money = React.useMemo(() => {
-    const f = new Intl.NumberFormat("fr-FR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 });
-    return (cents: number) => f.format(cents / 100);
-  }, [currency]);
+  const money = useMoney(currency);
   const tip = React.useRef<TipApi | null>(null);
   const [year, setYear] = React.useState(0);
   const [shown, setShown] = React.useState(false);
@@ -449,11 +447,7 @@ export function AnalyticsBento({ currency, data, aside }: { currency: string; da
 
 /* ---------------- indicateurs du haut : carte principale + cartes secondaires ---------------- */
 
-const useMoney = (currency: string) =>
-  React.useMemo(() => {
-    const f = new Intl.NumberFormat("fr-FR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 });
-    return (cents: number) => f.format(cents / 100);
-  }, [currency]);
+const useMoney = (currency: string) => React.useCallback((cents: number) => formatWhole(cents, currency), [currency]);
 
 /** Mini-courbe d'un cumul (aire en dégradé + trait). `colors` : [départ, trait]. */
 function Spark({ series, colors, label }: { series: number[]; colors: readonly [string, string]; label: string }) {

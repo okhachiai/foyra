@@ -4,7 +4,7 @@ import { addMonths } from "@/lib/amortization";
 import { formatMonth, parseMonth } from "@/lib/budget";
 import { listCategories } from "@/lib/categories";
 import { prisma } from "@/lib/db";
-import { monthNet, payers, todayIn } from "@/lib/ledger";
+import { frDate, monthLabel, monthNet, payers, todayIn } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
@@ -16,9 +16,7 @@ import { Stat } from "@/components/ui/stat";
 import { Fold } from "../budget/fold";
 import { EntryForm } from "./entry-form";
 
-const fmt = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
-const monthLabel = (month: Date) => fmt({ month: "long", year: "numeric" }).format(month);
-const dayLabel = (d: Date) => fmt({ weekday: "short", day: "numeric", month: "short" }).format(d);
+const dayLabel = (d: Date) => frDate({ weekday: "short", day: "numeric", month: "short" }).format(d);
 
 type Params = { m?: string; t?: string; c?: string };
 

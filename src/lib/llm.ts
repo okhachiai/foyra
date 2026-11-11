@@ -89,6 +89,8 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
   }
 }
 
+const CLAUDE_URL = "https://api.anthropic.com/v1/messages";
+const claudeHeaders = (c: LlmConfig) => ({ "x-api-key": c.claudeApiKey ?? "", "anthropic-version": "2023-06-01" });
 const localUrl = (c: LlmConfig) => `${(c.localLlmUrl ?? "").replace(/\/+$/, "")}/v1/chat/completions`;
 const localHeaders = (c: LlmConfig): Record<string, string> => (c.localLlmApiKey ? { Authorization: `Bearer ${c.localLlmApiKey}` } : {});
 
@@ -96,12 +98,7 @@ const localHeaders = (c: LlmConfig): Record<string, string> => (c.localLlmApiKey
 export async function testConnection(provider: LlmProvider, c: LlmConfig): Promise<string> {
   if (provider === "CLAUDE") {
     const model = c.claudeModel || DEFAULT_CLAUDE_MODEL;
-    await post(
-      "https://api.anthropic.com/v1/messages",
-      { "x-api-key": c.claudeApiKey ?? "", "anthropic-version": "2023-06-01" },
-      { model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] },
-      15_000,
-    );
+    await post(CLAUDE_URL, claudeHeaders(c), { model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }, 15_000);
     return model;
   }
   const model = c.localLlmModel ?? "";
@@ -114,8 +111,8 @@ export async function complete(provider: LlmProvider, c: LlmConfig, messages: Me
   if (provider === "CLAUDE") {
     const model = c.claudeModel || DEFAULT_CLAUDE_MODEL;
     const data = await post(
-      "https://api.anthropic.com/v1/messages",
-      { "x-api-key": c.claudeApiKey ?? "", "anthropic-version": "2023-06-01" },
+      CLAUDE_URL,
+      claudeHeaders(c),
       {
         model,
         max_tokens: 16000,

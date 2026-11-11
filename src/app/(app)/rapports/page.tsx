@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { getBudget } from "@/lib/budget";
 import { configuredProviders, PROVIDER_LABELS } from "@/lib/llm";
 import { formatCents } from "@/lib/money";
-import { formatDay } from "@/lib/ledger";
+import { formatDay, monthLabel } from "@/lib/ledger";
 import { listReports, type DailyInput, type DailyOutput, type MonthlyInput, type MonthlyOutput, type Pace, type PlanInput, type PlanOutput } from "@/lib/report";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
@@ -24,7 +24,6 @@ const PACE: Record<Pace, { label: string; tone: "success" | "warning" | "danger"
 };
 const GROUPS = { income: "Revenus", fixed: "Charges fixes", savings: "Épargne", variable: "Charges variables" } as const;
 const frDay = (s: string) => s.split("-").reverse().join("/");
-const monthLabel = (s: string) => new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${s}-01`));
 
 type Money = (cents: number) => string;
 
@@ -223,7 +222,7 @@ function Daily({ input, output, money }: { input: DailyInput; output: DailyOutpu
 function Monthly({ input, output, money }: { input: MonthlyInput; output: MonthlyOutput; money: Money }) {
   return (
     <>
-      <Summary title={`Bilan de ${monthLabel(input.month)}`} text={output.verdict} />
+      <Summary title={`Bilan de ${monthLabel(new Date(`${input.month}-01`))}`} text={output.verdict} />
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Reste réel" value={money(input.actual.remaining)} tone={input.actual.remaining < input.planned.remaining ? "neg" : "pos"} note={`Prévu ${money(input.planned.remaining)}`} />
         <Stat label="Épargne réalisée" value={money(input.actual.savings)} tone={input.actual.savings < input.planned.savings ? "neg" : "pos"} note={`Prévu ${money(input.planned.savings)}`} />
@@ -285,7 +284,7 @@ async function Plan({ reportId, householdId, budgetId, input, output, money }: {
         <Stat label="À répartir" value={money(input.toDistribute)} tone="pos" note="Revenus − fixes − épargne" />
       </div>
       <Card variant="table">
-        <SectionHeader title={`Répartition proposée · ${monthLabel(input.month)}`} subtitle="Moyenne des 3 derniers mois de dépenses réelles en repère." />
+        <SectionHeader title={`Répartition proposée · ${monthLabel(new Date(`${input.month}-01`))}`} subtitle="Moyenne des 3 derniers mois de dépenses réelles en repère." />
         <div className="table-wrap">
           <table className="table">
             <thead>

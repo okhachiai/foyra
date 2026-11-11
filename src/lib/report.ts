@@ -157,7 +157,7 @@ async function dailyInput(householdId: string, today: Date) {
       .map((n) => ({ label: n.label, planned: n.total, actual: n.actual, ...pace(n.total, n.actual, day, daysInMonth) })),
     todayOps: ops.map((t) => ({ label: t.note ?? t.category?.name ?? "", category: t.category?.name ?? null, amount: t.amount, kind: t.kind, paidBy: t.paidBy.name })),
     uncategorized: { count: uncategorized._count, amount: uncategorized._sum.amount ?? 0 },
-    upcoming: charges.filter((c) => c.kind === "EXPENSE" && !c.payment && c.due >= today).map((c) => ({ name: c.name, amount: c.amount, due: formatDay(c.due) })),
+    upcoming: charges.filter((c) => !c.payment && c.due >= today).map((c) => ({ name: c.name, amount: c.amount, due: formatDay(c.due) })),
   };
   return { budgetId: budget.id, input };
 }
@@ -209,7 +209,7 @@ const COMMON = `Tu es le conseiller budgétaire d'un foyer. Tu reçois en JSON d
 Montants en euros, exacts : ne les recalcule pas, ne les corrige pas. Réponds en français, phrases courtes et concrètes, ton direct et bienveillant.
 Cite les montants et les noms de lignes reçus ; n'invente aucun chiffre.`;
 
-export const PROMPTS: Record<ReportKind, string> = {
+const PROMPTS: Record<ReportKind, string> = {
   DAILY: `${COMMON}
 Rapport du jour (jour day sur daysInMonth). lines : enveloppes de charges variables ; expected = dépense attendue à ce jour au prorata,
 projected = projection fin de mois au rythme actuel, perDay = montant par jour à ne pas dépasser jusqu'à la fin du mois,

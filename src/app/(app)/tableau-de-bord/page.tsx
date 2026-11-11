@@ -2,16 +2,16 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { listCategories } from "@/lib/categories";
 import { addMonths } from "@/lib/amortization";
-import { actualTotals, envelopes, formatMonth, getBudget, parseMonth, uncoveredFixedLines } from "@/lib/budget";
-import { listMonthCharges } from "@/lib/charges";
+import { actualTotals, envelopes, formatMonth, parseMonth, uncoveredFixedLines } from "@/lib/budget";
 import { getSplit } from "@/lib/split";
 import { getDashboard, getDashboardCharts, spendingPlan, upcomingCharges } from "@/lib/dashboard";
-import { formatDay, parseDay, payers, todayIn } from "@/lib/ledger";
+import { formatDay, frDate, monthLabel, parseDay, payers, todayIn } from "@/lib/ledger";
 import { configuredProviders } from "@/lib/llm";
-import { formatCents } from "@/lib/money";
+import { formatCents, formatWhole } from "@/lib/money";
 import { getSavings } from "@/lib/savings";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
+import { DateTile } from "@/components/ui/date-tile";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon } from "@/components/ui/icon";
 import { MonthNav } from "@/components/ui/month-nav";
@@ -24,9 +24,7 @@ import { Fold } from "../budget/fold";
 import { AnalyticsBento, CashFlow, KpiRow, SpendingByCategory, type Kpi } from "./charts";
 
 const percent = new Intl.NumberFormat("fr-FR", { style: "percent", maximumFractionDigits: 2 });
-const fmt = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
-const monthLabel = (month: Date) => fmt({ month: "long", year: "numeric" }).format(month);
-const shortDate = (d: Date) => fmt({ day: "numeric", month: "short" }).format(d);
+const shortDate = (d: Date) => frDate({ day: "numeric", month: "short" }).format(d);
 const STATUS = { paid: ["success", "Payée"], due: ["warning", "À venir"], late: ["danger", "En retard"] } as const;
 
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ m?: string }> }) {
@@ -39,13 +37,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const [d, categories, members] = await Promise.all([getDashboard(user.householdId, today, month), listCategories(user.householdId), payers(user.householdId)]);
   const currency = user.household.currency;
   const money = (cents: number) => formatCents(cents, currency);
-  const whole = new Intl.NumberFormat("fr-FR", { style: "currency", currency, maximumFractionDigits: 0 });
-  const round = (cents: number) => whole.format(cents / 100);
-  const [charts, budget, charges, actual, split, savings] = await Promise.all([
+  const round = (cents: number) => formatWhole(cents, currency);
+  const { budget, charges } = d;
+  const [charts, actual, split, savings] = await Promise.all([
     // Graphiques seulement s'il existe des opérations réelles : jamais de courbe inventée.
     d.recent.length ? getDashboardCharts(user.householdId, asOf) : null,
-    d.budget ? getBudget(user.householdId, d.month) : null,
-    listMonthCharges(user.householdId, d.month),
     actualTotals(user.householdId, d.month),
     // Partage : utile à partir de deux membres.
     getSplit(user.householdId, d.month).then((s) => (s.members.length > 1 ? s : null)),
@@ -55,9 +51,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const env = [...lines, ...(reserve ? [reserve] : [])];
   const plan = budget && spendingPlan(budget.tree);
   // Charges fixes et crédits du mois, calculés en direct : un crédit soldé n'apparaît plus.
-  const expenses = charges.filter((c) => c.kind === "EXPENSE");
-  const fixed = expenses.filter((c) => !c.loanId), loans = expenses.filter((c) => c.loanId);
-  const sum = (l: typeof expenses) => l.reduce((s, c) => s + c.amount, 0);
+  const fixed = charges.filter((c) => !c.loanId), loans = charges.filter((c) => c.loanId);
+  const sum = (l: typeof charges) => l.reduce((s, c) => s + c.amount, 0);
   // Lignes fixes du budget sans charge récurrente : listées aussi, sans jour d'échéance.
   const planned = budget ? uncoveredFixedLines(budget.tree, new Set(charges.map((c) => c.categoryId))) : [];
   const fixedTotal = sum(fixed) + planned.reduce((s, l) => s + l.amount, 0), loanTotal = sum(loans);
@@ -235,7 +230,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               {due.map((c) => (
                 <li key={c.id}>
                   <Link href={c.loanId ? `/credits/${c.loanId}` : `/charges/${c.id}`}>
-                    <span className="date-tile"><b>{String(c.due.getUTCDate()).padStart(2, "0")}</b><small>{fmt({ month: "short" }).format(c.due)}</small></span>
+                    <DateTile date={c.due} />
                     <span className="min-w-0 flex-1">
                       <b className="block truncate text-heading">{c.name}</b>
                       <small className="block truncate text-label text-faint">{c.loanId ? "Crédit" : "Charge fixe"}{!c.budgeted && " · absente du budget"}</small>

@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { addMonths } from "./amortization";
-import { prisma } from "./db";
+import { prisma, type Db } from "./db";
 
 /** Erreur métier affichable (optionnellement rattachée à un champ du formulaire). */
 export class LedgerError extends Error {
@@ -12,8 +12,6 @@ export class LedgerError extends Error {
 export class NotFoundError extends Error {}
 
 export const isCode = (e: unknown, code: string) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === code;
-
-type Db = Prisma.TransactionClient;
 
 /** `paidById` : membre qui a payé (dépense) ou reçu (recette) ; `shared` : opération commune (partagée au prorata). */
 export type EntryInput = { kind: "INCOME" | "EXPENSE"; amount: number; occurredOn: Date; note: string | null; categoryId: string | null; paidById: string; shared?: boolean };
@@ -83,13 +81,6 @@ export async function createEntry(householdId: string, userId: string, input: En
   }
 }
 
-/** Opération du foyer. */
-export async function getTransaction(householdId: string, id: string) {
-  const t = await prisma.transaction.findFirst({ where: { id, householdId } });
-  if (!t) throw new NotFoundError();
-  return t;
-}
-
 export async function updateEntry(householdId: string, id: string, input: EntryInput) {
   return prisma.$transaction(async (tx) => {
     await lockLines(tx, householdId, Prisma.sql`"id" = ${id}`);
@@ -135,3 +126,8 @@ export function parseDay(s: string): Date | null {
 }
 
 export const formatDay = (d: Date) => d.toISOString().slice(0, 10);
+
+/** Format de date français, en UTC (dates @db.Date à minuit UTC). */
+export const frDate = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
+/** « novembre 2026 ». */
+export const monthLabel = (month: Date) => frDate({ month: "long", year: "numeric" }).format(month);

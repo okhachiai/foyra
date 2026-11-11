@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 
 /** Texte sur fond teinté : couleurs *-ink / --neg / --warn, contrastes vérifiés par tokens.test.ts. */
 const TONES = {
-  default: "text-accent-ink bg-accent-tint",
   success: "text-accent-ink bg-accent-tint",
   warning: "text-warn bg-warn-tint",
   danger: "text-neg bg-expense-tint",
@@ -12,7 +11,7 @@ const TONES = {
 } as const;
 
 /** Pastille de statut. `dot` : point coloré devant le libellé (statut d'une ligne de tableau, d'une échéance). */
-export function Badge({ tone = "default", dot, className, children, ...props }: ComponentProps<"span"> & { tone?: keyof typeof TONES; dot?: boolean }) {
+export function Badge({ tone = "success", dot, className, children, ...props }: ComponentProps<"span"> & { tone?: keyof typeof TONES; dot?: boolean }) {
   return (
     <span className={cn("inline-flex items-center gap-1.5 whitespace-nowrap rounded-[var(--r-sm)] px-2 py-0.5 text-label font-semibold", TONES[tone], className)} {...props}>
       {dot && <i aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />}

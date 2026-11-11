@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { formatMonth, parseMonth } from "@/lib/budget";
-import { formatDay, payers, todayIn } from "@/lib/ledger";
+import { formatDay, frDate, payers, todayIn } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
 import { getSavings, type SavingsMonth } from "@/lib/savings";
 import { Badge } from "@/components/ui/badge";
@@ -16,9 +16,8 @@ import { Stat } from "@/components/ui/stat";
 import { addSavingAction } from "@/app/actions";
 import { ActionForm, Field, SharedCheck } from "@/app/form";
 
-const fr = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
-const monthLabel = (key: string) => fr({ month: "long", year: "numeric" }).format(new Date(`${key}-01T00:00:00Z`));
-const shortMonth = (key: string) => fr({ month: "short" }).format(new Date(`${key}-01T00:00:00Z`));
+const monthLabel = (key: string) => frDate({ month: "long", year: "numeric" }).format(new Date(`${key}-01T00:00:00Z`));
+const shortMonth = (key: string) => frDate({ month: "short" }).format(new Date(`${key}-01T00:00:00Z`));
 
 /** Barres mensuelles : versé (plein) devant le prévu (contour). HTML/CSS, lisible à toute largeur. */
 function MonthBars({ series, money }: { series: SavingsMonth[]; money: (c: number) => string }) {

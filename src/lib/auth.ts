@@ -12,8 +12,8 @@ export const SESSION_COOKIE = "foyra_session"; // dupliqué dans src/middleware.
 const SESSION_DAYS = 30;
 const DAY_MS = 86_400_000;
 
-export const hashPassword = (password: string) => hash(password);
-export const verifyPassword = (passwordHash: string, password: string) =>
+const hashPassword = (password: string) => hash(password);
+const verifyPassword = (passwordHash: string, password: string) =>
   verify(passwordHash, password).catch(() => false);
 
 const sha256 = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -55,8 +55,6 @@ export async function findSession(token: string | undefined) {
   }
   return session;
 }
-
-export type CurrentUser = Awaited<ReturnType<typeof requireUser>>;
 
 /** Lit la session en base ; redirige vers /login si absente, expirée ou supprimée. */
 export async function requireUser() {

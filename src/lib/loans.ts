@@ -1,10 +1,8 @@
-import type { Prisma, PrepaymentMode } from "@prisma/client";
+import type { PrepaymentMode } from "@prisma/client";
 import { addMonths, buildSchedule, dueDate, interestOf, loanStatus, type Schedule } from "./amortization";
 import { checkRefs, type ChargeInput } from "./charges";
-import { prisma } from "./db";
+import { prisma, type Db } from "./db";
 import { createEntryTx, LedgerError, NotFoundError } from "./ledger";
-
-type Db = Prisma.TransactionClient;
 
 export type LoanInput = {
   name: string; categoryId: string; firstDue: Date;
@@ -13,8 +11,7 @@ export type LoanInput = {
 
 const loanTerms = (i: LoanInput) => ({ principal: i.principal, annualRate: i.annualRate, termMonths: i.termMonths, payment: i.payment, insurance: i.insurance });
 
-/** Charge portée par le crédit : jour et mois de la 1ʳᵉ échéance, n mois (montant : échéancier du crédit). */
-/** Sans `shared` : défaut en base à la création, inchangé ensuite. */
+/** Charge portée par le crédit : jour et mois de la 1ʳᵉ échéance, n mois (montant : échéancier du crédit). Sans `shared` : défaut en base à la création, inchangé ensuite. */
 function chargeOf(i: LoanInput): Omit<ChargeInput, "shared"> {
   if (i.payment !== null && i.payment <= interestOf(i.principal, i.annualRate)) {
     throw new LedgerError("La mensualité ne couvre pas les intérêts.", "payment");
@@ -22,7 +19,7 @@ function chargeOf(i: LoanInput): Omit<ChargeInput, "shared"> {
   const startMonth = addMonths(i.firstDue, 0);
   const dueDay = i.firstDue.getUTCDate();
   return {
-    kind: "EXPENSE", active: true, name: i.name, dueDay, categoryId: i.categoryId, startMonth,
+    active: true, name: i.name, dueDay, categoryId: i.categoryId, startMonth,
     endMonth: addMonths(startMonth, i.termMonths - 1),
   };
 }

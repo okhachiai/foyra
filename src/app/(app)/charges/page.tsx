@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { parseMonth } from "@/lib/budget";
 import { chargeStatus } from "@/lib/calendar";
 import { listMonthCharges } from "@/lib/charges";
-import { formatDay, parseDay, todayIn } from "@/lib/ledger";
+import { formatDay, monthLabel, parseDay, todayIn } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
@@ -17,7 +17,6 @@ import { Stat } from "@/components/ui/stat";
 import { SettingsNav } from "@/app/nav";
 import { PayCharge } from "./pay-form";
 
-const monthLabel = (month: Date) => new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric", timeZone: "UTC" }).format(month);
 const frDay = (d: Date) => formatDay(d).split("-").reverse().join("/");
 const STATUS = { paid: ["success", "Payée"], due: ["warning", "À payer"], late: ["danger", "En retard"] } as const;
 

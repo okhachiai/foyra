@@ -60,7 +60,7 @@ const PROJECT = 0.2;
 // Movement under this many pixels is a tap, not a spin.
 const TAP_SLOP = 5;
 
-export interface SpendingCategory {
+interface SpendingCategory {
   name: string;
   amount: number;
   /** Change from last month, in percent; omitted when there is nothing to compare. */
@@ -69,7 +69,7 @@ export interface SpendingCategory {
   color: string;
 }
 
-export interface SpendingRingProps {
+interface SpendingRingProps {
   title: string;
   categories: SpendingCategory[];
   currency: string;
@@ -123,7 +123,6 @@ export default function SpendingRing({
   const [selected, setSelected] = useState(0);
   const [spinning, setSpinning] = useState(false);
   const ringRef = useRef<SVGGElement>(null);
-  const surfaceRef = useRef<HTMLDivElement>(null);
   const selectedRef = useRef(0);
 
   const total = categories.reduce((sum, c) => sum + c.amount, 0);
@@ -392,7 +391,6 @@ export default function SpendingRing({
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={release}
-        ref={surfaceRef}
         role="slider"
         tabIndex={0}
       >

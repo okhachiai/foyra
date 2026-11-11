@@ -45,7 +45,7 @@ describe("export / import d'un mois", () => {
   it("Le mois importé redevient identique à l'export (budget, opérations, charges, crédit) ; les autres mois ne bougent pas", async () => {
     const rent = (await prisma.category.findFirstOrThrow({ where: { householdId: hh, kind: "EXPENSE", parentId: null, fixed: true } })).id;
     await createBudget(hh, nov, [{ label: "Salaire", amount: 250000, categoryId: null }]);
-    const charge = await createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: rent, startMonth: nov, endMonth: null, shared: true });
+    const charge = await createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: rent, startMonth: nov, endMonth: null, shared: true });
     await payCharge(hh, admin, charge.id, nov, 80000, day("2026-11-05"));
     const loan = await createLoan(hh, { name: "Auto", categoryId: rent, firstDue: day("2026-10-10"), principal: 1000000, annualRate: 3000, termMonths: 48, payment: null, insurance: 500 });
     await prepay(hh, bob, loan.id, 50000, day("2026-11-12"), "REDUCE_TERM");

@@ -326,7 +326,6 @@ main:focus { outline: none; }
 .card-hero :is(.muted, .text-muted, .text-faint, small) { color: var(--hero-muted); }
 .card-hero a { color: var(--hero-text); }
 .card-table > :not(.table-wrap) { padding-inline: 0.75rem; }
-.card-due { background: var(--surface-secondary); border-color: var(--hairline); border-radius: var(--r-md); box-shadow: none; }
 /* Valeurs financières : chiffres tabulaires, 700. */
 .kpi-value { font-size: var(--text-kpi); font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 

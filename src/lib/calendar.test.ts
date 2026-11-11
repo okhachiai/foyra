@@ -13,7 +13,7 @@ const nov = parseMonth("2026-11")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 /** Budget du mois : lignes de dépense (libellé = nom de la récurrence) dans la catégorie Loyer. */
 const plan = async (lines: [string, number][], month = nov) => {
   const b = await createBudget(hh, month);

@@ -13,13 +13,11 @@ export const addMonths = (month: Date, n: number) => new Date(Date.UTC(month.get
 export const interestOf = (balance: number, annualRate: number) => Math.round((balance * annualRate) / 1_200_000);
 
 /** Mensualité constante (hors assurance) arrondie au centime ; taux 0 → capital / n. */
-export function annuity(principal: number, annualRate: number, n: number) {
+function annuity(principal: number, annualRate: number, n: number) {
   if (annualRate === 0) return Math.round(principal / n);
   const i = annualRate / 1_200_000;
   return Math.round((principal * i) / (1 - (1 + i) ** -n));
 }
-
-/** Intérêts de la 1ʳᵉ échéance : une mensualité saisie doit les dépasser. */
 
 export type LoanTerms = {
   principal: number; annualRate: number; termMonths: number; payment: number | null; insurance: number;
@@ -37,8 +35,7 @@ export type Schedule = { rows: ScheduleRow[]; prepayments: (Prepayment & { balan
  * montant borné au capital restant ; `prepayments` dans l'ordre de création.
  */
 export function buildSchedule(t: LoanTerms, prepayments: Prepayment[]): Schedule {
-  const pending = prepayments.map((p, i) => ({ p, i }))
-    .sort((a, b) => a.p.occurredOn.getTime() - b.p.occurredOn.getTime() || a.i - b.i).map(({ p }) => p);
+  const pending = prepayments.toSorted((a, b) => a.occurredOn.getTime() - b.occurredOn.getTime()); // tri stable : ordre de création à date égale
   const applied: Schedule["prepayments"] = [];
   const rows: ScheduleRow[] = [];
   let b = t.principal;

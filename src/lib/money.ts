@@ -33,6 +33,11 @@ export function formatCents(cents: number, currency = "EUR"): string {
   return new Intl.NumberFormat("fr-FR", { style: "currency", currency }).format(cents / 100);
 }
 
+/** 123456 → « 1 235 € » : montant arrondi à l'unité, pour les synthèses et graphiques. */
+export function formatWhole(cents: number, currency = "EUR"): string {
+  return new Intl.NumberFormat("fr-FR", { style: "currency", currency, maximumFractionDigits: 0 }).format(cents / 100);
+}
+
 /** Valeur pour un champ de saisie : 123456 → « 1234,56 ». */
 export function centsToInput(cents: number): string {
   return (cents / 100).toFixed(2).replace(".", ",");

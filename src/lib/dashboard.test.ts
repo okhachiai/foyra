@@ -14,7 +14,7 @@ const today = parseDay("2026-11-10")!;
 const day = (s: string) => parseDay(s)!;
 const byName = async (name: string) => (await prisma.category.findFirstOrThrow({ where: { name, householdId: hh } })).id;
 const charge = async (over: Partial<ChargeInput> = {}) =>
-  createCharge(hh, { kind: "EXPENSE", active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
+  createCharge(hh, { active: true, name: "Loyer", dueDay: 5, categoryId: await byName("Loyer"), startMonth: nov, endMonth: null, shared: true, ...over });
 /** Budget du mois : lignes de dépense (libellé = nom de la récurrence) dans la catégorie Loyer. */
 const plan = async (lines: [string, number][], month = nov) => {
   const b = await createBudget(hh, month);
@@ -162,9 +162,9 @@ describe("barre latérale", () => {
 });
 
 describe("échéances du tableau de bord", () => {
-  it("retards, puis à payer, puis payées ; dépenses seules ; tronqué", () => {
-    const c = (name: string, due: string, paid = false, kind = "EXPENSE") => ({ name, kind, due: day(due), payment: paid ? {} : null });
-    const list = [c("Payée", "2026-11-01", true), c("Plus tard", "2026-11-20"), c("Retard", "2026-11-05"), c("Bientôt", "2026-11-12"), c("Salaire", "2026-11-01", false, "INCOME")];
+  it("retards, puis à payer, puis payées ; tronqué", () => {
+    const c = (name: string, due: string, paid = false) => ({ name, due: day(due), payment: paid ? {} : null });
+    const list = [c("Payée", "2026-11-01", true), c("Plus tard", "2026-11-20"), c("Retard", "2026-11-05"), c("Bientôt", "2026-11-12")];
     expect(upcomingCharges(list, today).map((x) => [x.name, x.status])).toEqual([["Retard", "late"], ["Bientôt", "due"], ["Plus tard", "due"], ["Payée", "paid"]]);
     expect(upcomingCharges(list, today, 2)).toHaveLength(2);
   });

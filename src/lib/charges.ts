@@ -1,14 +1,11 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "./db";
+import { prisma, type Db } from "./db";
 import { addMonths, buildSchedule, dueDate } from "./amortization";
 import { buildTree, type Item } from "./budget";
 import { createEntryTx, isCode, LedgerError, NotFoundError } from "./ledger";
 
-
-type Db = Prisma.TransactionClient;
-
 export type ChargeInput = {
-  kind: "INCOME" | "EXPENSE"; active: boolean; name: string; dueDay: number; categoryId: string; startMonth: Date; endMonth: Date | null; shared: boolean;
+  active: boolean; name: string; dueDay: number; categoryId: string; startMonth: Date; endMonth: Date | null; shared: boolean;
 };
 
 /** La récurrence s'applique au mois si elle est active et début ≤ mois ≤ dernier mois (vide = sans fin). */
@@ -60,7 +57,7 @@ const LOAN_INCLUDE = { include: { prepayments: { include: { transaction: true },
 type LoanWithPrepayments = Prisma.LoanGetPayload<typeof LOAN_INCLUDE>;
 
 /** Ligne d'échéancier d'un mois pour une charge-crédit (undefined : crédit soldé ou hors période). */
-export function loanRow(charge: { dueDay: number; startMonth: Date; loan: LoanWithPrepayments }, month: Date) {
+function loanRow(charge: { dueDay: number; startMonth: Date; loan: LoanWithPrepayments }, month: Date) {
   const { loan } = charge;
   const s = buildSchedule(
     { ...loan, dueDay: charge.dueDay, startMonth: charge.startMonth },
@@ -125,7 +122,7 @@ export async function payCharge(householdId: string, userId: string, id: string,
       }
       if (await tx.fixedChargePayment.count({ where: { fixedChargeId: id, month } })) throw new LedgerError(ALREADY_PAID);
       const t = await createEntryTx(tx, householdId, userId, {
-        kind: charge.kind, amount, occurredOn, note: charge.name, categoryId: charge.categoryId, paidById: userId, shared: charge.shared,
+        kind: "EXPENSE", amount, occurredOn, note: charge.name, categoryId: charge.categoryId, paidById: userId, shared: charge.shared,
       });
       return tx.fixedChargePayment.create({ data: { householdId, fixedChargeId: id, month, transactionId: t.id } });
     });

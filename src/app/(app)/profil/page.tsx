@@ -27,7 +27,7 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
               <p className="m-0 truncate text-label text-muted">{user.email}</p>
             </div>
           </div>
-          <div><Badge tone={admin ? "default" : "muted"}>{admin ? "Administrateur" : "Membre"}</Badge></div>
+          <div><Badge tone={admin ? "success" : "muted"}>{admin ? "Administrateur" : "Membre"}</Badge></div>
         </Card>
 
         <Card>

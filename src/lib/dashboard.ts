@@ -1,8 +1,9 @@
 import { addMonths } from "./amortization";
-import { budgetTotals, getBudget, groupOf, savedIn, type Node } from "./budget";
+import { getBudget, groupOf, type Node } from "./budget";
 import { chargeStatus } from "./calendar";
 import { listMonthCharges } from "./charges";
 import { prisma } from "./db";
+import { frDate } from "./ledger";
 import { bigintToCents } from "./money";
 
 /**
@@ -11,7 +12,7 @@ import { bigintToCents } from "./money";
  * dépenses récurrentes encore à payer (retard jugé par rapport à `today`), et rappel du budget prévu s'il existe.
  */
 export async function getDashboard(householdId: string, today: Date, month = addMonths(today, 0)) {
-  const [sums, recent, charges, budget, saved] = await Promise.all([
+  const [sums, recent, charges, budget] = await Promise.all([
     prisma.transaction.groupBy({
       by: ["kind"],
       where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) } },
@@ -24,14 +25,12 @@ export async function getDashboard(householdId: string, today: Date, month = add
       include: { paidBy: { select: { name: true } }, category: { select: { name: true, parent: { select: { name: true } } } } },
     }),
     listMonthCharges(householdId, month),
-    prisma.budget.findUnique({ where: { householdId_month: { householdId, month } }, include: { items: { include: { category: { select: { fixed: true, savings: true } } } } } }),
-    savedIn(householdId, month),
+    getBudget(householdId, month),
   ]);
-  const totals = budget && budgetTotals(budget.items, saved);
   const sum = (kind: "INCOME" | "EXPENSE") => sums.find((s) => s.kind === kind)?._sum.amount ?? 0;
-  const income = totals?.income ?? 0, expense = sum("EXPENSE");
+  const income = budget?.totals.income ?? 0, expense = sum("EXPENSE");
 
-  const unpaid = charges.filter((c) => c.kind === "EXPENSE" && !c.payment).map((c) => ({ ...c, status: chargeStatus(c, today) }));
+  const unpaid = charges.filter((c) => !c.payment).map((c) => ({ ...c, status: chargeStatus(c, today) }));
   const late = unpaid.filter((c) => c.status === "late");
 
   return {
@@ -41,17 +40,17 @@ export async function getDashboard(householdId: string, today: Date, month = add
     result: income - expense,
     net: sum("INCOME") - expense,
     recent,
+    charges,
     unpaid,
     toPay: unpaid.reduce((s, c) => s + c.amount, 0),
     late: { count: late.length, amount: late.reduce((s, c) => s + c.amount, 0) },
-    budget: budget && { status: budget.status, totals: totals! },
+    budget,
   };
 }
 
 const DAY = 86_400_000;
 const utc = (y: number, m: number, d = 1) => Date.UTC(y, m, d);
 const pct = (cur: number, prev: number) => (prev ? ((cur - prev) / Math.abs(prev)) * 100 : null);
-const fr = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("fr-FR", { ...opts, timeZone: "UTC" });
 const NONE = "none";
 
 /** Opérations agrégées par jour, sens et catégorie. */
@@ -127,7 +126,7 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
   // Revenus et dépenses par mois : les douze derniers mois, le plus ancien d'abord (barres du cash-flow).
   const last12 = Array.from({ length: 12 }, (_, i) => 11 - i);
   const monthly = {
-    labels: last12.map((k) => fr({ month: "short" }).format(utc(y, m - k))),
+    labels: last12.map((k) => frDate({ month: "short" }).format(utc(y, m - k))),
     income: last12.map((k) => sum("INCOME", utc(y, m - k), utc(y, m - k + 1))),
     expense: last12.map((k) => sum("EXPENSE", utc(y, m - k), utc(y, m - k + 1))),
   };
@@ -137,7 +136,7 @@ export function buildCharts(flows: Flow[], categories: { id: string; name: strin
     flows: {
       income,
       expense,
-      months: [0, 1, 2].map((k) => fr({ month: "long" }).format(utc(y, m - k))),
+      months: [0, 1, 2].map((k) => frDate({ month: "long" }).format(utc(y, m - k))),
       monthIncome: income[0][30],
       monthExpense: expense[0][30],
     },
@@ -175,16 +174,15 @@ export async function getShell(householdId: string, today: Date) {
   return {
     month,
     plan: budget && spendingPlan(budget.tree),
-    due: charges.filter((c) => c.kind === "EXPENSE" && !c.payment).length,
+    due: charges.filter((c) => !c.payment).length,
   };
 }
 
 const STATUS_RANK = { late: 0, due: 1, paid: 2 } as const;
 
 /** Échéances de dépense du mois pour le tableau de bord : en retard, puis à payer, puis payées ; par date dans chaque groupe. */
-export function upcomingCharges<T extends { kind: string; payment: unknown; due: Date }>(charges: T[], today: Date, n = 5) {
+export function upcomingCharges<T extends { payment: unknown; due: Date }>(charges: T[], today: Date, n = 5) {
   return charges
-    .filter((c) => c.kind === "EXPENSE")
     .map((c) => ({ ...c, status: chargeStatus(c, today) }))
     .sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || a.due.getTime() - b.due.getTime())
     .slice(0, n);

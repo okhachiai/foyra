@@ -1,9 +1,7 @@
-import { Prisma, type CategoryKind } from "@prisma/client";
-import { prisma } from "./db";
+import type { CategoryKind } from "@prisma/client";
+import { prisma, type Db } from "./db";
 import { isCode, LedgerError, NotFoundError } from "./ledger";
 import { parseCents } from "./money";
-
-type Db = Prisma.TransactionClient;
 
 export type CategoryFields = { name: string; enabled: boolean; recurring: boolean; isTemplate: boolean; sortOrder: number; fixed?: boolean };
 export type CategoryInput = CategoryFields & { kind: CategoryKind; parentId: string | null };
