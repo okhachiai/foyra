@@ -52,7 +52,7 @@ export default async function ChargesPage({ searchParams }: { searchParams: Prom
       />
       <SettingsNav admin={user.role === "ADMIN"} />
 
-      <div className="mb-4 grid gap-4 sm:grid-cols-3">
+      <div className="mb-4 stat-group">
         <Stat label={t("Recurring spending this month")} value={money(sum())} note={t("Amounts read from the month’s budget")} />
         <Stat label={t("Left to pay")} value={money(sum(true))} tone={sum(true) > 0 ? "neg" : undefined} note={t(charges.length - paidCount > 1 ? "{n} unpaid payments" : "{n} unpaid payment", { n: charges.length - paidCount })} />
         <Stat label={t("Paid")} value={`${paidCount} / ${charges.length}`} tone="pos" note={t("Actual transactions recorded")} />

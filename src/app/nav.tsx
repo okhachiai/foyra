@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icon, type IconName } from "@/components/ui/icon";
-import type { T } from "@/lib/i18n";
+import { LOCALE_NAMES, LOCALES, THEME_COOKIE, type T } from "@/lib/i18n";
+import { setLocaleAction } from "@/app/actions";
 import { useI18n } from "./i18n";
 
 type Entry = readonly [href: string, label: string, icon: IconName];
@@ -130,6 +131,34 @@ export function TopActions() {
     <Link href="/transactions/new" className="button top-add" aria-label={t("Add a transaction")}>
       <Icon name="plus" className="size-4" /><span>{t("Transaction")}</span>
     </Link>
+  );
+}
+
+/** Light/dark switch: applied at once on <html>, remembered for a year in a cookie the root layout reads (no flash on reload). */
+export function ThemeToggle() {
+  const { t } = useI18n();
+  const toggle = () => {
+    const root = document.documentElement;
+    const next = root.dataset.theme === "dark" ? "light" : "dark";
+    root.dataset.theme = next;
+    document.cookie = `${THEME_COOKIE}=${next}; path=/; max-age=31536000; samesite=lax`;
+  };
+  return (
+    <button type="button" className="ghost top-icon" onClick={toggle} aria-label={t("Switch light/dark mode")} title={t("Switch light/dark mode")}>
+      <Icon name="moon" className="theme-moon size-[18px]" /><Icon name="sun" className="theme-sun size-[18px]" />
+    </button>
+  );
+}
+
+/** Compact language picker for the top bar; submits on change. */
+export function LanguageSelect() {
+  const { locale, t } = useI18n();
+  return (
+    <form action={setLocaleAction} className="top-lang">
+      <select name="locale" defaultValue={locale} aria-label={t("Language")} onChange={(e) => e.currentTarget.form?.requestSubmit()}>
+        {LOCALES.map((l) => <option key={l} value={l} lang={l}>{LOCALE_NAMES[l]}</option>)}
+      </select>
+    </form>
   );
 }
 

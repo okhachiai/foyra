@@ -200,13 +200,13 @@ function FlowsChart({ income, expense, months, tip }: { income: number[][]; expe
     let raf = 0;
     const t0 = performance.now();
     const frame = (now: number) => {
+      // One draw-in on load, then still: no idle motion competing with the numbers.
       const t = (now - t0) / 1000, grow = reduce ? 1 : ease(Math.min(1, t / 1.3));
       sets.forEach((s, j) => {
-        const breathe = reduce ? 1 : 1 + Math.sin(t * 1.2 + s.k * 0.9) * 0.035;
-        const P = s.a.map((v, i) => [X(i), mid + s.dir * (3 + (v / max) * amp * grow * breathe)] as [number, number]);
+        const P = s.a.map((v, i) => [X(i), mid + s.dir * (3 + (v / max) * amp * grow)] as [number, number]);
         paths.current[j]?.setAttribute("d", smooth(P));
       });
-      if (!reduce) raf = requestAnimationFrame(frame);
+      if (grow < 1) raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
@@ -240,22 +240,17 @@ function FlowsChart({ income, expense, months, tip }: { income: number[][]; expe
               <stop offset=".85" stopColor={COLORS.expense[1]} />
             </linearGradient>
           </defs>
-          {Array.from({ length: 9 }, (_, i) => 10 + ((H - 20) * i) / 8).map((y) => (
-            <g key={y} stroke="var(--faint)" opacity={0.6}>
-              <line x1={8} x2={14} y1={y} y2={y} />
-              <line x1={W - 14} x2={W - 8} y1={y} y2={y} />
-            </g>
-          ))}
           <line x1={pad + 6} x2={W - pad - 6} y1={mid} y2={mid} stroke="var(--border)" />
           {sets.map((s, j) => (
             <path
               key={`${s.g}${s.k}`}
               ref={(el) => { paths.current[j] = el; }}
               fill="none"
-              stroke={`url(#${id}${s.g})`}
-              strokeWidth={s.k === 0 ? 2.5 : 1.6}
+              stroke={s.k === 0 ? `url(#${id}${s.g})` : "var(--faint)"}
+              strokeWidth={s.k === 0 ? 2.5 : 1.25}
               strokeLinecap="round"
-              opacity={s.k === 0 ? 1 : s.k === 1 ? 0.55 : 0.3}
+              strokeDasharray={s.k === 0 ? undefined : "3 4"}
+              opacity={s.k === 1 ? 0.7 : s.k === 2 ? 0.4 : 1}
             />
           ))}
           {hover !== null && <line x1={X(hover)} x2={X(hover)} y1={4} y2={H - 4} stroke="var(--faint)" />}
@@ -266,28 +261,7 @@ function FlowsChart({ income, expense, months, tip }: { income: number[][]; expe
   );
 }
 
-/* ---------------- C: spending treemap ---------------- */
-
-type Rect = { name: string; group: string; v: number; x: number; y: number; w: number; h: number };
-function squarify(items: { name: string; group: string; v: number }[], x: number, y: number, w: number, h: number): Rect[] {
-  const total = items.reduce((a, b) => a + b.v, 0) || 1, scale = (w * h) / total, out: Rect[] = [];
-  let rest = items.map((i) => ({ ...i, a: i.v * scale }));
-  const worst = (row: typeof rest, len: number) => {
-    const s = row.reduce((a, b) => a + b.a, 0), mx = Math.max(...row.map((r) => r.a)), mn = Math.min(...row.map((r) => r.a));
-    return Math.max((len * len * mx) / (s * s), (s * s) / (len * len * mn));
-  };
-  while (rest.length) {
-    const len = Math.min(w, h);
-    const row = [rest[0]];
-    let i = 1;
-    while (i < rest.length && worst([...row, rest[i]], len) <= worst(row, len)) row.push(rest[i++]);
-    rest = rest.slice(i);
-    const s = row.reduce((a, b) => a + b.a, 0);
-    if (w >= h) { const cw = s / h; let cy = y; for (const r of row) { const rh = r.a / cw; out.push({ ...r, x, y: cy, w: cw, h: rh }); cy += rh; } x += cw; w -= cw; }
-    else { const rh = s / w; let cx = x; for (const r of row) { const rw = r.a / rh; out.push({ ...r, x: cx, y, w: rw, h: rh }); cx += rw; } y += rh; h -= rh; }
-  }
-  return out;
-}
+/* ---------------- C: spending by category ---------------- */
 
 type Categories = DashboardCharts["categories"];
 const groupColor = (groups: Categories["groups"], id: string) =>
@@ -422,7 +396,7 @@ export function AnalyticsBento({ currency, data, aside }: { currency: string; da
               <div className="ab-legend">
                 <span><i className="line" style={{ background: `linear-gradient(90deg,${COLORS.income.join(",")})` }} />{t("Money in")}</span>
                 <span><i className="line" style={{ background: `linear-gradient(90deg,${COLORS.expense.join(",")})` }} />{t("Money out")}</span>
-                <span><i className="line" style={{ background: "var(--faint)" }} />{flows.months[1]}, {flows.months[2]}</span>
+                <span><i className="line" style={{ background: "repeating-linear-gradient(90deg,var(--faint) 0 3px,transparent 3px 7px)" }} />{flows.months[1]}, {flows.months[2]}</span>
               </div>
             </div>
             <FlowsChart income={flows.income} expense={flows.expense} months={flows.months} tip={tip} />
@@ -521,7 +495,7 @@ export function KpiRow({ currency, items }: { currency: string; items: Kpi[] }) 
             <section key={k.label} className={hero ? "card card-hero kpi-card" : "card kpi-card"} aria-label={k.label}>
               <div className="kpi-top">
                 <span className={`kpi-icon ${k.tone}`}><Icon name={k.icon} className="size-4" /></span>
-                <span className="kpi-title min-w-0 truncate">{k.label}</span>
+                <span className="kpi-title min-w-0 leading-tight">{k.label}</span>
                 {!hero && <span className="ms-auto shrink-0" title={t("Running total compared with the same day of the previous month")}><Delta value={deltaOf(k)} upIsGood={k.upIsGood} /></span>}
               </div>
               <strong className={k.value < 0 && !hero ? "kpi-value text-neg" : "kpi-value"}><CountUp value={k.value} /></strong>
@@ -641,16 +615,17 @@ function Bars({ labels, income, expense, net, tip }: { labels: string[]; income:
           {hover !== null && <rect x={L + step * hover + 4} y={4} width={step - 8} height={H - 8} rx={10} fill="var(--surface-secondary)" />}
           {labels.map((l, i) => {
             const x = cx(i);
-            const bar = (v: number, dx: number, color: string, ink: string) => (
+            // Values hug the pair's centre (income to the left, spending to the right) so two close bars never overlap their labels.
+            const bar = (v: number, dx: number, color: string, ink: string, end: boolean) => (
               <g>
                 <rect x={x + dx} y={Y(Math.max(v, 0))} width={bw} height={Math.max(Y(0) - Y(Math.max(v, 0)), 0)} rx={4} fill={color} />
-                {showValues && v > 0 && <text x={x + dx + bw / 2} y={Y(v) - 6} textAnchor="middle" fontSize={11} fontWeight={700} fill={ink}>{compact.format(v / 100)}</text>}
+                {showValues && v > 0 && <text x={end ? x + dx + bw : x + dx} y={Y(v) - 6} textAnchor={end ? "end" : "start"} fontSize={11} fontWeight={700} fill={ink}>{compact.format(v / 100)}</text>}
               </g>
             );
             return (
               <g key={l + i}>
-                {bar(income[i], -bw - gap / 2, COLORS.income[1], "var(--accent-ink)")}
-                {bar(expense[i], gap / 2, COLORS.expense[1], "var(--neg)")}
+                {bar(income[i], -bw - gap / 2, COLORS.income[1], "var(--accent-ink)", true)}
+                {bar(expense[i], gap / 2, COLORS.expense[1], "var(--neg)", false)}
                 <text x={x} y={H - 6} textAnchor="middle" fontSize={12} fontWeight={i === labels.length - 1 ? 700 : 500} fill={i === labels.length - 1 ? "var(--heading)" : "var(--muted)"}>{l}</text>
               </g>
             );

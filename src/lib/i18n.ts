@@ -6,6 +6,8 @@ export const LOCALES = ["en", "fr", "ar"] as const;
 export type Locale = (typeof LOCALES)[number];
 export const DEFAULT_LOCALE: Locale = "en";
 export const LOCALE_COOKIE = "foyra_lang";
+/** Explicit light/dark choice; absent = follow the system. */
+export const THEME_COOKIE = "foyra_theme";
 export const LOCALE_NAMES: Record<Locale, string> = { en: "English", fr: "Français", ar: "العربية" };
 
 /** Intl tag used for numbers, currencies and dates (Arabic keeps Latin digits for amounts). */

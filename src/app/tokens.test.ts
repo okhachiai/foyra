@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const css = readFileSync(new URL("./globals.css", import.meta.url), "utf8");
 const vars = (block: string) => Object.fromEntries([...block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)].map((m) => [m[1], m[2]]));
 const light = vars(css.match(/\n:root \{([\s\S]*?)\n\}/)![1]);
-const dark = { ...light, ...vars(css.match(/prefers-color-scheme: dark\) \{\s*:root \{([\s\S]*?)\}/)![1]) };
+const dark = { ...light, ...vars(css.match(/:root\[data-theme="dark"\] \{([\s\S]*?)\}/)![1]) };
 
 const lum = (hex: string) => {
   const [r, g, b] = [1, 3, 5].map((i) => {

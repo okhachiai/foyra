@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "playwright-audit": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.85",
+        "--isolated",
+        "--headless",
+        "--allowed-origins",
+        "http://127.0.0.1:3100;http://localhost:3100"
+      ]
+    }
+  }
+}

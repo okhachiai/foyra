@@ -5,7 +5,7 @@ import { monthLabel, parseDay, todayIn } from "@/lib/ledger";
 import { formatCents } from "@/lib/money";
 import { getI18n } from "@/lib/i18n-server";
 import { logoutAction } from "@/app/actions";
-import { Crumbs, Nav, PrefsNav, TabBar, TopActions } from "@/app/nav";
+import { Crumbs, LanguageSelect, Nav, PrefsNav, TabBar, ThemeToggle, TopActions } from "@/app/nav";
 import { Icon } from "@/components/ui/icon";
 import { LogoMark } from "@/components/ui/logo";
 import { ProgressBar } from "@/components/ui/progress";
@@ -69,6 +69,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Crumbs root={user.household.name} />
           <div className="top-end">
             <TopActions />
+            <LanguageSelect />
+            <ThemeToggle />
             <Link href="/profile" className="who" aria-label={t("My account: {name}", { name: user.name })}>
               <span className="avatar" aria-hidden>{initial}</span>
               <span className="who-name">{user.name}<small>{user.household.name} · {t(user.role === "ADMIN" ? "Administrator" : "Member")}</small></span>

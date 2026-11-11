@@ -376,11 +376,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
       </section>
 
-      <details>
-        <summary>{t("Quick transaction entry")}</summary>
+      <Fold id="dash-quick-entry" title={t("Quick transaction entry")} className="mt-6">
         {/* Key = latest transaction: a successful entry changes the key, the form starts empty again. */}
         <EntryForm key={d.recent[0]?.id} back="dashboard" members={members} categories={categories} v={{ occurredOn: todayStr, paidById: user.id }} />
-      </details>
+      </Fold>
     </>
   );
 }

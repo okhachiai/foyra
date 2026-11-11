@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Urbanist } from "next/font/google";
 import "./globals.css";
+import { cookies } from "next/headers";
 import { getI18n } from "@/lib/i18n-server";
+import { THEME_COOKIE } from "@/lib/i18n";
 import { I18nProvider } from "./i18n";
 
 // Rounded geometric sans for the whole UI (headings, amounts, text).
@@ -27,10 +29,16 @@ export const viewport: Viewport = {
   ],
 };
 
+// No explicit choice: follow the system theme (before first paint, and live on change).
+const followSystem = `(()=>{const d=document.documentElement,m=matchMedia("(prefers-color-scheme: dark)"),s=()=>{if(!document.cookie.includes("${THEME_COOKIE}="))d.dataset.theme=m.matches?"dark":"light"};s();m.addEventListener("change",s)})()`;
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const { locale, dir } = await getI18n();
+  const theme = (await cookies()).get(THEME_COOKIE)?.value;
   return (
-    <html lang={locale} dir={dir} className={sans.variable}>
+    // suppressHydrationWarning: data-theme may be set by the script before hydration.
+    <html lang={locale} dir={dir} className={sans.variable} data-theme={theme === "dark" || theme === "light" ? theme : undefined} suppressHydrationWarning>
+      <head><script dangerouslySetInnerHTML={{ __html: followSystem }} /></head>
       <body><I18nProvider locale={locale}>{children}</I18nProvider></body>
     </html>
   );

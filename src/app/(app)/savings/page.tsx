@@ -99,9 +99,11 @@ export default async function SavingsPage({ searchParams }: { searchParams: Prom
             <span className="kpi-note">{t("No “Savings” line in this month’s budget.")}</span>
           )}
         </Card>
-        <Stat label={t("Planned this month")} value={money(cur.planned)} note={cur.planned ? t("Left to pay in {amount}", { amount: money(left) }) : t("No “Savings” line in the budget")} />
-        <Stat label={t("Total saved")} value={money(cur.cumulative)} tone="pos" note={t("Running total of all deposits")} />
-        <Stat label={t("Monthly average")} value={money(average)} note={t("Over the last 12 months")} />
+        <div className="stat-group">
+          <Stat label={t("Planned this month")} value={money(cur.planned)} note={cur.planned ? t("Left to pay in {amount}", { amount: money(left) }) : t("No “Savings” line in the budget")} />
+          <Stat label={t("Total saved")} value={money(cur.cumulative)} tone="pos" note={t("Running total of all deposits")} />
+          <Stat label={t("Monthly average")} value={money(average)} note={t("Over the last 12 months")} />
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-12">

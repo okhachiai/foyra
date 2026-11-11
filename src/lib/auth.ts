@@ -14,7 +14,6 @@ const DAY_MS = 86_400_000;
 
 /** Au-delà, refusé sans calcul Argon2 (évite de hacher des entrées de plusieurs centaines de Ko). */
 export const MAX_PASSWORD = 1024;
-const hashPassword = (password: string) => hash(password);
 const verifyPassword = async (passwordHash: string, password: string) =>
   password.length <= MAX_PASSWORD && verify(passwordHash, password).catch(() => false);
 
@@ -100,21 +99,18 @@ const failures = new Map<string, { count: number; until: number }>();
  * IP connue : compteur par IP, un tiers ne peut donc pas bloquer la victime depuis une autre IP.
  * IP inconnue ("", sans APP_URL) : seul l'email reste disponible ; définir APP_URL derrière un proxy pour éviter ce blocage ciblé.
  */
-const keys = (ip: string, email: string) => [ip ? `ip:${ip}` : `email:${email.toLowerCase()}`];
+const key = (ip: string, email: string) => (ip ? `ip:${ip}` : `email:${email.toLowerCase()}`);
 
 export function loginBlocked(ip: string, email: string, now = Date.now()) {
-  return keys(ip, email).some((k) => {
-    const f = failures.get(k);
-    return f !== undefined && f.until > now && f.count >= MAX_FAILURES;
-  });
+  const f = failures.get(key(ip, email));
+  return f !== undefined && f.until > now && f.count >= MAX_FAILURES;
 }
 
 export function recordLoginFailure(ip: string, email: string, now = Date.now()) {
   if (failures.size > 10_000) for (const [k, f] of failures) if (f.until <= now) failures.delete(k);
-  for (const k of keys(ip, email)) {
-    const f = failures.get(k);
-    failures.set(k, f && f.until > now ? { count: f.count + 1, until: now + WINDOW_MS } : { count: 1, until: now + WINDOW_MS });
-  }
+  const k = key(ip, email);
+  const f = failures.get(k);
+  failures.set(k, f && f.until > now ? { count: f.count + 1, until: now + WINDOW_MS } : { count: 1, until: now + WINDOW_MS });
 }
 
 /** Après un succès. Le compteur `ip:` n'est jamais effacé : se connecter à son propre compte le remettrait à zéro entre deux essais. */
@@ -128,7 +124,7 @@ let dummyHash: Promise<string> | undefined;
 export async function checkCredentials(email: string, password: string) {
   const user = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
   if (!user) {
-    dummyHash ??= hashPassword("foyra-dummy-password");
+    dummyHash ??= hash("foyra-dummy-password");
     await verifyPassword(await dummyHash, password);
     return null;
   }
@@ -159,7 +155,7 @@ export async function householdExists() {
  * `force` : foyer supplémentaire (tests, script) — chaque foyer reste strictement isolé par householdId.
  */
 export async function setupHousehold(input: { householdName: string; name: string; email: string; password: string }, { force = false } = {}) {
-  const passwordHash = await hashPassword(input.password);
+  const passwordHash = await hash(input.password);
   try {
     return await prisma.$transaction(async (tx) => {
       // Verrou transactionnel : deux /setup simultanés se sérialisent, le second voit le foyer du premier.
@@ -181,7 +177,7 @@ export async function setupHousehold(input: { householdName: string; name: strin
 export async function createMember(householdId: string, input: { name: string; email: string; password: string; role: Role }) {
   try {
     return await prisma.user.create({
-      data: { householdId, name: input.name, email: input.email.trim().toLowerCase(), passwordHash: await hashPassword(input.password), role: input.role },
+      data: { householdId, name: input.name, email: input.email.trim().toLowerCase(), passwordHash: await hash(input.password), role: input.role },
     });
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return null;
@@ -241,7 +237,7 @@ export async function changePassword(userId: string, current: string, next: stri
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!(await verifyPassword(user.passwordHash, current))) throw new LedgerError("Incorrect current password.", "current");
   const token = (await cookies()).get(SESSION_COOKIE)?.value ?? "";
-  const passwordHash = await hashPassword(next);
+  const passwordHash = await hash(next);
   await prisma.$transaction([
     prisma.user.update({ where: { id: userId }, data: { passwordHash } }),
     prisma.session.deleteMany({ where: { userId, NOT: { tokenHash: sha256(token) } } }),

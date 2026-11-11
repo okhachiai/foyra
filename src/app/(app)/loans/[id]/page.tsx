@@ -61,9 +61,11 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
           <ProgressBar value={repaid} max={loan.principal} label={t("Principal repaid")} />
           <span className="kpi-note">{t("{paid} repaid of {total}", { paid: money(repaid), total: money(loan.principal) })}</span>
         </Card>
-        <Stat label={t("Monthly payment")} value={next ? money(next.total) : "—"} note={next ? t("Next on {date}", { date: frDay(next.due) }) + (loan.insurance > 0 ? ` · ${t("including insurance {amount}", { amount: money(loan.insurance) })}` : "") : t("Loan paid off")} />
-        <Stat label={t("Annual rate")} value={rateLabel(loan.annualRate, intl)} note={loan.annualRate ? t("Interest paid {amount}", { amount: money(loan.status.interestPaid) }) : t("Interest-free loan")} />
-        <Stat label={t("Time left")} value={duration(left, t)} note={loan.annualRate ? t("Interest remaining {amount}", { amount: money(loan.status.interestRemaining) }) : t("{n} payments in total", { n: rows.length })} />
+        <div className="stat-group">
+          <Stat label={t("Monthly payment")} value={next ? money(next.total) : "—"} note={next ? t("Next on {date}", { date: frDay(next.due) }) + (loan.insurance > 0 ? ` · ${t("including insurance {amount}", { amount: money(loan.insurance) })}` : "") : t("Loan paid off")} />
+          <Stat label={t("Annual rate")} value={rateLabel(loan.annualRate, intl)} note={loan.annualRate ? t("Interest paid {amount}", { amount: money(loan.status.interestPaid) }) : t("Interest-free loan")} />
+          <Stat label={t("Time left")} value={duration(left, t)} note={loan.annualRate ? t("Interest remaining {amount}", { amount: money(loan.status.interestRemaining) }) : t("{n} payments in total", { n: rows.length })} />
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-12">

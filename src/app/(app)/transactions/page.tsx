@@ -65,7 +65,7 @@ export default async function TransactionsPage({ searchParams }: { searchParams:
         }
       />
 
-      <div className="mb-4 grid gap-4 sm:grid-cols-3">
+      <div className="mb-4 stat-group">
         <Stat label={t("Income")} value={money(sum("INCOME"))} tone="pos" />
         <Stat label={t("Spending")} value={money(sum("EXPENSE"))} tone="neg" />
         <Stat label={t("Month net")} value={money(net)} tone={net < 0 ? "neg" : undefined} note={t("Income − spending")} />

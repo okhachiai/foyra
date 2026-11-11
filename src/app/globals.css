@@ -1,6 +1,6 @@
 /* Design system Foyra : tableau de bord fintech clair et aéré.
    Fond ivoire, cartes blanches à bord fin, vert principal pour l'action et l'état actif, terracotta réservé aux dépenses.
-   Une seule police (Urbanist). Clair par défaut, sombre automatique (prefers-color-scheme).
+   Une seule police (Urbanist). Clair/sombre : suit le système, bascule manuelle dans la barre du haut.
    Tailwind v4 sans preflight (thème + utilitaires) ; les styles maison vivent dans la couche « components »,
    que les utilitaires peuvent donc surcharger. */
 @layer theme, base, components, utilities;
@@ -100,48 +100,47 @@
   --tap: 2.75rem; /* 44px : cible tactile minimale */
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1412;
-    --surface: #151d1a;
-    --surface-secondary: #1b2521;
-    --sidebar-bg: #121916;
-    --text: #d6e0dc;
-    --heading: #eef4f1;
-    --muted: #a0b0ab;
-    --faint: #8d9e99;
-    --border: #2a3632;
-    --hairline: #212b27;
-    --accent: #4cbf9f;
-    --accent-hover: #66cdb0;
-    --accent-soft: #66cdb0;
-    --accent-tint: #173a31;
-    --accent-ink: #7fd8be;
-    --accent-text: #0b1512;
-    --hero: #1d4a42;
-    --hero-text: #f2f7f5;
-    --hero-muted: #b5ccc5;
-    --neg: #f0a389;
-    --expense: #e08466;
-    --expense-tint: #3a2620;
-    --pos: #66cdb0;
-    --warn: #e6c77d;
-    --warning: #d9bc6e;
-    --warn-tint: #3a3220;
-    --info: #7fa9c2;
-    --info-ink: #a3c6db;
-    --info-tint: #1d2e38;
-    --track: #26302c;
-    --chart-1-soft: #2f7a64;
-    --chart-2-soft: #9a5844;
-    --chart-5: #5e9bb3;
-    --chart-6: #a796c4;
-    --chart-ink: #0e1412;
-    --ring: rgba(76, 191, 159, 0.35);
-    --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
-    --shadow-pop: 0 16px 40px -12px rgba(0, 0, 0, 0.7);
-    color-scheme: dark;
-  }
+/* Sombre : choix explicite (cookie foyra_theme → data-theme), sinon le script du layout suit prefers-color-scheme. */
+:root[data-theme="dark"] {
+  --bg: #0e1412;
+  --surface: #151d1a;
+  --surface-secondary: #1b2521;
+  --sidebar-bg: #121916;
+  --text: #d6e0dc;
+  --heading: #eef4f1;
+  --muted: #a0b0ab;
+  --faint: #8d9e99;
+  --border: #2a3632;
+  --hairline: #212b27;
+  --accent: #4cbf9f;
+  --accent-hover: #66cdb0;
+  --accent-soft: #66cdb0;
+  --accent-tint: #173a31;
+  --accent-ink: #7fd8be;
+  --accent-text: #0b1512;
+  --hero: #1d4a42;
+  --hero-text: #f2f7f5;
+  --hero-muted: #b5ccc5;
+  --neg: #f0a389;
+  --expense: #e08466;
+  --expense-tint: #3a2620;
+  --pos: #66cdb0;
+  --warn: #e6c77d;
+  --warning: #d9bc6e;
+  --warn-tint: #3a3220;
+  --info: #7fa9c2;
+  --info-ink: #a3c6db;
+  --info-tint: #1d2e38;
+  --track: #26302c;
+  --chart-1-soft: #2f7a64;
+  --chart-2-soft: #9a5844;
+  --chart-5: #5e9bb3;
+  --chart-6: #a796c4;
+  --chart-ink: #0e1412;
+  --ring: rgba(76, 191, 159, 0.35);
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
+  --shadow-pop: 0 16px 40px -12px rgba(0, 0, 0, 0.7);
+  color-scheme: dark;
 }
 
 @layer components {
@@ -247,6 +246,10 @@ main:focus { outline: none; }
 .crumbs svg { flex-shrink: 0; }
 .crumbs [aria-current] { color: var(--heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .top-end { display: flex; align-items: center; gap: 0.75rem; margin-inline-start: auto; }
+.button.top-icon, button.top-icon { min-height: 2.25rem; width: 2.25rem; padding: 0; display: grid; place-items: center; }
+.theme-sun, [data-theme="dark"] .theme-moon { display: none; }
+[data-theme="dark"] .theme-sun { display: block; }
+.top-lang select { width: auto; min-height: 2.25rem; padding: 0.25rem 0.5rem; font-size: var(--text-label); font-weight: 600; }
 .who { display: flex; align-items: center; gap: 0.625rem; padding: 0.25rem 0.75rem 0.25rem 0.25rem; color: var(--heading); font-weight: 600; text-decoration: none; border: 1px solid transparent; border-radius: var(--r-pill); transition: border-color 0.15s, background-color 0.15s; }
 .who:hover { background: var(--surface); border-color: var(--border); }
 .who .avatar { width: 2.25rem; height: 2.25rem; font-size: 0.875rem; }
@@ -273,9 +276,16 @@ main:focus { outline: none; }
   .crumbs { font-size: 1rem; }
   .who { padding: 0; }
   .who-name { display: none; }
-  .top-add { min-height: 2.25rem; padding: 0 0.75rem; }
+  .button.top-add { min-height: 2.25rem; width: 2.25rem; padding: 0; justify-content: center; }
+  .top-add span, .top-lang { display: none; } /* langue : Paramètres ; place gardée pour le titre de page */
+  .top-end { gap: 0.5rem; }
   main { padding: 1rem max(1rem, env(safe-area-inset-right)) calc(5.5rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
   h1 { font-size: 1.5rem; }
+  /* Actions de page : le sélecteur de mois et l'action principale prennent toute la largeur au lieu de s'empiler en escalier. */
+  .page-head .actions { width: 100%; }
+  .page-head .actions > .month-nav { flex: 1 1 auto; justify-content: space-between; }
+  .page-head .actions > :is(a.button, button):not(.ghost), .page-head .actions > form:has(button:not(.ghost)) { flex: 1 1 auto; justify-content: center; }
+  .page-head .actions > form button:not(.ghost) { width: 100%; justify-content: center; }
 
   .tabbar {
     position: fixed; inset: auto 0 0; z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -313,7 +323,6 @@ main:focus { outline: none; }
   .more-menu button.link { justify-content: flex-start; }
   .more-menu button.link:hover { color: var(--neg); background: var(--surface-secondary); }
 }
-@media (max-width: 22rem) { .top-add span { display: none; } }
 
 /* Surfaces : carte blanche, bord fin, ombre à peine perceptible. */
 .list, .card {
@@ -438,7 +447,7 @@ summary:hover { color: var(--heading); }
 }
 
 /* Tableau de bord : 4 KPI de même gabarit (le premier en vert profond), analyse 55/23/22, activité 60/40.
-   Tablette : KPI 2 × 2, flux sur toute la largeur puis budget | épargne ; mobile : une colonne. */
+   Tablette et portable : KPI 2 × 2 (4 dès 80rem), flux sur toute la largeur puis budget | épargne ; mobile : une colonne. */
 .dash-kpis, .dash-analysis, .dash-activity { display: grid; gap: 1rem; margin-bottom: 1rem; }
 @media (min-width: 40rem) {
   .dash-kpis, .dash-analysis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -446,18 +455,23 @@ summary:hover { color: var(--heading); }
 }
 @media (min-width: 80rem) {
   .dash-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .dash-analysis { grid-template-columns: minmax(0, 55fr) minmax(0, 23fr) minmax(0, 22fr); }
-  .dash-analysis > .w-cash { grid-column: auto; }
   .dash-activity { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 }
+/* Analyse 55/23/22 seulement quand la zone de contenu dépasse ~1200 px : en dessous, les noms de catégories du budget sont tronqués. */
+@media (min-width: 96rem) {
+  .dash-analysis { grid-template-columns: minmax(0, 55fr) minmax(0, 23fr) minmax(0, 22fr); }
+  .dash-analysis > .w-cash { grid-column: auto; }
+}
 .kpi-card { display: flex; min-width: 0; flex-direction: column; gap: 0.5rem; padding: 1.25rem 1.5rem; }
-.kpi-top { display: flex; align-items: center; gap: 0.625rem; }
+.kpi-top { display: flex; align-items: center; gap: 0.625rem; min-height: 2.5rem; } /* 2 lignes de titre : les montants restent alignés d’une carte à l’autre */
 .kpi-title { font-weight: 600; color: var(--heading); }
 .card-hero .kpi-title { color: var(--hero-text); }
 .kpi-icon { display: grid; place-items: center; width: 2rem; height: 2rem; flex-shrink: 0; border-radius: var(--r-sm); color: var(--accent-ink); background: var(--accent-tint); }
 .kpi-icon.expense { color: var(--neg); background: var(--expense-tint); }
 .kpi-icon.info { color: var(--info-ink); background: var(--info-tint); }
 .kpi-icon.hero { color: var(--hero-text); background: color-mix(in srgb, var(--hero-text) 14%, transparent); }
+/* Graphiques : coordonnées SVG en LTR même en arabe, sinon text-anchor start/end s'inverse. */
+main svg { direction: ltr; }
 .kpi-chart { position: relative; height: 3rem; }
 .kpi-chart > svg { position: absolute; inset: 0; display: block; overflow: visible; }
 .kpi-progress { display: flex; align-items: center; height: 3rem; }
@@ -468,13 +482,34 @@ summary:hover { color: var(--heading); }
   .kpi-card .kpi-value { font-size: 1.75rem; }
   .kpi-chart, .kpi-progress { height: 2.25rem; }
 }
+/* Stat (carte KPI secondaire) et leur groupe : une carte par chiffre, côte à côte dès 40rem.
+   En mobile, le groupe devient une seule carte, une ligne par chiffre (libellé + note à gauche, montant à droite) :
+   moitié moins haut que des cartes empilées, et le montant garde la largeur restante (centimes compris). */
+.stat { display: flex; min-width: 0; flex-direction: column; gap: 0.5rem; padding: 1.25rem; }
+.stat-group { display: grid; gap: 1rem; }
+@media (min-width: 40rem) { .stat-group { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  /* Dans la grille KPI (Épargne, Prêt) : les stats restent des cellules de .dash-kpis, à côté de la carte de progression. */
+  .dash-kpis > .stat-group { display: contents; }
+}
+@media (max-width: 39.99rem) {
+  .stat-group { gap: 0; overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-card); }
+  .stat-group > .stat {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "label value" "note value";
+    align-items: center; column-gap: 1rem; row-gap: 0.125rem; padding: 0.875rem 1.25rem;
+    border: 0; border-radius: 0; box-shadow: none; background: none;
+  }
+  .stat-group > .stat + .stat { border-top: 1px solid var(--hairline); }
+  .stat-group > .stat > :first-child { grid-area: label; }
+  .stat-group > .stat > .kpi-value { grid-area: value; font-size: 1.25rem; text-align: end; }
+  .stat-group > .stat > small { grid-area: note; }
+}
 /* Échéances : date, libellé, montant + statut ; une ligne par échéance. */
 .due-list { margin: 0; padding: 0; list-style: none; }
 .due-list li + li { border-top: 1px solid var(--hairline); }
 .due-list li > a { display: flex; align-items: center; gap: 0.75rem; min-height: var(--tap); margin: 0 -0.5rem; padding: 0.625rem 0.5rem; color: inherit; text-decoration: none; border-radius: var(--r-md); transition: background-color 0.15s; }
 .due-list li > a:hover { background: var(--surface-secondary); }
 /* Synthèse chiffrée (détails du mois) : une carte, des colonnes séparées d'un filet, pas une carte par chiffre. */
-.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 1rem 0; margin: 0.25rem 0 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr)); gap: 1rem 0; margin: 0.25rem 0 0; }
 .facts div { display: flex; flex-direction: column; gap: 0.25rem; padding: 0 1rem; border-inline-start: 1px solid var(--hairline); }
 .facts dt { font-size: var(--text-label); font-weight: 600; color: var(--muted); }
 .facts dd { margin: 0; font-size: 1.25rem; font-weight: 700; color: var(--heading); white-space: nowrap; }

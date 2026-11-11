@@ -127,7 +127,7 @@ export function envelopes(tree: (Node & { actual: number })[]): { lines: Envelop
 // --- Lecture ---
 
 /** Versé dans le mois sur les catégories d'épargne (et leurs sous-catégories), opérations communes et personnelles. */
-export async function savedIn(householdId: string, month: Date) {
+async function savedIn(householdId: string, month: Date) {
   const r = await prisma.transaction.aggregate({
     where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) }, category: { OR: [{ savings: true }, { parent: { savings: true } }] } },
     _sum: { amount: true },

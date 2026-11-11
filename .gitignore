@@ -16,3 +16,6 @@ backups/
 Foyra.md
 _bmad/render/
 security-audit/
+
+# BMAD tooling (installed locally)
+_bmad/

@@ -159,7 +159,7 @@ function Daily({ input, output, money, t }: { input: DailyInput; output: DailyOu
   return (
     <>
       <Summary label={t("Summary")} title={t("Where the month stands · day {day} of {days}", { day: input.day, days: input.daysInMonth })} text={output.summary} />
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="stat-group">
         <Stat label={t("Variable expenses")} value={money(input.actual.variable)} note={t("planned {amount}", { amount: money(input.planned.variable) })} />
         <Stat label={t("Actual remainder")} value={money(input.actual.remaining)} tone={input.actual.remaining < 0 ? "neg" : undefined} note={t("planned {amount}", { amount: money(input.planned.remaining) })} />
         <Stat label={t("Uncategorized")} value={money(input.uncategorized.amount)} note={t("{n} expense(s)", { n: input.uncategorized.count })} />
@@ -231,7 +231,7 @@ function Monthly({ input, output, money, t, intl }: { input: MonthlyInput; outpu
   return (
     <>
       <Summary label={t("Summary")} title={t("Review of {month}", { month: monthLabel(new Date(`${input.month}-01`), intl) })} text={output.verdict} />
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="stat-group">
         <Stat label={t("Actual remainder")} value={money(input.actual.remaining)} tone={input.actual.remaining < input.planned.remaining ? "neg" : "pos"} note={t("planned {amount}", { amount: money(input.planned.remaining) })} />
         <Stat label={t("Savings achieved")} value={money(input.actual.savings)} tone={input.actual.savings < input.planned.savings ? "neg" : "pos"} note={t("planned {amount}", { amount: money(input.planned.savings) })} />
         <Stat label={t("Off budget")} value={money(input.offBudget)} note={t("Expenses without a budget line")} />
@@ -285,7 +285,7 @@ async function Plan({ reportId, householdId, budgetId, input, output, money, t, 
   const avg = (h: number[]) => Math.round(h.reduce((s, x) => s + x, 0) / h.length);
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-4">
+      <div className="stat-group">
         <Stat label={t("Income")} value={money(input.income)} />
         <Stat label={t("Fixed charges")} value={money(input.fixed)} />
         <Stat label={t("Desired savings")} value={money(input.savings)} />
