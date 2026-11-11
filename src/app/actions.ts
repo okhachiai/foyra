@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import type { BudgetSource, CategoryKind, LlmProvider, Role } from "@prisma/client";
 import {
-  changePassword, checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked,
+  changePassword, checkCredentials, clearLoginFailures, createMember, endSession, householdExists, loginBlocked, MAX_PASSWORD,
   recordLoginFailure, requireAdmin, requireUser, setDisabled, setRole, setupHousehold, setupToken, startSession, updateDisplayName, updateHousehold,
 } from "@/lib/auth";
 import { createEntry, deleteTransaction, LedgerError, NotFoundError, parseDay, todayIn, updateEntry, type EntryInput } from "@/lib/ledger";
@@ -14,7 +14,7 @@ import { addDefaultCategories, createCategory, deleteCategory, parseForecast, se
 import { addItem, createBudget, formatMonth, type IncomeLine, itemSignature, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
 import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
 import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/lib/loans";
-import { configuredProviders, LlmError, PROVIDER_LABELS, testConnection, type LlmConfig } from "@/lib/llm";
+import { configuredProviders, LlmError, localHostAllowed, PROVIDER_LABELS, sealSecret, testConnection, type LlmConfig } from "@/lib/llm";
 import { parseCents } from "@/lib/money";
 import { applyPlan, generateReport } from "@/lib/report";
 import { importMonth, parseMonthFile, type MonthFile } from "@/lib/budget-file";
@@ -58,6 +58,7 @@ const noteField = (fd: FormData) => str(fd, "note").slice(0, 500) || null;
 function passwordField(fd: FormData, errors: Errors) {
   const password = String(fd.get("password") ?? "");
   if (password.length < 8) errors.password ??= "8 caractères minimum.";
+  if (password.length > MAX_PASSWORD) errors.password ??= `${MAX_PASSWORD} caractères maximum.`;
   return password;
 }
 
@@ -182,10 +183,11 @@ export async function updateHouseholdAction(_: FormState, fd: FormData): Promise
   done("/parametres?ok=foyer");
 }
 
-/** Clé secrète : vide = inchangée (jamais réaffichée), case `clear_<nom>` cochée = effacée. */
+/** Clé secrète : vide = inchangée (jamais réaffichée), case `clear_<nom>` cochée = effacée. Chiffrée à l'enregistrement (une ancienne clé en clair l'est au passage). */
 function secretField(fd: FormData, name: string, current: string | null) {
   if (fd.get(`clear_${name}`)) return null;
-  return str(fd, name).slice(0, 500) || current;
+  const value = str(fd, name).slice(0, 500) || current;
+  return value && sealSecret(value);
 }
 
 /** Réglages LLM du foyer ; le fournisseur préféré est validé contre les réglages envoyés. */
@@ -195,6 +197,7 @@ export async function updateLlmAction(_: FormState, fd: FormData): Promise<FormS
   const h = admin.household;
   const localLlmUrl = str(fd, "localLlmUrl").slice(0, 500).replace(/\/+$/, "") || null;
   if (localLlmUrl && !/^https?:\/\/[^\s/]/.test(localLlmUrl)) errors.localLlmUrl ??= "URL http(s) attendue, ex. http://localhost:11434";
+  if (localLlmUrl && !localHostAllowed(localLlmUrl)) errors.localLlmUrl ??= "Hôte non autorisé : l'opérateur doit l'ajouter à LLM_ALLOWED_HOSTS (ex. host.docker.internal:11434).";
   const config: LlmConfig = {
     llmProvider: null,
     claudeApiKey: secretField(fd, "claudeApiKey", h.claudeApiKey),
@@ -410,12 +413,13 @@ export async function budgetAction(_: FormState, fd: FormData): Promise<FormStat
   return error ?? done(`/budget?m=${formatMonth(month)}&ok=1`);
 }
 
-/** Import d'un fichier exporté (`file`) : le mois du fichier devient identique à celui de la base d'origine. */
+/** Import d'un fichier exporté (`file`) : le mois du fichier devient identique à celui de la base d'origine.
+ * ADMIN seulement : l'import crée et modifie des catégories, charges et crédits, et remplace les opérations de tous les membres. */
 export async function importBudgetAction(_: FormState, fd: FormData): Promise<FormState> {
-  const user = await requireUser();
+  const user = await requireAdmin();
   const file = fd.get("file");
   if (!(file instanceof File) || !file.size) return { error: "Choisissez un fichier exporté (.json)." };
-  if (file.size > 5_000_000) return { error: "Fichier trop volumineux (5 Mo maximum)." };
+  if (file.size > 1_000_000) return { error: "Fichier trop volumineux (1 Mo maximum)." }; // limite des Server Actions
   let data: MonthFile | undefined;
   return (await run(async () => importMonth(user.householdId, (data = parseMonthFile(await file.text()))))) ?? done(`/budget?m=${data!.month}&ok=1`);
 }
@@ -545,7 +549,7 @@ export async function prepayLoanAction(_: FormState, fd: FormData): Promise<Form
   const mode = str(fd, "mode");
   if (mode !== "REDUCE_TERM" && mode !== "REDUCE_PAYMENT") errors.mode ??= "Choisissez un mode.";
   if (failed(errors)) return { fields: errors };
-  return (await run(() => prepay(user.householdId, user.id, id, amount, occurredOn, mode as "REDUCE_TERM"))) ?? done(`/credits/${id}`);
+  return (await run(() => prepay(user.householdId, user.id, id, amount, occurredOn, mode as "REDUCE_TERM", idempotencyKey(fd)))) ?? done(`/credits/${id}`);
 }
 
 // --- Rapports (rien n'est écrit dans le budget ni les opérations sans clic explicite) ---

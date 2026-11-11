@@ -99,12 +99,12 @@ describe("connexion", () => {
     expect(await checkCredentials("inconnu@test.fr", "password1")).toBeNull();
   });
 
-  it("10 échecs rapprochés → bloqué par email et par IP, puis débloqué", () => {
+  it("10 échecs rapprochés → IP bloquée (pas l'email depuis une autre IP), puis débloquée", () => {
     const now = Date.now();
     for (let i = 0; i < 9; i++) recordLoginFailure("1.2.3.4", "x@test.fr", now);
     expect(loginBlocked("1.2.3.4", "x@test.fr", now)).toBe(false);
     recordLoginFailure("1.2.3.4", "x@test.fr", now);
-    expect(loginBlocked("9.9.9.9", "X@test.fr", now)).toBe(true); // même email, autre IP
+    expect(loginBlocked("9.9.9.9", "X@test.fr", now)).toBe(false); // même email, autre IP : pas de blocage ciblé (FOY-003)
     expect(loginBlocked("1.2.3.4", "y@test.fr", now)).toBe(true); // même IP, autre email
     expect(loginBlocked("1.2.3.4", "x@test.fr", now + 16 * 60_000)).toBe(false);
     clearLoginFailures("1.2.3.4", "x@test.fr");

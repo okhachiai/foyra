@@ -8,6 +8,6 @@ export async function GET(req: Request) {
   const month = parseMonth(new URL(req.url).searchParams.get("m") ?? undefined);
   if (!month) return new Response("Mois invalide.", { status: 400 });
   return new Response(JSON.stringify(await exportMonth(user.householdId, month), null, 2), {
-    headers: { "Content-Type": "application/json; charset=utf-8", "Content-Disposition": `attachment; filename="foyra-${formatMonth(month)}.json"` },
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "Content-Disposition": `attachment; filename="foyra-${formatMonth(month)}.json"` },
   });
 }

@@ -67,8 +67,8 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
     />
   );
 
-  /** Import d'un fichier exporté (budget, opérations, paiements) : le mois du fichier est remplacé à l'identique. */
-  const transfer = (
+  /** Import d'un fichier exporté (budget, opérations, paiements) : le mois du fichier est remplacé à l'identique. ADMIN seulement (touche au catalogue). */
+  const transfer = user.role === "ADMIN" && (
     <ActionForm
       action={importBudgetAction}
       className={`card mt-6 p-4 ${ROW}`}

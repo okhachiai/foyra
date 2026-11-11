@@ -12,9 +12,11 @@ export const SESSION_COOKIE = "foyra_session"; // dupliqué dans src/middleware.
 const SESSION_DAYS = 30;
 const DAY_MS = 86_400_000;
 
+/** Au-delà, refusé sans calcul Argon2 (évite de hacher des entrées de plusieurs centaines de Ko). */
+export const MAX_PASSWORD = 1024;
 const hashPassword = (password: string) => hash(password);
-const verifyPassword = (passwordHash: string, password: string) =>
-  verify(passwordHash, password).catch(() => false);
+const verifyPassword = async (passwordHash: string, password: string) =>
+  password.length <= MAX_PASSWORD && verify(passwordHash, password).catch(() => false);
 
 const sha256 = (token: string) => createHash("sha256").update(token).digest("hex");
 const expiry = () => new Date(Date.now() + SESSION_DAYS * DAY_MS);
@@ -94,8 +96,11 @@ const MAX_FAILURES = 10;
 const WINDOW_MS = 15 * 60_000;
 const failures = new Map<string, { count: number; until: number }>();
 
-/** IP inconnue ("") : pas de clé par IP, sinon tous les clients partageraient le même compteur. */
-const keys = (ip: string, email: string) => [...(ip ? [`ip:${ip}`] : []), `email:${email.toLowerCase()}`];
+/**
+ * IP connue : compteur par IP, un tiers ne peut donc pas bloquer la victime depuis une autre IP.
+ * IP inconnue ("", sans APP_URL) : seul l'email reste disponible ; définir APP_URL derrière un proxy pour éviter ce blocage ciblé.
+ */
+const keys = (ip: string, email: string) => [ip ? `ip:${ip}` : `email:${email.toLowerCase()}`];
 
 export function loginBlocked(ip: string, email: string, now = Date.now()) {
   return keys(ip, email).some((k) => {
@@ -112,8 +117,9 @@ export function recordLoginFailure(ip: string, email: string, now = Date.now()) 
   }
 }
 
+/** Après un succès. Le compteur `ip:` n'est jamais effacé : se connecter à son propre compte le remettrait à zéro entre deux essais. */
 export function clearLoginFailures(ip: string, email: string) {
-  for (const k of keys(ip, email)) failures.delete(k);
+  if (!ip) failures.delete(`email:${email.toLowerCase()}`);
 }
 
 let dummyHash: Promise<string> | undefined;

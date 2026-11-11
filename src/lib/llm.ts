@@ -1,7 +1,38 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import type { Household, LlmProvider } from "@prisma/client";
 
 /** Erreur de fournisseur LLM (HTTP, réseau, réponse inutilisable) ; message affichable. */
 export class LlmError extends Error {}
+
+// --- Clés API chiffrées en base (AES-256-GCM, clé dérivée de LLM_KEY_SECRET) ---
+// ponytail: sans LLM_KEY_SECRET, les clés restent en clair (comportement historique) ; anciennes clés en clair relues telles quelles.
+const SEALED = "enc:v1:";
+const keySecret = () => (process.env.LLM_KEY_SECRET ? createHash("sha256").update(process.env.LLM_KEY_SECRET).digest() : null);
+
+/** Valeur à enregistrer : chiffrée si LLM_KEY_SECRET est défini (une valeur déjà chiffrée est gardée telle quelle). */
+export function sealSecret(value: string) {
+  const key = keySecret();
+  if (!key || value.startsWith(SEALED)) return value;
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  const data = Buffer.concat([c.update(value, "utf8"), c.final()]);
+  return SEALED + Buffer.concat([iv, c.getAuthTag(), data]).toString("base64");
+}
+
+/** Valeur enregistrée → clé en clair ; LlmError si LLM_KEY_SECRET manque ou a changé. */
+export function openSecret(value: string | null) {
+  if (!value?.startsWith(SEALED)) return value;
+  const key = keySecret();
+  const raw = Buffer.from(value.slice(SEALED.length), "base64");
+  try {
+    if (!key) throw new Error();
+    const d = createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12), { authTagLength: 16 });
+    d.setAuthTag(raw.subarray(12, 28));
+    return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString("utf8");
+  } catch {
+    throw new LlmError("Clé API illisible : LLM_KEY_SECRET absent ou modifié. Saisissez à nouveau la clé dans Paramètres → Rapport LLM.");
+  }
+}
 
 const EMPTY = "Fournisseur LLM : réponse vide", TRUNCATED = "Fournisseur LLM : réponse tronquée.";
 
@@ -71,6 +102,7 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
+      redirect: "error", // pas de rebond 30x vers une autre cible (SSRF)
       signal: AbortSignal.timeout(timeout),
     });
   } catch (e) {
@@ -90,9 +122,21 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
 }
 
 const CLAUDE_URL = "https://api.anthropic.com/v1/messages";
-const claudeHeaders = (c: LlmConfig) => ({ "x-api-key": c.claudeApiKey ?? "", "anthropic-version": "2023-06-01" });
-const localUrl = (c: LlmConfig) => `${(c.localLlmUrl ?? "").replace(/\/+$/, "")}/v1/chat/completions`;
-const localHeaders = (c: LlmConfig): Record<string, string> => (c.localLlmApiKey ? { Authorization: `Bearer ${c.localLlmApiKey}` } : {});
+const claudeHeaders = (c: LlmConfig) => ({ "x-api-key": openSecret(c.claudeApiKey) ?? "", "anthropic-version": "2023-06-01" });
+/**
+ * Anti-SSRF : l'URL du modèle local est saisie par un ADMIN du foyer, l'hôte (nom:port) doit figurer dans LLM_ALLOWED_HOSTS,
+ * liste fixée par l'opérateur. Vide = modèle local désactivé.
+ */
+export function localHostAllowed(url: string) {
+  const allowed = (process.env.LLM_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  return URL.canParse(url) && allowed.includes(new URL(url).host);
+}
+const localUrl = (c: LlmConfig) => {
+  const base = (c.localLlmUrl ?? "").replace(/\/+$/, "");
+  if (!localHostAllowed(base)) throw new LlmError("Modèle local : hôte non autorisé (LLM_ALLOWED_HOSTS).");
+  return `${base}/v1/chat/completions`;
+};
+const localHeaders = (c: LlmConfig): Record<string, string> => (c.localLlmApiKey ? { Authorization: `Bearer ${openSecret(c.localLlmApiKey)}` } : {});
 
 /** Petite requête réelle (1 token) pour vérifier clé, modèle et URL ; lève LlmError avec la cause. */
 export async function testConnection(provider: LlmProvider, c: LlmConfig): Promise<string> {

@@ -109,6 +109,7 @@ export default async function LoanPage({ params }: { params: Promise<{ id: strin
             <SectionHeader title="Remboursement anticipé" subtitle={`Crée la dépense sur ${c.name} : supprimer cette dépense annule le remboursement.`} />
             <ActionForm action={prepayLoanAction}>
               <input type="hidden" name="id" value={loan.id} />
+              <input type="hidden" name="idempotencyKey" value={crypto.randomUUID()} />
               <Field name="amount" label="Montant">
                 <input name="amount" inputMode="decimal" required placeholder="0,00" autoComplete="off" />
               </Field>

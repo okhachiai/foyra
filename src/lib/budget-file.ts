@@ -3,6 +3,8 @@ import { addMonths } from "./amortization";
 import { formatMonth, lockBudget, parseMonth } from "./budget";
 import { prisma } from "./db";
 import { formatDay, LedgerError, parseDay } from "./ledger";
+import { checkPrepayments } from "./loans";
+import { MAX_CENTS } from "./money";
 
 // Fichier d'un mois (JSON) : budget, opérations, paiements de charges et remboursements anticipés du mois,
 // avec les catégories, charges / crédits et membres qu'ils utilisent. Les identifiants diffèrent d'une base à l'autre :
@@ -98,7 +100,8 @@ const fail = (what: string): never => {
 };
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const arr = (v: unknown, what: string) => (Array.isArray(v) ? v : fail(what));
-const int = (v: unknown, what: string, min = 0, max = Number.MAX_SAFE_INTEGER) => (Number.isInteger(v) && (v as number) >= min && (v as number) <= max ? (v as number) : fail(what));
+// Borne haute : colonnes Int PostgreSQL.
+const int = (v: unknown, what: string, min = 0, max = MAX_CENTS) => (Number.isInteger(v) && (v as number) >= min && (v as number) <= max ? (v as number) : fail(what));
 const bool = (v: unknown, what: string) => (typeof v === "boolean" ? v : fail(what));
 const text = (v: unknown, what: string) => (typeof v === "string" && v.trim() && v.length <= 200 ? v : fail(what));
 const oneOf = <T extends string>(v: unknown, values: readonly T[], what: string) => (values.includes(v as T) ? (v as T) : fail(what));
@@ -149,7 +152,8 @@ export function parseMonthFile(raw: string): MonthFile {
       };
     }
     return {
-      kind: oneOf(c.kind, ["EXPENSE"] as const, what), name: text(c.name, what), category: ref(c.category, nc, what), active: bool(c.active, what),
+      kind: oneOf(c.kind, ["EXPENSE"] as const, what), name: text(c.name, what), active: bool(c.active, what),
+      category: categories[ref(c.category, nc, what)].kind === "EXPENSE" ? (c.category as number) : fail(`${what} (catégorie de recette)`),
       dueDay: int(c.dueDay, what, 1, 31), startMonth, endMonth, shared: bool(c.shared, what), loan,
     };
   });
@@ -193,7 +197,7 @@ export function parseMonthFile(raw: string): MonthFile {
       prepayment = { charge, mode: oneOf(p.mode, ["REDUCE_TERM", "REDUCE_PAYMENT"] as const, what) };
     }
     return {
-      kind: oneOf(t.kind, KINDS, what), amount: int(t.amount, what), occurredOn: t.occurredOn as string,
+      kind: oneOf(t.kind, KINDS, what), amount: int(t.amount, what, 1), occurredOn: t.occurredOn as string,
       note: t.note === null ? null : typeof t.note === "string" ? t.note.slice(0, 500) : fail(what),
       category: refOrNull(t.category, nc, what), shared: bool(t.shared, what),
       paidBy: ref(t.paidBy, members.length, what), createdBy: ref(t.createdBy, members.length, what), payment, prepayment,
@@ -272,5 +276,7 @@ export async function importMonth(householdId: string, file: MonthFile) {
       if (t.payment !== null) await tx.fixedChargePayment.create({ data: { householdId, fixedChargeId: charges[t.payment], month, transactionId: id } });
       if (t.prepayment) await tx.loanPrepayment.create({ data: { householdId, loanId: loans[t.prepayment.charge]!, transactionId: id, mode: t.prepayment.mode } });
     }
+    // Mêmes règles qu'à la saisie (prepay) : chaque anticipé importé s'applique en entier.
+    for (const l of new Set(file.transactions.flatMap((t) => (t.prepayment ? [loans[t.prepayment.charge]!] : [])))) await checkPrepayments(tx, householdId, l);
   }, { timeout: 30_000 });
 }

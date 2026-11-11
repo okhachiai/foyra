@@ -10,8 +10,13 @@ const cfg = (c: Partial<LlmConfig>): LlmConfig => ({ ...NONE, ...c });
 const CLAUDE = cfg({ claudeApiKey: "k" });
 const LOCAL = cfg({ localLlmUrl: "http://llm", localLlmModel: "m" });
 
+beforeEach(() => {
+  vi.stubEnv("LLM_ALLOWED_HOSTS", "llm, llm:8080");
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("fournisseurs configurés", () => {
