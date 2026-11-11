@@ -265,15 +265,18 @@ make audit-down
 
 ### Remote deployment over SSH (optional)
 
-`make deploy-remote` uploads the code to a server, runs typecheck and tests there against a throwaway database, writes a verified `pg_dump` backup to `backups/`, then replaces the container. Nothing is replaced if any step fails.
+`make deploy-remote` sends only `compose.remote.yml` over SSH, pulls the published GHCR image, writes a verified `pg_dump` backup to `backups/`, then replaces only the application container. The running PostgreSQL container, its actual named volume, the Compose project name and the production `.env` are preserved. No source upload, remote build or remote test run is performed. Local uncommitted changes are not deployed: the image must already be published. A failed pull or backup stops deployment before replacing the app.
 
 ```sh
 cp .deploy.env.example .deploy.env   # REMOTE_HOST, REMOTE_DIR, REMOTE_PROJECT
 INIT=1 make deploy-remote            # first install (creates the database)
-make deploy-remote                   # subsequent deployments
+make deploy-remote                   # subsequent deployments (published latest image)
+DEPLOY_IMAGE=ghcr.io/okhachiai/foyra:0.1.0 make deploy-remote  # choose a published version
 ```
 
-Requirements: key-based SSH access, and an existing `REMOTE_DIR` folder with its production `.env`. If a `.deploy-lock` file is left behind, make sure no deployment is running before removing it.
+For an existing installation, keep the same `REMOTE_HOST`, `REMOTE_DIR` and `REMOTE_PROJECT`. The script discovers and reuses the database volume and refuses deployment if the database is stopped or missing (except for a genuinely new `INIT=1` installation). Never run `docker compose down -v` on production. Backups are stored under `REMOTE_DIR/backups`; the downloaded image digest is recorded in each release as `image.txt`. Migrations run when the new app starts; if startup fails, inspect the logs and backup before attempting a rollback, as migrations may already have changed the schema. Existing cron containers are left running.
+
+Requirements: key-based SSH access, access to the GHCR image from the server (run `docker login ghcr.io` there if the package is private), and an existing `REMOTE_DIR` folder with its production `.env`. If a `.deploy-lock` file is left behind, make sure no deployment is running before removing it.
 
 ## Business rules
 

@@ -22,7 +22,7 @@ up: ## Local : image de production (tester le build final)
 logs: ## Suivre les logs de l'application
 	docker compose logs --tail=100 -f app
 
-deploy-remote: ## Envoyer, tester, sauvegarder et déployer sur le Mac mini via SSH
+deploy-remote: ## Télécharger l’image publiée, sauvegarder et déployer via SSH
 	@bash scripts/deploy-remote.sh
 
 audit-up: ## Audit : instance locale jetable (127.0.0.1:3100) + données fictives
