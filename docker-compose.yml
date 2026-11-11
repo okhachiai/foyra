@@ -32,7 +32,7 @@ services:
       CRON_TOKEN: ${CRON_TOKEN:-}
       LLM_ALLOWED_HOSTS: ${LLM_ALLOWED_HOSTS:-}
       LLM_KEY_SECRET: ${LLM_KEY_SECRET:-}
-      TZ: Europe/Paris
+      TZ: ${TZ:-Europe/Paris}
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
     security_opt: ["no-new-privileges:true"]
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
     depends_on: [app]
     environment:
-      TZ: Europe/Paris
+      TZ: ${TZ:-Europe/Paris}
       CRON_TOKEN: ${CRON_TOKEN:-}
       REPORT_CRON: ${REPORT_CRON:-0 20 * * *}
     command: >-

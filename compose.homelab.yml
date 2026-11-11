@@ -1,0 +1,59 @@
+# Foyra pour homelab : image publiée, aucun clone ni build nécessaire.
+#   curl -O https://raw.githubusercontent.com/okhachiai/foyra/main/compose.homelab.yml
+#   echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" > .env
+#   docker compose -f compose.homelab.yml up -d
+# Puis http://<ip-du-serveur>:3000 → /setup (jeton : docker compose -f compose.homelab.yml logs app).
+# Toutes les variables de .env.example sont reconnues.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-foyra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}
+      POSTGRES_DB: ${POSTGRES_DB:-foyra}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    image: ghcr.io/okhachiai/foyra:${FOYRA_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-foyra}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis}@db:5432/${POSTGRES_DB:-foyra}
+      APP_URL: ${APP_URL:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      CRON_TOKEN: ${CRON_TOKEN:-}
+      LLM_ALLOWED_HOSTS: ${LLM_ALLOWED_HOSTS:-}
+      LLM_KEY_SECRET: ${LLM_KEY_SECRET:-}
+      TZ: ${TZ:-Europe/Paris}
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-3000}:3000"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # Rapports IA automatiques : appels refusés par l'app tant que CRON_TOKEN est vide.
+  cron:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      TZ: ${TZ:-Europe/Paris}
+      CRON_TOKEN: ${CRON_TOKEN:-}
+      REPORT_CRON: ${REPORT_CRON:-0 20 * * *}
+    command: >-
+      sh -c 'apk add --no-cache tzdata >/dev/null &&
+      echo "$$REPORT_CRON wget -O- --header \"Authorization: Bearer $$CRON_TOKEN\" --post-data \"\" http://app:3000/api/reports/daily 2>&1" > /etc/crontabs/root &&
+      crond -f -l 8'
+
+volumes:
+  pgdata:

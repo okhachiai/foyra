@@ -42,6 +42,7 @@ La plupart des applications de budget exigent un accès à vos comptes bancaires
 - [Fonctionnalités](#fonctionnalités)
 - [Architecture](#architecture)
 - [Démarrage rapide](#démarrage-rapide)
+- [Homelab](#homelab-image-prête-sans-cloner) : image prête, `docker compose` ou `docker run`
 - [Configuration](#configuration)
 - [Exploitation](#exploitation) : HTTPS, mise à jour, sauvegarde, mot de passe oublié
 - [Rapports IA](#rapports-ia)
@@ -98,6 +99,50 @@ docker compose up -d
 4. Ajoutez les autres membres dans **Membres**.
 
 Au démarrage, le conteneur `app` attend PostgreSQL, applique les migrations (`prisma migrate deploy`) puis lance le serveur. Les données vivent dans le volume `pgdata` : `docker compose down` les conserve, seul `docker compose down -v` les efface.
+
+## Homelab (image prête, sans cloner)
+
+L'image `ghcr.io/okhachiai/foyra` est publiée pour `amd64` et `arm64` (PC, NAS, Raspberry Pi 4/5, Mac). Tags : `latest` (branche `main`) ou une version (`0.1.0`).
+
+### Docker Compose (recommandé)
+
+```sh
+mkdir foyra && cd foyra
+curl -O https://raw.githubusercontent.com/okhachiai/foyra/main/compose.homelab.yml
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" > .env
+docker compose -f compose.homelab.yml up -d
+docker compose -f compose.homelab.yml logs app   # jeton d'installation
+```
+
+Ouvrez `http://<ip-du-serveur>:3000/`. Ce fichier écoute sur toutes les interfaces (`APP_BIND=0.0.0.0`) pour être joignable depuis le réseau local. Toutes les variables de [Configuration](#configuration) s'ajoutent au `.env`, plus `TZ` (fuseau, défaut `Europe/Paris`) et `FOYRA_VERSION` (tag d'image, défaut `latest`). Mise à jour : `docker compose -f compose.homelab.yml pull && docker compose -f compose.homelab.yml up -d`. Fonctionne tel quel dans Portainer, Dockge, CasaOS (pile « compose »).
+
+### `docker run`
+
+Foyra a besoin de PostgreSQL. Avec une base existante, un seul conteneur suffit :
+
+```sh
+docker run -d --name foyra --restart unless-stopped -p 3000:3000 \
+  -e DATABASE_URL=postgresql://foyra:MOTDEPASSE@hote-postgres:5432/foyra \
+  -e TZ=Europe/Paris \
+  ghcr.io/okhachiai/foyra:latest
+```
+
+Sans base existante, créez-la à côté :
+
+```sh
+docker network create foyra
+docker run -d --name foyra-db --network foyra --restart unless-stopped \
+  -e POSTGRES_USER=foyra -e POSTGRES_PASSWORD=MOTDEPASSE -e POSTGRES_DB=foyra \
+  -v foyra-db:/var/lib/postgresql/data postgres:17-alpine
+docker run -d --name foyra --network foyra --restart unless-stopped -p 3000:3000 \
+  -e DATABASE_URL=postgresql://foyra:MOTDEPASSE@foyra-db:5432/foyra \
+  ghcr.io/okhachiai/foyra:latest
+docker logs foyra   # jeton d'installation
+```
+
+Le conteneur redémarre tant que la base n'est pas prête, puis applique les migrations. Les autres variables passent en `-e NOM=valeur`.
+
+> **Reverse proxy et image publiée** : `APP_URL` est lu au build pour autoriser l'origine des Server Actions. Avec l'image publiée, le proxy doit transmettre l'en-tête `Host` d'origine (comportement par défaut de Caddy, Traefik, Nginx Proxy Manager). Sinon, construisez l'image depuis les sources avec `APP_URL`.
 
 ## Configuration
 
