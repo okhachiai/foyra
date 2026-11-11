@@ -1,18 +1,46 @@
+<div align="center">
+
+<img src="src/app/icon0.svg" alt="Logo Foyra" width="112" height="112">
+
 # Foyra
 
-**Budget mensuel d'un foyer, auto-hébergé.** Prévoyez le budget du mois, suivez le réel et partagez les dépenses communes au prorata des revenus, sans connecter de compte bancaire.
+**Le budget mensuel du foyer, auto-hébergé et privé.**
 
-![Next.js 15](https://img.shields.io/badge/Next.js-15-black)
-![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-336791)
-![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
-![Licence MIT](https://img.shields.io/badge/licence-MIT-blue)
-![Auto-hébergé](https://img.shields.io/badge/self--hosted-oui-147D69)
+Prévoyez le budget du mois, suivez le réel et partagez équitablement les dépenses communes,<br>
+sans jamais connecter de compte bancaire.
+
+[![Next.js 15](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org)
+[![React 19](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Licence MIT](https://img.shields.io/badge/licence-MIT-147D69)](LICENSE)
+
+[Démarrage rapide](#démarrage-rapide) ·
+[Configuration](#configuration) ·
+[Exploitation](#exploitation) ·
+[Contribuer](#contribuer) ·
+[Sécurité](#sécurité)
+
+</div>
+
+---
+
+## Pourquoi Foyra ?
+
+La plupart des applications de budget exigent un accès à vos comptes bancaires et hébergent vos données chez un tiers. Foyra prend le parti inverse :
+
+- **Vos données restent chez vous** : une seule instance Docker, une base PostgreSQL, aucun service externe obligatoire.
+- **Pensé pour le foyer, pas pour un individu** : plusieurs membres, des dépenses communes et une répartition au prorata des revenus.
+- **Prévu contre réel** : on planifie le mois, on saisit ce qui se passe, on compare.
+- **Sécurisé par défaut** : image distroless non-root, mots de passe Argon2, sessions côté serveur, aucune inscription publique.
 
 > Interface en français, montants en euros, fuseau Europe/Paris par défaut.
 
 ## Sommaire
 
 - [Fonctionnalités](#fonctionnalités)
+- [Architecture](#architecture)
 - [Démarrage rapide](#démarrage-rapide)
 - [Configuration](#configuration)
 - [Exploitation](#exploitation) : HTTPS, mise à jour, sauvegarde, mot de passe oublié
@@ -34,7 +62,24 @@
 - **Import / export JSON** du budget.
 - Thème clair et sombre (suit le système).
 
-**Stack** : Next.js 15 (App Router, Server Actions), React 19, TypeScript, Prisma 6, PostgreSQL 17, Tailwind CSS 4, Argon2. Image de production distroless, utilisateur non-root.
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Navigateur] -- HTTPS via proxy --> A[app<br/>Next.js 15 · Server Actions]
+    A -- Prisma 6 --> D[(db<br/>PostgreSQL 17)]
+    C[cron] -- POST /api/reports/daily --> A
+    A -. optionnel .-> L[Claude ou LLM local<br/>compatible OpenAI]
+```
+
+| Couche | Technologie |
+| --- | --- |
+| Interface | Next.js 15 (App Router), React 19, Tailwind CSS 4 |
+| Logique serveur | Server Actions, TypeScript strict |
+| Données | Prisma 6, PostgreSQL 17 |
+| Authentification | Sessions maison, Argon2 |
+| Exécution | Docker Compose, image distroless, utilisateur non-root |
+| Qualité | Vitest, typecheck, audit local (gitleaks, semgrep, trivy, ZAP) |
 
 ## Démarrage rapide
 
