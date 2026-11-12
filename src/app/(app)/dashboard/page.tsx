@@ -105,7 +105,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           <>
             {configuredProviders(user.household).length > 0 && (
               <ActionForm action={analyzeAction} className="inline">
-                <button type="submit" className="ghost"><Icon name="reports" className="size-4" />{t("AI analysis")}</button>
+                <input type="hidden" name="month" value={formatMonth(month)} />
+                <button type="submit" className="ghost"><Icon name="reports" className="size-4" />{t("Analyse {month}", { month: monthLabel(month, intl) })}</button>
               </ActionForm>
             )}
             <a href={`/budget/export?m=${formatMonth(month)}`} className="button ghost"><Icon name="download" className="size-4" />{t("Export")}</a>

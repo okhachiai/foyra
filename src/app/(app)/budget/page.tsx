@@ -352,6 +352,7 @@ export default async function BudgetPage({ searchParams }: { searchParams: Promi
           <p className="m-0 min-w-0 flex-1 basis-64 text-sm text-muted">
             {t("Income, fixed charges and savings entered? The AI allocates the remaining {amount} across variable expenses.", { amount: money(Math.max(totals.income - totals.fixed - totals.savings, 0)) })}
           </p>
+          <small className="text-muted">{t("Save budget changes before requesting an allocation.")}</small>
           <button type="submit" className="secondary"><Icon name="reports" className="size-4" />{t("Suggest the allocation")}</button>
         </ActionForm>
       )}

@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMember, setupHousehold } from "./auth";
-import { addItem, createBudget, parseMonth, removeItem, setBudgetStatus } from "./budget";
+import { addItem, createBudget, parseMonth, removeItem, saveItems, setBudgetStatus } from "./budget";
 import { createCharge } from "./charges";
 import { prisma } from "./db";
 import { createEntry, LedgerError, NotFoundError, parseDay } from "./ledger";
 import { complete, LlmError } from "./llm";
 import {
-  applyPlan, generateAutoReports, generateReport, listReports, outputSchema, pace, toEuros, validateOutput,
+  applyPlan, undoPlan, requestReport, processNextReport, retryReport, getReport, generateAutoReports, generateReport, listReports, renderReferences, outputSchema, pace, toEuros, validateOutput,
   type DailyInput, type DailyOutput, type MonthlyInput, type PlanInput, type PlanOutput,
 } from "./report";
 
@@ -50,16 +50,21 @@ describe("validateOutput", () => {
     expect(validateOutput("MONTHLY", {} as MonthlyInput, JSON.stringify({ verdict: "v", respected: [], mistakes: ["m"], advice: [] })).ok).toBe(true);
   });
 
-  it("PLAN : euros → centimes, ordre de l'entrée, lignes omises à 0", () => {
-    expect(planOf(lines(["r", 100], ["a", 900]))).toEqual([["a", 90000], ["b", 0], ["r", 10000]]);
+  it("PLAN : euros → centimes, ordre de l'entrée, toutes les lignes requises", () => {
+    expect(planOf(lines(["r", 100], ["a", 900], ["b", 0]))).toEqual([["a", 90000], ["b", 0], ["r", 10000]]);
   });
 
-  it("PLAN : somme ramenée sur le reste à répartir (surplus sur la réserve, excédent retiré de la réserve puis des plus grosses)", () => {
-    expect(planOf(lines(["a", 500], ["b", 100], ["r", 100]))).toEqual([["a", 50000], ["b", 10000], ["r", 40000]]);
-    expect(planOf(lines(["a", 900], ["b", 200], ["r", 50]))).toEqual([["a", 80000], ["b", 20000], ["r", 0]]);
-    const noReserve = { ...PLAN, lines: PLAN.lines.slice(0, 2) };
-    const r = validateOutput("PLAN", noReserve, lines(["a", 600], ["b", 100]));
-    expect(r.ok && (r.output as PlanOutput).lines.map((l) => l.amount)).toEqual([90000, 10000]);
+  it("PLAN : rejette les répartitions incomplètes, vides ou dont la somme est incorrecte", () => {
+    for (const text of [lines(), lines(["a", 1000]), lines(["a", 500], ["b", 100], ["r", 100]), lines(["a", 900], ["b", 200], ["r", 50]), lines(["a", 1e308], ["b", 0], ["r", 0])]) expect(validateOutput("PLAN", PLAN, text).ok).toBe(false);
+    expect(planOf(lines(["a", 899.99], ["b", 0.01], ["r", 100]))).toEqual([["a", 89999], ["b", 1], ["r", 10000]]);
+  });
+
+  it("refuse les chiffres inventés et les références inexistantes ; rend les montants vérifiés", () => {
+    const input = { planned: { income: 123456 } } as DailyInput;
+    for (const summary of ["Vous avez 999999 euros.", "Vous avez {{planned.fake}}.", "الرصيد ٩٩٩٩."]) expect(validateOutput("DAILY", input, JSON.stringify({ summary, alerts: [], advice: [] })).ok).toBe(false);
+    const output = { summary: "Revenu : {{planned.income}}.", alerts: [], advice: [] };
+    expect(validateOutput("DAILY", input, JSON.stringify(output)).ok).toBe(true);
+    expect((renderReferences(input, output, "fr") as DailyOutput).summary).toContain("1 234,56");
   });
 
   it("PLAN : ligne inconnue, en double, montant négatif refusés", () => {
@@ -85,10 +90,12 @@ const day = (s: string) => parseDay(s)!;
 const today = day("2026-11-10");
 
 beforeEach(async () => {
+  vi.stubEnv("CRON_TOKEN", "test-worker-token");
   await prisma.$executeRawUnsafe(`TRUNCATE "Transaction", "Category", "Session", "User", "Household" CASCADE`);
 });
 afterEach(() => {
   llm.mockReset();
+  vi.unstubAllEnvs();
 });
 
 /** Foyer : Alice (admin), Bob ; budget du mois `month` vidé, avec les lignes données (catégories créées par addItem). */
@@ -142,6 +149,8 @@ describe("rapport du jour", () => {
     expect(input.upcoming).toEqual([{ name: "Rent", amount: 90000, due: "2026-11-25" }]);
     expect(input.planned).toMatchObject({ income: 300000, fixed: 90000, variable: 30000 });
     const sent = llm.mock.calls[0][2].user;
+    expect(sent).not.toContain("Market");
+    expect(sent).not.toContain("Alice");
     expect(sent).toContain('"planned":300'); // euros
     for (const e of ["alice@test.fr", "bob@test.fr"]) expect(sent).not.toContain(e);
   });
@@ -155,7 +164,7 @@ describe("rapport du jour", () => {
     expect(r.output).toEqual(DAILY_OK);
     reply("x");
     reply({ summary: 1 });
-    expect(await generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" })).toMatchObject({ output: null, error: "Response does not match the schema." });
+    expect(await generateReport(admin, "DAILY", today, "MANUAL", { provider: "CLAUDE" })).toMatchObject({ output: null, error: "The model could not produce a reliable report. Try another model or review the budget." });
   });
 
   it("erreur du fournisseur : rapport en erreur sans relance ; aucun fournisseur : rejet", async () => {
@@ -204,7 +213,7 @@ describe("préparation du budget", () => {
     await spend(courses.categoryId, 48000, "2026-10-10");
     await spend(cine.categoryId, 2000, "2026-09-03");
     await spend(courses.categoryId, 1000, "2026-07-31"); // hors des 3 mois
-    reply(lines([courses.id, 600], [cine.id, 50]));
+    reply(lines([courses.id, 600], [cine.id, 50], [reserve.id, 850]));
 
     const r = await generateReport(admin, "PLAN", today, "MANUAL", { provider: "CLAUDE", month: nov });
     expect(r).toMatchObject({ kind: "PLAN", budgetId: budget.id, error: null });
@@ -218,10 +227,14 @@ describe("préparation du budget", () => {
     expect((r.output as PlanOutput).lines.map((l) => l.amount)).toEqual([60000, 5000, 85000]);
 
     await expect(applyPlan(bob, r.id)).rejects.toThrow(NotFoundError);
-    await removeItem(hh, budget.id, reserve.id);
-    expect(await applyPlan(admin, r.id)).toBe(2);
+    expect(await applyPlan(admin, r.id)).toBe(3);
     expect((await prisma.budgetItem.findUniqueOrThrow({ where: { id: courses.id } })).amount).toBe(60000);
     expect((await prisma.budgetItem.findUniqueOrThrow({ where: { id: cine.id } })).amount).toBe(5000);
+    await expect(applyPlan(admin, r.id)).rejects.toThrow("already been applied");
+    await undoPlan(admin, r.id);
+    expect((await prisma.budgetItem.findUniqueOrThrow({ where: { id: courses.id } })).amount).toBe(0);
+    await removeItem(hh, budget.id, reserve.id);
+    await expect(applyPlan(admin, r.id)).rejects.toThrow("budget changed");
     await setBudgetStatus(hh, budget.id, "VALIDATED");
     await expect(applyPlan(admin, r.id)).rejects.toThrow(LedgerError);
   });
@@ -245,8 +258,8 @@ describe("rapports automatiques", () => {
   it("un seul par foyer, jour et type, sans auteur ; le 1er, bilan du mois écoulé en plus", async () => {
     const { admin, hh } = await household();
     await createBudget(hh, oct);
-    await prisma.household.updateMany({ data: { claudeApiKey: "k" } });
-    llm.mockImplementation(async (_p, _c, req) => ({ model: "m1", text: JSON.stringify(req.system.includes("Bilan") ? MONTHLY_OK : DAILY_OK) }));
+    await prisma.household.updateMany({ data: { claudeApiKey: "k", aiAutomatic: true } });
+    llm.mockImplementation(async (_p, _c, req) => ({ model: "m1", text: JSON.stringify(req.system.includes("Review of the past month") ? MONTHLY_OK : DAILY_OK) }));
 
     const a = await generateReport(admin, "DAILY", today, "AUTO", { provider: "CLAUDE" });
     expect(a.userId).toBeNull();
@@ -262,17 +275,17 @@ describe("rapports automatiques", () => {
     await household();
     const admin2 = (await setupHousehold({ householdName: "Autre", name: "Zoé", email: "zoe@test.fr", password: "password1" }, { force: true }))!;
     await createBudget(admin2.householdId, nov);
-    await prisma.household.updateMany({ data: { claudeApiKey: "k" } });
+    await prisma.household.updateMany({ data: { claudeApiKey: "k", aiAutomatic: true } });
     let calls = 0;
     llm.mockImplementation(async () => {
       if (calls++ === 0) throw new Error("boom");
       return { model: "m1", text: JSON.stringify(DAILY_OK) };
     });
-    const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await generateAutoReports(today)).toBe(1);
-    expect(err).toHaveBeenCalledTimes(1);
-    expect(err.mock.calls[0][1]).toBe("boom");
-    err.mockRestore();
+    expect(await generateAutoReports(today)).toBe(2);
+    await processNextReport();
+    await processNextReport();
+    expect(await prisma.report.count({ where: { status: "ERROR" } })).toBe(1);
+    expect(await prisma.report.count({ where: { status: "READY" } })).toBe(1);
   });
 
   it("listReports : un membre ne voit que les siens, l'admin tout", async () => {
@@ -283,5 +296,129 @@ describe("rapports automatiques", () => {
     const his = await generateReport(bob, "DAILY", today, "MANUAL", { provider: "CLAUDE" });
     expect((await listReports(bob)).map((r) => r.id)).toEqual([his.id]);
     expect((await listReports(admin)).map((r) => r.id)).toEqual([his.id, mine.id, auto.id]);
+  });
+});
+
+describe("durable report queue", () => {
+  it("enqueue is idempotent and never calls the model from the user request", async () => {
+    const { admin, hh } = await household();
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k" } });
+    const [a, b] = await Promise.all([requestReport(admin, "DAILY", today, "MANUAL"), requestReport(admin, "DAILY", today, "MANUAL")]);
+    expect(a.id).toBe(b.id);
+    expect(a.status).toBe("QUEUED");
+    expect(llm).not.toHaveBeenCalled();
+    llm.mockResolvedValue({ model: "m1", text: JSON.stringify(DAILY_OK), inputTokens: 20, outputTokens: 10 });
+    const completed = await Promise.all([processNextReport(), processNextReport()]);
+    expect(completed.filter(Boolean)).toHaveLength(1);
+    expect(llm).toHaveBeenCalledTimes(1);
+    expect(await getReport(admin, a.id)).toMatchObject({ status: "READY", attempts: 1, inputTokens: 20, outputTokens: 10 });
+  });
+
+  it("failed jobs can be retried by their owner, without duplicating the report", async () => {
+    const { admin, bob, hh } = await household();
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k" } });
+    const r = await requestReport(admin, "DAILY", today, "MANUAL");
+    llm.mockRejectedValueOnce(new LlmError("temporarily unavailable"));
+    await processNextReport();
+    expect(await getReport(admin, r.id)).toMatchObject({ status: "ERROR" });
+    await expect(retryReport(bob, r.id)).rejects.toThrow(NotFoundError);
+    await retryReport(admin, r.id);
+    reply(DAILY_OK);
+    await processNextReport();
+    expect(await getReport(admin, r.id)).toMatchObject({ status: "READY", attempts: 2 });
+    expect(await prisma.report.count()).toBe(1);
+  });
+
+  it("recovers expired work and preserves the selected language", async () => {
+    const { admin, hh } = await household();
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k" } });
+    const r = await requestReport(admin, "DAILY", today, "MANUAL", { locale: "fr" });
+    await prisma.report.update({ where: { id: r.id }, data: { status: "RUNNING", startedAt: new Date(Date.now() - 31 * 60 * 1000), attempts: 1 } });
+    reply(DAILY_OK);
+    expect(await processNextReport()).toBe(true);
+    expect(llm.mock.calls[0][2].system).toContain("Answer in French");
+    expect(await getReport(admin, r.id)).toMatchObject({ status: "READY", attempts: 2 });
+  });
+
+  it("respects automatic opt-in and blocks generation without a worker token", async () => {
+    const { admin, hh } = await household();
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k" } });
+    expect(await generateAutoReports(today)).toBe(0);
+    vi.stubEnv("CRON_TOKEN", "");
+    await expect(requestReport(admin, "DAILY", today, "MANUAL")).rejects.toThrow("report worker");
+    expect(llm).not.toHaveBeenCalled();
+  });
+
+  it("historical analysis uses the selected month and rejects future daily analysis", async () => {
+    const { admin, hh } = await household(oct);
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k" } });
+    const r = await requestReport(admin, "DAILY", today, "MANUAL", { month: oct });
+    expect((r.input as DailyInput).today).toBe("2026-10-31");
+    await expect(requestReport(admin, "DAILY", today, "MANUAL", { month: day("2026-12-01") })).rejects.toThrow("Future");
+  });
+
+  it("blocks applying a proposal after another member changes the income", async () => {
+    const { admin, hh, budget, item } = await household();
+    const income = await item("INCOME", "Salary", 100000);
+    const groceries = await item("EXPENSE", "Groceries", 0);
+    reply(lines([groceries.id, 1000]));
+    const r = await generateReport(admin, "PLAN", today, "MANUAL", { provider: "CLAUDE", month: nov });
+    await saveItems(hh, budget.id, new Map([[income.id, { label: income.label, amount: 50000, included: true, recurring: true }]]));
+    await expect(applyPlan(admin, r.id)).rejects.toThrow("budget changed");
+    expect((await prisma.budgetItem.findUniqueOrThrow({ where: { id: groceries.id } })).amount).toBe(0);
+  });
+
+  it("edited allocations preserve totals and undo refuses to erase subsequent changes", async () => {
+    const { admin, hh, budget, item } = await household();
+    await item("INCOME", "Salary", 100000);
+    const a = await item("EXPENSE", "Groceries", 0);
+    const b = await item("EXPENSE", "Leisure", 0);
+    reply(lines([a.id, 900], [b.id, 100]));
+    const r = await generateReport(admin, "PLAN", today, "MANUAL", { provider: "CLAUDE", month: nov });
+    await expect(applyPlan(admin, r.id, new Map([[a.id, 90000], [b.id, 20000]]))).rejects.toThrow("exactly");
+    await applyPlan(admin, r.id, new Map([[a.id, 80000], [b.id, 20000]]));
+    expect((await prisma.budgetItem.findUniqueOrThrow({ where: { id: a.id } })).amount).toBe(80000);
+    await saveItems(hh, budget.id, new Map([[a.id, { label: a.label, amount: 70000, included: true, recurring: true }]]));
+    await expect(undoPlan(admin, r.id)).rejects.toThrow("Undo is unavailable");
+  });
+
+  it("old reports remain accessible outside the first history page", async () => {
+    const { admin, hh, budget } = await household();
+    const r = await prisma.report.create({ data: { householdId: hh, budgetId: budget.id, userId: admin.id, day: today, kind: "DAILY", trigger: "MANUAL", provider: "CLAUDE", model: "m", input: {} } });
+    await prisma.report.createMany({ data: Array.from({ length: 30 }, () => ({ householdId: hh, budgetId: budget.id, userId: admin.id, day: today, kind: "DAILY", trigger: "MANUAL", provider: "CLAUDE", model: "m", input: {} })) });
+    expect((await listReports(admin)).some((x) => x.id === r.id)).toBe(false);
+    expect(await getReport(admin, r.id)).toMatchObject({ id: r.id });
+    expect(await listReports(admin, 2)).toHaveLength(1);
+  });
+});
+
+describe("queue limits and immutable disclosure", () => {
+  it("enforces the rolling household quota even with distinct report requests", async () => {
+    const { admin, hh, budget } = await household();
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k" } });
+    await prisma.report.createMany({ data: Array.from({ length: 20 }, () => ({ householdId: hh, budgetId: budget.id, userId: admin.id, day: today, kind: "DAILY", trigger: "MANUAL", provider: "CLAUDE", model: "m", input: {} })) });
+    await expect(requestReport(admin, "DAILY", today, "MANUAL")).rejects.toThrow("limit");
+    expect(llm).not.toHaveBeenCalled();
+  });
+  it("retains request-time privacy settings when preferences change before processing", async () => {
+    const { admin, hh, item, spend } = await household();
+    const category = await item("EXPENSE", "Groceries", 10000);
+    await spend(category.categoryId, 500, "2026-11-10", "Private medical note");
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k", aiMinimizeData: true } });
+    await requestReport(admin, "DAILY", today, "MANUAL");
+    await prisma.household.update({ where: { id: hh }, data: { aiMinimizeData: false } });
+    reply(DAILY_OK);
+    await processNextReport();
+    expect(llm.mock.calls[0][2].user).not.toContain("Private medical note");
+    expect(llm.mock.calls[0][2].user).not.toContain("Alice");
+  });
+  it("records usage across validation retries", async () => {
+    const { admin, hh } = await household();
+    await prisma.household.update({ where: { id: hh }, data: { claudeApiKey: "k" } });
+    const r = await requestReport(admin, "DAILY", today, "MANUAL");
+    llm.mockResolvedValueOnce({ model: "m", text: "invalid", inputTokens: 10, outputTokens: 3 });
+    llm.mockResolvedValueOnce({ model: "m", text: JSON.stringify(DAILY_OK), inputTokens: 20, outputTokens: 5 });
+    await processNextReport();
+    expect(await getReport(admin, r.id)).toMatchObject({ inputTokens: 30, outputTokens: 8, status: "READY" });
   });
 });

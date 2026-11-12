@@ -159,7 +159,7 @@ All configuration goes through `.env` (see the commented [`.env.example`](.env.e
 | `SETUP_TOKEN` | random | Token required by `/setup`. Empty: generated and printed in the logs. |
 | `LLM_ALLOWED_HOSTS` | empty | Allowed hosts for a local model (`name:port`, comma-separated). Empty: local model disabled. |
 | `LLM_KEY_SECRET` | empty | AES-256-GCM key used to encrypt API keys stored in the database (`openssl rand -hex 32`). **Never change it afterwards.** |
-| `CRON_TOKEN` | empty | Token for the automatic report, **hexadecimal** (`openssl rand -hex 32`). Empty: automatic report rejected. |
+| `CRON_TOKEN` | empty | Shared token for app, worker and cron, **hexadecimal** (`openssl rand -hex 32`). Required for queued AI reports. |
 | `REPORT_CRON` | `0 20 * * *` | Automatic report schedule (Europe/Paris time zone). |
 
 Generate secrets:
@@ -221,7 +221,15 @@ A report (today's expenses, budget allocation, schedule, advice) is generated on
 - **Claude**: API key and model.
 - **Local OpenAI-compatible model** (Ollama, LM Studio…): URL, model, optional key. The host must be listed in `LLM_ALLOWED_HOSTS` (e.g. `host.docker.internal:11434`), so that an admin cannot make the server call an arbitrary internal address.
 
-**Automatic report**: the `cron` service calls `POST /api/reports/daily` with `Authorization: Bearer $CRON_TOKEN` at the `REPORT_CRON` time. Each call produces the daily report and, on the 1st of the month, the review of the previous month (planned vs. actual). At most one automatic report per household, day and type. Logs: `docker compose logs cron`.
+**Reliable generation**: manual requests are queued in PostgreSQL and processed by the `worker` service. Set the same `CRON_TOKEN` on app and worker, then start both (`docker compose up -d --build app worker cron`). You can leave the report page while generation runs. Duplicate requests reuse their report; only one manual report per household can be queued or running. A household can create up to twenty reports per rolling twenty-four hours. Failed reports can be retried up to three processing attempts. A worker restart recovers unfinished work after its thirty-minute lease expires.
+
+**API key protection**: configure `LLM_KEY_SECRET` before saving API keys. New plaintext storage is refused. The worker encrypts existing plaintext keys automatically when this secret is configured; already encrypted keys are preserved. Keep this secret with your recovery material: changing or losing it prevents decryption. Never put these values in Git.
+
+**Data minimisation** is enabled by default: transaction notes and member names are removed from model requests. Budget labels and amounts still leave the app for the chosen provider. A server labelled “local” can forward requests to a cloud model; check its configuration.
+
+**Budget proposals** must cover every line and match the exact available amount. Foyra never silently reallocates an invalid proposal. Generated numeric text uses references resolved from the report input. This prevents unsupported numeric literals but does not guarantee that all qualitative advice is correct. Review the proposal, adjust its amounts if needed, then confirm. Applying checks the budget snapshot in a transaction; outdated proposals are rejected. Undo is available only while the budget still matches the applied allocation. Old proposals without a snapshot must be regenerated.
+
+**Automatic reports** require opt-in under **Settings → AI**, where the administrator chooses the language. The `cron` service calls `POST /api/reports/daily` with `Authorization: Bearer $CRON_TOKEN` at the `REPORT_CRON` time. Each call queues the daily report and, on the 1st of the month, the review of the previous month (planned vs. actual). At most one automatic report per household, day and type. Logs: `docker compose logs cron`.
 
 ## Development
 
@@ -265,7 +273,7 @@ make audit-down
 
 ### Remote deployment over SSH (optional)
 
-`make deploy-remote` sends only `compose.remote.yml` over SSH, pulls the published GHCR image, writes a verified `pg_dump` backup to `backups/`, then replaces only the application container. The running PostgreSQL container, its actual named volume, the Compose project name and the production `.env` are preserved. No source upload, remote build or remote test run is performed. Local uncommitted changes are not deployed: the image must already be published. A failed pull or backup stops deployment before replacing the app.
+`make deploy-remote` sends only `compose.remote.yml` over SSH, pulls the published GHCR image, writes a verified `pg_dump` backup to `backups/`, then updates the application, report worker and scheduler. The running PostgreSQL container, its actual named volume, the Compose project name and the production `.env` are preserved. No source upload, remote build or remote test run is performed. Local uncommitted changes are not deployed: the image must already be published. A failed pull or backup stops deployment before replacing the app.
 
 ```sh
 cp .deploy.env.example .deploy.env   # REMOTE_HOST, REMOTE_DIR, REMOTE_PROJECT
@@ -274,7 +282,7 @@ make deploy-remote                   # subsequent deployments (published latest 
 DEPLOY_IMAGE=ghcr.io/okhachiai/foyra:0.1.0 make deploy-remote  # choose a published version
 ```
 
-For an existing installation, keep the same `REMOTE_HOST`, `REMOTE_DIR` and `REMOTE_PROJECT`. The script discovers and reuses the database volume and refuses deployment if the database is stopped or missing (except for a genuinely new `INIT=1` installation). Never run `docker compose down -v` on production. Backups are stored under `REMOTE_DIR/backups`; the downloaded image digest is recorded in each release as `image.txt`. Migrations run when the new app starts; if startup fails, inspect the logs and backup before attempting a rollback, as migrations may already have changed the schema. Existing cron containers are left running.
+For an existing installation, keep the same `REMOTE_HOST`, `REMOTE_DIR` and `REMOTE_PROJECT`. The script discovers and reuses the database volume and refuses deployment if the database is stopped or missing (except for a genuinely new `INIT=1` installation). Never run `docker compose down -v` on production. Backups are stored under `REMOTE_DIR/backups`; the downloaded image digest is recorded in each release as `image.txt`. Migrations run when the new app starts; if startup fails, inspect the logs and backup before attempting a rollback, as migrations may already have changed the schema. The app, worker and cron services are updated together without recreating PostgreSQL. The deployment initializes missing or empty `LLM_KEY_SECRET` and `CRON_TOKEN` values with cryptographic randomness, preserves existing values, and keeps the previous `.env` privately on the server. Duplicate or interpolated secret entries must be resolved first. With other installation methods, configure these values manually before enabling AI generation.
 
 Requirements: key-based SSH access, access to the GHCR image from the server (run `docker login ghcr.io` there if the package is private), and an existing `REMOTE_DIR` folder with its production `.env`. If a `.deploy-lock` file is left behind, make sure no deployment is running before removing it.
 

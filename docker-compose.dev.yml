@@ -14,3 +14,6 @@ services:
       - /app/.next
     entrypoint: []
     command: sh -c "npx prisma generate && npx prisma migrate deploy && npm run dev"
+
+  worker:
+    entrypoint: ["node"]

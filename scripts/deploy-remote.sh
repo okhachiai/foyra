@@ -33,7 +33,8 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
 root=$1; project=$2; release=$3; init=$4; image=$5
 mkdir "$root/.deploy-lock" 2>/dev/null || { echo 'A deployment is already in progress (.deploy-lock).' >&2; exit 1; }
-trap 'rmdir "$root/.deploy-lock"' EXIT
+env_tmp=""
+trap '[ -z "$env_tmp" ] || rm -f "$env_tmp"; rmdir "$root/.deploy-lock"' EXIT
 test -f "$root/.env" || { echo "The production .env is missing: $root/.env" >&2; exit 1; }
 docker info >/dev/null
 docker compose version >/dev/null
@@ -61,7 +62,7 @@ cd "$release"
 export FOYRA_DEPLOY_IMAGE="$image"
 compose=(docker compose --env-file "$root/.env" -p "$project" -f "$release/docker-compose.yml")
 "${compose[@]}" config --quiet </dev/null
-"${compose[@]}" pull app </dev/null
+"${compose[@]}" pull app worker </dev/null
 # Figer le digest téléchargé pour éviter qu'un tag mutable change entre pull et up.
 FOYRA_DEPLOY_IMAGE=$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")
 [ -n "$FOYRA_DEPLOY_IMAGE" ] || { echo 'No image digest found.' >&2; exit 1; }
@@ -76,11 +77,26 @@ if [ -n "$db" ]; then
   "${compose[@]}" exec -T db pg_restore --list < "$backup" >/dev/null
   printf 'Sauvegarde : %s\n' "$backup"
 fi
+# Initialiser seulement les secrets absents, sans les afficher ni remplacer une valeur existante.
+# L'image vérifiée contient cet utilitaire ; aucun accès réseau ou montage de données n'est nécessaire.
+umask 077
+env_tmp=$(mktemp "$root/.env.ai.XXXXXX")
+docker run --rm -i --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --entrypoint /nodejs/bin/node "$FOYRA_DEPLOY_IMAGE" scripts/prepare-ai-env.mjs < "$root/.env" > "$env_tmp"
+test -s "$env_tmp"
+if ! cmp -s "$root/.env" "$env_tmp"; then
+  env_backup=$(mktemp "$root/.env.before-ai.XXXXXX")
+  cat "$root/.env" > "$env_backup"
+  mv "$env_tmp" "$root/.env"
+  echo 'Missing AI secrets initialized; existing values preserved. Previous .env kept privately.'
+fi
+rm -f "$env_tmp"; env_tmp=""
+"${compose[@]}" config --quiet </dev/null
 if [ -n "$db" ]; then
   # Ne jamais recréer ni mettre à jour PostgreSQL lors d'une mise à jour de l'app.
-  "${compose[@]}" up -d --no-deps app </dev/null
+  "${compose[@]}" up -d --no-deps app worker cron </dev/null
 else
-  "${compose[@]}" up -d app </dev/null
+  "${compose[@]}" up -d app worker cron </dev/null
 fi
 for attempt in {1..30}; do
   if "${compose[@]}" exec -T app /nodejs/bin/node -e 'fetch("http://127.0.0.1:3000/login").then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))' </dev/null >/dev/null 2>&1; then

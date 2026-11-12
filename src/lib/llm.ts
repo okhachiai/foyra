@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { prisma } from "./db";
 import type { Household, LlmProvider } from "@prisma/client";
 
 /** Erreur de fournisseur LLM (HTTP, réseau, réponse inutilisable) ; message affichable. */
@@ -7,12 +8,14 @@ export class LlmError extends Error {}
 // --- Clés API chiffrées en base (AES-256-GCM, clé dérivée de LLM_KEY_SECRET) ---
 // ponytail: sans LLM_KEY_SECRET, les clés restent en clair (comportement historique) ; anciennes clés en clair relues telles quelles.
 const SEALED = "enc:v1:";
+export const secretStorageReady = () => !!process.env.LLM_KEY_SECRET;
 const keySecret = () => (process.env.LLM_KEY_SECRET ? createHash("sha256").update(process.env.LLM_KEY_SECRET).digest() : null);
 
 /** Valeur à enregistrer : chiffrée si LLM_KEY_SECRET est défini (une valeur déjà chiffrée est gardée telle quelle). */
 export function sealSecret(value: string) {
   const key = keySecret();
-  if (!key || value.startsWith(SEALED)) return value;
+  if (value.startsWith(SEALED)) return value;
+  if (!key) throw new LlmError("API key storage is disabled until the operator configures LLM_KEY_SECRET.");
   const iv = randomBytes(12);
   const c = createCipheriv("aes-256-gcm", key, iv);
   const data = Buffer.concat([c.update(value, "utf8"), c.final()]);
@@ -138,20 +141,27 @@ const localUrl = (c: LlmConfig) => {
 };
 const localHeaders = (c: LlmConfig): Record<string, string> => (c.localLlmApiKey ? { Authorization: `Bearer ${openSecret(c.localLlmApiKey)}` } : {});
 
-/** Petite requête réelle (1 token) pour vérifier clé, modèle et URL ; lève LlmError avec la cause. */
+/** Verify the same structured-output capability required by real reports. */
 export async function testConnection(provider: LlmProvider, c: LlmConfig): Promise<string> {
-  if (provider === "CLAUDE") {
-    const model = c.claudeModel || DEFAULT_CLAUDE_MODEL;
-    await post(CLAUDE_URL, claudeHeaders(c), { model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }, 15_000);
-    return model;
+  const result = await complete(provider, c, { system: 'Return the requested structured object.', user: 'Return {"ok":true}.' }, { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false }, { timeout: 30_000, maxTokens: 256 });
+  let valid = false;
+  try { valid = JSON.parse(result.text)?.ok === true; } catch { /* rejected below */ }
+  if (!valid) throw new LlmError("The connection works, but the model did not return the required structured response.");
+  return result.model;
+}
+
+/** Encrypt legacy plaintext keys with compare-and-set, without exposing them or overwriting newer settings. */
+export async function encryptLegacyKeys() {
+  if (!secretStorageReady()) return;
+  const households = await prisma.household.findMany({ where: { OR: [{ claudeApiKey: { not: null } }, { localLlmApiKey: { not: null } }] }, select: { id: true, claudeApiKey: true, localLlmApiKey: true } });
+  for (const h of households) for (const field of ["claudeApiKey", "localLlmApiKey"] as const) {
+    const value = h[field];
+    if (value && !value.startsWith(SEALED)) await prisma.household.updateMany({ where: { id: h.id, [field]: value }, data: { [field]: sealSecret(value) } });
   }
-  const model = c.localLlmModel ?? "";
-  await post(localUrl(c), localHeaders(c), { model, max_tokens: 1, messages: [{ role: "user", content: "ping" }] }, 30_000);
-  return model;
 }
 
 /** Appelle le fournisseur et renvoie le texte JSON produit ; la validation du schéma reste à l'appelant. */
-export async function complete(provider: LlmProvider, c: LlmConfig, messages: Messages, schema: object): Promise<{ model: string; text: string }> {
+export async function complete(provider: LlmProvider, c: LlmConfig, messages: Messages, schema: object, options: { timeout?: number; maxTokens?: number } = {}): Promise<{ model: string; text: string; inputTokens?: number; outputTokens?: number }> {
   if (provider === "CLAUDE") {
     const model = c.claudeModel || DEFAULT_CLAUDE_MODEL;
     const data = await post(
@@ -159,17 +169,18 @@ export async function complete(provider: LlmProvider, c: LlmConfig, messages: Me
       claudeHeaders(c),
       {
         model,
-        max_tokens: 16000,
+        max_tokens: options.maxTokens ?? 8192,
         system: messages.system,
         messages: turns(messages),
         tools: [{ name: "rapport", description: "Budget report", input_schema: schema }],
         tool_choice: { type: "tool", name: "rapport" },
       },
+      options.timeout ?? 120_000,
     );
     if (data?.stop_reason === "max_tokens") throw new LlmError(TRUNCATED);
     const block = Array.isArray(data?.content) ? data.content.find((b: { type?: string }) => b?.type === "tool_use") : undefined;
     if (!block) throw new LlmError(EMPTY);
-    return { model, text: JSON.stringify(block.input) };
+    return { model, text: JSON.stringify(block.input), ...(data.usage && { inputTokens: data.usage.input_tokens, outputTokens: data.usage.output_tokens }) };
   }
   const model = c.localLlmModel ?? "";
   const data = await post(
@@ -177,6 +188,7 @@ export async function complete(provider: LlmProvider, c: LlmConfig, messages: Me
     localHeaders(c),
     {
       model,
+      max_tokens: options.maxTokens ?? 8192,
       // json_schema : accepté par OpenAI, LM Studio, Ollama, vLLM, llama.cpp (LM Studio refuse json_object).
       response_format: { type: "json_schema", json_schema: { name: "rapport", schema } },
       messages: [
@@ -184,11 +196,12 @@ export async function complete(provider: LlmProvider, c: LlmConfig, messages: Me
         ...turns(messages),
       ],
     },
+    options.timeout ?? 600_000,
   );
   const choice = Array.isArray(data?.choices) ? data.choices[0] : undefined;
   if (choice?.finish_reason === "length") throw new LlmError(TRUNCATED);
   // Modèle « thinking » (LM Studio, vLLM) : content vide, JSON rangé dans reasoning_content.
   const text = choice?.message?.content || choice?.message?.reasoning_content;
   if (typeof text !== "string" || !text.trim()) throw new LlmError(EMPTY);
-  return { model, text };
+  return { model, text, ...(data.usage && { inputTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens }) };
 }

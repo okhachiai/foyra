@@ -41,6 +41,16 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
 
+  worker:
+    image: ghcr.io/okhachiai/foyra:${FOYRA_VERSION:-latest}
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      CRON_TOKEN: ${CRON_TOKEN:-}
+    command: ["scripts/report-worker.mjs"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
   # Rapports IA automatiques : appels refusés par l'app tant que CRON_TOKEN est vide.
   cron:
     image: alpine:3.20

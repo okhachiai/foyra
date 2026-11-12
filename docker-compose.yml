@@ -38,6 +38,16 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
 
+  worker:
+    image: ${COMPOSE_PROJECT_NAME:-foyra-project}-app
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      CRON_TOKEN: ${CRON_TOKEN:-}
+    command: ["scripts/report-worker.mjs"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
   # Rapports automatiques (jour ; bilan du mois écoulé le 1er) : appelle la route protégée de l'app à l'heure REPORT_CRON (fuseau Europe/Paris).
   cron:
     image: alpine:3.20

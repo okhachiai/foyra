@@ -127,8 +127,8 @@ export function envelopes(tree: (Node & { actual: number })[]): { lines: Envelop
 // --- Lecture ---
 
 /** Versé dans le mois sur les catégories d'épargne (et leurs sous-catégories), opérations communes et personnelles. */
-async function savedIn(householdId: string, month: Date) {
-  const r = await prisma.transaction.aggregate({
+async function savedIn(householdId: string, month: Date, db: Db = prisma) {
+  const r = await db.transaction.aggregate({
     where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) }, category: { OR: [{ savings: true }, { parent: { savings: true } }] } },
     _sum: { amount: true },
   });
@@ -157,13 +157,13 @@ const ITEM_ORDER = [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }
  * et le réel par ligne (opérations du foyer rattachées à la catégorie d'origine).
  * Dépense : seules les opérations communes ou personnelles selon la ligne principale ; revenu : toutes.
  */
-export async function getBudget(householdId: string, month: Date) {
-  const budget = await prisma.budget.findUnique({
+export async function getBudget(householdId: string, month: Date, db: Db = prisma) {
+  const budget = await db.budget.findUnique({
     where: { householdId_month: { householdId, month } },
     include: { items: { orderBy: ITEM_ORDER, include: { category: { select: { fixed: true, savings: true } } } } },
   });
   if (!budget) return null;
-  const sums = await prisma.transaction.groupBy({
+  const sums = await db.transaction.groupBy({
     by: ["categoryId", "shared"],
     where: { householdId, occurredOn: { gte: month, lt: addMonths(month, 1) } },
     _sum: { amount: true },
@@ -177,7 +177,7 @@ export async function getBudget(householdId: string, month: Date) {
     actual: actual(n, n) + n.children.reduce((s, c) => s + actual(c, n), 0),
     children: n.children.map((c) => ({ ...c, actual: actual(c, n) })),
   }));
-  return { ...budget, tree, totals: budgetTotals(budget.items, await savedIn(householdId, month)) };
+  return { ...budget, tree, totals: budgetTotals(budget.items, await savedIn(householdId, month, db)) };
 }
 
 // --- Écriture ---

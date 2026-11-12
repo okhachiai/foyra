@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/auth";
-import { configuredProviders, DEFAULT_CLAUDE_MODEL, PROVIDER_LABELS } from "@/lib/llm";
+import { configuredProviders, DEFAULT_CLAUDE_MODEL, PROVIDER_LABELS, secretStorageReady } from "@/lib/llm";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
 import { Icon } from "@/components/ui/icon";
@@ -7,6 +7,8 @@ import { PageHeader } from "@/components/ui/page-header";
 import { updateLlmAction } from "@/app/actions";
 import { ActionForm, Field } from "@/app/form";
 import { SettingsNav } from "@/app/nav";
+import { LOCALES, LOCALE_NAMES } from "@/lib/i18n";
+import { prisma } from "@/lib/db";
 import { getI18n } from "@/lib/i18n-server";
 
 /** AI report provider (Claude or a local model); administrators only. */
@@ -16,6 +18,7 @@ export default async function AiSettingsPage({ searchParams }: { searchParams: P
   const ok = (await searchParams).ok;
   const h = admin.household;
   const providers = configuredProviders(h);
+  const lastAuto = await prisma.report.findFirst({ where: { householdId: h.id, trigger: "AUTO" }, orderBy: { createdAt: "desc" } });
 
   return (
     <>
@@ -23,13 +26,15 @@ export default async function AiSettingsPage({ searchParams }: { searchParams: P
       <SettingsNav admin />
       {ok && <p role="status" className="alert success mb-4"><Icon name="shield" className="mt-0.5 size-4 shrink-0" />{t("AI settings saved.")}</p>}
 
+      {!secretStorageReady() && <p role="alert" className="alert danger mb-4">{t("API key storage is disabled until the operator configures LLM_KEY_SECRET.")}</p>}
+      {!process.env.CRON_TOKEN && <p role="status" className="alert mb-4">{t("AI generation is unavailable until the operator configures the report worker.")}</p>}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Card>
           <SectionHeader
             title={t("Report provider")}
-            subtitle={t("A provider is only offered once its fields are filled in.")}
+            subtitle={t("Settings entered do not guarantee that the model is ready. Test structured responses before saving.")}
             action={providers.length
-              ? <Badge tone="success" dot>{providers.map((p) => t(PROVIDER_LABELS[p])).join(", ")}</Badge>
+              ? <Badge tone="muted" dot>{providers.map((p) => t(PROVIDER_LABELS[p])).join(", ")}</Badge>
               : <Badge tone="muted" dot>{t("Not configured")}</Badge>}
           />
           <ActionForm action={updateLlmAction}>
@@ -61,6 +66,13 @@ export default async function AiSettingsPage({ searchParams }: { searchParams: P
             </Field>
             {h.localLlmApiKey && <label className="check"><input type="checkbox" name="clear_localLlmApiKey" />{t("Erase the local model key")}</label>}
 
+            <Field name="aiLocale" label={t("Automatic report language")}>
+              <select name="aiLocale" defaultValue={h.aiLocale}>{LOCALES.map((l) => <option key={l} value={l}>{LOCALE_NAMES[l]}</option>)}</select>
+            </Field>
+            <label className="check"><input type="checkbox" name="aiMinimizeData" defaultChecked={h.aiMinimizeData} />{t("Exclude transaction notes and member names from AI requests")}</label>
+            <label className="check"><input type="checkbox" name="aiAutomatic" defaultChecked={h.aiAutomatic} />{t("Enable automatic reports (may use paid API credits)")}</label>
+            <p className="text-label text-muted">{t("Automatic reports run at the operator's scheduled time. The household is limited to twenty reports per twenty-four hours.")}</p>
+            {lastAuto && <p className="text-label text-muted">{t("Last automatic report")}: {new Intl.DateTimeFormat(h.aiLocale, { dateStyle: "short", timeStyle: "short", timeZone: h.timezone }).format(lastAuto.createdAt)} · {t(lastAuto.status)}</p>}
             <div className="form-actions">
               <button type="submit">{t("Save")}</button>
               <button type="submit" name="intent" value="test" className="secondary">{t("Test the connection")}</button>
@@ -71,9 +83,10 @@ export default async function AiSettingsPage({ searchParams }: { searchParams: P
         <Card>
           <SectionHeader title={t("Data sent")} />
           <dl className="facts-list">
-            <div><dt>Claude</dt><dd className="whitespace-normal font-semibold">{t("Amounts, labels, categories, first names → Anthropic")}</dd></div>
-            <div><dt>{t("Local model")}</dt><dd className="whitespace-normal font-semibold">{t("Nothing leaves the server")}</dd></div>
+            <div><dt>Claude</dt><dd className="whitespace-normal font-semibold">{t("Budget amounts and labels are sent to Anthropic. Notes and names are excluded when data minimisation is enabled.")}</dd></div>
+            <div><dt>{t("Local model")}</dt><dd className="whitespace-normal font-semibold">{t("Data is sent to the configured server. Its location and any cloud forwarding depend on your provider.")}</dd></div>
           </dl>
+          {h.localLlmUrl && <p className="text-label text-muted">{t("Destination")}: {new URL(h.localLlmUrl).origin}</p>}
           <p className="m-0 text-label text-muted">{t("The test uses the form values without saving them.")}</p>
         </Card>
       </div>

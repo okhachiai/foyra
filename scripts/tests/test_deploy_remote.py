@@ -48,7 +48,9 @@ with open(os.environ['TEST_LOG'], 'a') as log:
     log.write(json.dumps({'args': args, 'volume': os.getenv('FOYRA_DB_VOLUME'),
                           'image': os.getenv('FOYRA_DEPLOY_IMAGE')}) + '\\n')
 case = os.getenv('TEST_CASE', '')
-if args[:2] == ['ps', '-a']:
+if args[0] == 'run' and 'scripts/prepare-ai-env.mjs' in args:
+    sys.stdout.write(sys.stdin.read())
+elif args[:2] == ['ps', '-a']:
     print(os.environ['REMOTE_DIR'] + '/releases/old')
 elif args[:2] == ['ps', '-q']:
     if case not in ('missing', 'stopped', 'orphan', 'new'):
@@ -90,7 +92,7 @@ elif 'pg_restore' in args and case == 'verify':
         up = next(i for i, item in enumerate(commands) if 'up' in item['args'])
         verify = next(i for i, item in enumerate(commands) if 'pg_restore' in item['args'])
         self.assertLess(verify, up)
-        self.assertEqual(commands[up]['args'][-4:], ['up', '-d', '--no-deps', 'app'])
+        self.assertEqual(commands[up]['args'][-6:], ['up', '-d', '--no-deps', 'app', 'worker', 'cron'])
         self.assertEqual(commands[up]['volume'], 'custom-production-volume')
         self.assertEqual(commands[up]['image'], DIGEST)
         self.assertEqual(len(list((self.remote / 'backups').iterdir())), 1)
@@ -125,7 +127,7 @@ elif 'pg_restore' in args and case == 'verify':
         result, commands = self.run_deploy('new', init='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         up = next(c for c in commands if 'up' in c['args'])
-        self.assertEqual(up['args'][-3:], ['up', '-d', 'app'])
+        self.assertEqual(up['args'][-5:], ['up', '-d', 'app', 'worker', 'cron'])
         self.assertEqual(up['volume'], 'foyra_pgdata')
 
 

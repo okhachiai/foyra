@@ -2,6 +2,8 @@ node_modules
 .next
 .git
 .env
+.env.*
+!.env.example
 _bmad
 _bmad-output
 .claude

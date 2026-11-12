@@ -70,6 +70,9 @@ model Household {
   localLlmUrl    String? // compatible OpenAI, sans /v1
   localLlmModel  String?
   localLlmApiKey String?
+  aiLocale       String       @default("en")
+  aiAutomatic    Boolean      @default(false)
+  aiMinimizeData Boolean      @default(true)
   createdAt    DateTime     @default(now())
 
   users         User[]
@@ -311,6 +314,20 @@ model Report {
   input       Json
   output      Json?
   error       String?
+  status      String        @default("READY")
+  locale      String        @default("en")
+  requestKey  String?       @unique
+  minimizeData Boolean      @default(true)
+  destination String?
+  attempts    Int           @default(0)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  inputTokens Int?
+  outputTokens Int?
+  appliedAt   DateTime?
+  previousAmounts Json?
+  appliedAmounts Json?
+  appliedFingerprint String?
   createdAt   DateTime      @default(now())
 
   household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
@@ -318,4 +335,5 @@ model Report {
   user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([householdId, createdAt])
+  @@index([status, createdAt])
 }

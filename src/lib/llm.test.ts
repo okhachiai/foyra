@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { complete, configuredProviders, LlmError, pickProvider, testConnection, type LlmConfig } from "./llm";
+import { prisma } from "./db";
+import { complete, configuredProviders, LlmError, pickProvider, testConnection, sealSecret, encryptLegacyKeys, type LlmConfig } from "./llm";
 
 const schema = { type: "object", properties: { a: { type: "string" } } };
 const msgs = { system: "sys", user: "usr" };
@@ -116,11 +117,11 @@ describe("complete", () => {
     await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow("unreadable response");
   });
 
-  it("testConnection : requête d'1 token, renvoie le modèle", async () => {
-    const f = vi.fn().mockResolvedValue(ok({}));
+  it("testConnection : valide une vraie réponse structurée pour les deux fournisseurs", async () => {
+    const f = vi.fn().mockResolvedValueOnce(ok({ content: [{ type: "tool_use", input: { ok: true } }] })).mockResolvedValueOnce(ok({ choices: [{ message: { content: '{"ok":true}' } }] }));
     vi.stubGlobal("fetch", f);
     expect(await testConnection("CLAUDE", CLAUDE)).toBe("claude-sonnet-5-5");
-    expect(JSON.parse(f.mock.calls[0][1].body).max_tokens).toBe(1);
+    expect(JSON.parse(f.mock.calls[0][1].body).max_tokens).toBe(256);
     expect(await testConnection("LOCAL", LOCAL)).toBe("m");
     expect(f.mock.calls[1][0]).toBe("http://llm/v1/chat/completions");
   });
@@ -128,7 +129,7 @@ describe("complete", () => {
   it("réponse tronquée : LlmError pour les deux fournisseurs", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ stop_reason: "max_tokens", content: [{ type: "tool_use", input: {} }] })));
     await expect(complete("CLAUDE", CLAUDE, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: truncated response."));
-    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).max_tokens).toBe(16000);
+    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string).max_tokens).toBe(8192);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ choices: [{ finish_reason: "length", message: { content: "{" } }] })));
     await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: truncated response."));
   });
@@ -144,5 +145,27 @@ describe("complete", () => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok(body)));
       await expect(complete("LOCAL", LOCAL, msgs, schema)).rejects.toThrow(new LlmError("LLM provider: empty response"));
     }
+  });
+});
+
+describe("secret storage and connection capability", () => {
+  it("refuses new plaintext storage without an encryption secret", () => {
+    vi.stubEnv("LLM_KEY_SECRET", "");
+    expect(() => sealSecret("sensitive-api-key")).toThrow("storage is disabled");
+  });
+  it("does not mistake a successful HTTP response for structured-output support", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ok({ choices: [{ message: { content: "hello" } }] })));
+    await expect(testConnection("LOCAL", LOCAL)).rejects.toThrow("required structured response");
+  });
+  it("encrypts legacy keys without changing already encrypted keys", async () => {
+    vi.stubEnv("LLM_KEY_SECRET", "test-encryption-secret");
+    const h = await prisma.household.create({ data: { name: "Encryption migration", claudeApiKey: "old-plaintext-key" } });
+    try {
+      await encryptLegacyKeys();
+      const first = await prisma.household.findUniqueOrThrow({ where: { id: h.id } });
+      expect(first.claudeApiKey).toMatch(/^enc:v1:/);
+      await encryptLegacyKeys();
+      expect((await prisma.household.findUniqueOrThrow({ where: { id: h.id } })).claudeApiKey).toBe(first.claudeApiKey);
+    } finally { await prisma.household.delete({ where: { id: h.id } }); }
   });
 });

@@ -14,9 +14,9 @@ import { addDefaultCategories, createCategory, deleteCategory, parseForecast, se
 import { addItem, createBudget, formatMonth, type IncomeLine, itemSignature, moveItem, parseMonth, removeItem, saveItems, setBudgetStatus, type ItemFields } from "@/lib/budget";
 import { createCharge, deleteCharge, payCharge, updateCharge, type ChargeInput } from "@/lib/charges";
 import { createLoan, deleteLoan, prepay, updateLoan, type LoanInput } from "@/lib/loans";
-import { configuredProviders, LlmError, localHostAllowed, PROVIDER_LABELS, sealSecret, testConnection, type LlmConfig } from "@/lib/llm";
+import { configuredProviders, LlmError, localHostAllowed, PROVIDER_LABELS, sealSecret, secretStorageReady, testConnection, type LlmConfig } from "@/lib/llm";
 import { parseCents } from "@/lib/money";
-import { applyPlan, generateReport } from "@/lib/report";
+import { applyPlan, requestReport, retryReport, undoPlan } from "@/lib/report";
 import { importMonth, parseMonthFile, type MonthFile } from "@/lib/budget-file";
 import { addSaving } from "@/lib/savings";
 import type { FormState } from "./form";
@@ -197,8 +197,10 @@ export async function updateHouseholdAction(_: FormState, fd: FormData): Promise
 /** Secret key: empty = unchanged (never shown again), `clear_<name>` checked = erased. Encrypted on save (an old plaintext key gets encrypted along the way). */
 function secretField(fd: FormData, name: string, current: string | null) {
   if (fd.get(`clear_${name}`)) return null;
-  const value = str(fd, name).slice(0, 500) || current;
-  return value && sealSecret(value);
+  const value = str(fd, name).slice(0, 500);
+  if (str(fd, "intent") === "test") return value || current;
+  if (!value && !secretStorageReady()) return current;
+  return (value || current) && sealSecret(value || current!);
 }
 
 /** Household LLM settings; the preferred provider is validated against the submitted settings. */
@@ -209,7 +211,11 @@ export async function updateLlmAction(_: FormState, fd: FormData): Promise<FormS
   const localLlmUrl = str(fd, "localLlmUrl").slice(0, 500).replace(/\/+$/, "") || null;
   if (localLlmUrl && !/^https?:\/\/[^\s/]/.test(localLlmUrl)) errors.localLlmUrl ??= "http(s) URL expected, e.g. http://localhost:11434";
   if (localLlmUrl && !localHostAllowed(localLlmUrl)) errors.localLlmUrl ??= "Host not allowed: the operator must add it to LLM_ALLOWED_HOSTS (e.g. host.docker.internal:11434).";
-  const config: LlmConfig = {
+  if (!secretStorageReady() && (str(fd, "claudeApiKey") || str(fd, "localLlmApiKey")) && str(fd, "intent") !== "test") return { error: "API key storage is disabled until the operator configures LLM_KEY_SECRET." };
+  const config: LlmConfig & { aiLocale: string; aiAutomatic: boolean; aiMinimizeData: boolean } = {
+    aiLocale: toLocale(str(fd, "aiLocale")),
+    aiAutomatic: fd.get("aiAutomatic") === "on",
+    aiMinimizeData: fd.get("aiMinimizeData") === "on",
     llmProvider: null,
     claudeApiKey: secretField(fd, "claudeApiKey", h.claudeApiKey),
     claudeModel: str(fd, "claudeModel").slice(0, 100) || null,
@@ -220,6 +226,7 @@ export async function updateLlmAction(_: FormState, fd: FormData): Promise<FormS
   config.llmProvider = providerField(fd, "llmProvider", config, errors);
   if (failed(errors)) return { fields: errors };
   if (str(fd, "intent") === "test") return testLlm(config);
+  if (config.aiAutomatic && (!process.env.CRON_TOKEN || !configuredProviders(config).length)) return { error: "Configure a provider and the report worker before enabling automatic reports." };
   await updateHousehold(admin.householdId, config);
   done("/settings/ai?ok=1");
 }
@@ -573,8 +580,10 @@ export async function analyzeAction(_: FormState, fd: FormData): Promise<FormSta
   const provider = providerField(fd, "provider", user.household, errors) ?? undefined;
   if (failed(errors)) return { fields: errors };
   const kind = str(fd, "kind") === "MONTHLY" ? "MONTHLY" : "DAILY";
+  const month = str(fd, "month") ? parseMonth(str(fd, "month")) : undefined;
+  if (month === null) return { error: "Invalid month." };
   let id = "";
-  return (await run(async () => (id = (await generateReport(user, kind, parseDay(todayIn(user.household.timezone))!, "MANUAL", { provider, locale: (await getI18n()).locale })).id))) ?? done(`/reports?id=${encodeURIComponent(id)}`);
+  return (await run(async () => (id = (await requestReport(user, kind, parseDay(todayIn(user.household.timezone))!, "MANUAL", { provider, month, locale: (await getI18n()).locale })).id))) ?? done(`/reports?id=${encodeURIComponent(id)}`);
 }
 
 /** Preparing a month's budget: proposed split of what's left over the variable expenses. */
@@ -583,12 +592,29 @@ export async function planAction(_: FormState, fd: FormData): Promise<FormState>
   const month = parseMonth(str(fd, "month"));
   if (!month) return { error: "Invalid month." };
   let id = "";
-  return (await run(async () => (id = (await generateReport(user, "PLAN", parseDay(todayIn(user.household.timezone))!, "MANUAL", { month, locale: (await getI18n()).locale })).id))) ?? done(`/reports?id=${encodeURIComponent(id)}`);
+  return (await run(async () => (id = (await requestReport(user, "PLAN", parseDay(todayIn(user.household.timezone))!, "MANUAL", { month, locale: (await getI18n()).locale })).id))) ?? done(`/reports?id=${encodeURIComponent(id)}`);
 }
 
 export async function applyPlanAction(_: FormState, fd: FormData): Promise<FormState> {
   const user = await requireUser();
   const id = str(fd, "reportId");
   let n = 0;
-  return (await run(async () => (n = await applyPlan(user, id)))) ?? done(`/reports?id=${encodeURIComponent(id)}&lines=${n}`);
+  const edited = new Map<string, number>();
+  for (const [key, value] of fd) if (key.startsWith("allocation:")) {
+    const amount = parseCents(String(value), { allowSigned: true });
+    if (amount === null || amount < 0 || edited.has(key.slice(11))) return { error: "Include every line and allocate exactly the available amount." };
+    edited.set(key.slice(11), amount);
+  }
+  return (await run(async () => (n = await applyPlan(user, id, edited.size ? edited : undefined)))) ?? done(`/reports?id=${encodeURIComponent(id)}&lines=${n}`);
+}
+
+export async function retryReportAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const id = str(fd, "reportId");
+  return (await run(() => retryReport(user, id))) ?? done(`/reports?id=${encodeURIComponent(id)}`);
+}
+export async function undoPlanAction(_: FormState, fd: FormData): Promise<FormState> {
+  const user = await requireUser();
+  const id = str(fd, "reportId");
+  return (await run(() => undoPlan(user, id))) ?? done(`/reports?id=${encodeURIComponent(id)}&undone=1`);
 }

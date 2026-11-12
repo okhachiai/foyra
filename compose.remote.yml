@@ -36,6 +36,16 @@ services:
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
 
+  worker:
+    image: ${FOYRA_DEPLOY_IMAGE:?Image définie par scripts/deploy-remote.sh}
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      CRON_TOKEN: ${CRON_TOKEN:-}
+    command: ["scripts/report-worker.mjs"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
   # Rapports IA automatiques : appels refusés par l'app tant que CRON_TOKEN est vide.
   cron:
     image: alpine:3.20

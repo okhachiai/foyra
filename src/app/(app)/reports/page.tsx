@@ -7,14 +7,16 @@ import { formatCents } from "@/lib/money";
 import { dateFmt, monthLabel } from "@/lib/ledger";
 import { getI18n } from "@/lib/i18n-server";
 import type { T } from "@/lib/i18n";
-import { listReports, type DailyInput, type DailyOutput, type MonthlyInput, type MonthlyOutput, type Pace, type PlanInput, type PlanOutput } from "@/lib/report";
+import { getReport, listReports, planMatches, type DailyInput, type DailyOutput, type MonthlyInput, type MonthlyOutput, type Pace, type PlanInput, type PlanOutput } from "@/lib/report";
 import { Badge } from "@/components/ui/badge";
 import { Card, SectionHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Icon, type IconName } from "@/components/ui/icon";
 import { PageHeader } from "@/components/ui/page-header";
 import { Stat } from "@/components/ui/stat";
-import { analyzeAction, applyPlanAction } from "@/app/actions";
+import { analyzeAction, retryReportAction, undoPlanAction } from "@/app/actions";
+import { ReportRefresh } from "./refresh";
+import { AllocationEditor } from "./allocation-editor";
 import { ActionForm, Field } from "@/app/form";
 
 // English source labels, translated with t().
@@ -33,19 +35,23 @@ const GROUPS = { income: "Income", fixed: "Fixed charges", savings: "Savings", v
 type Money = (cents: number) => string;
 type Ctx = { money: Money; t: T; intl: string };
 
-export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ id?: string; lines?: string }> }) {
+export default async function ReportsPage({ searchParams }: { searchParams: Promise<{ id?: string; lines?: string; page?: string; undone?: string }> }) {
   const user = await requireUser();
   const { t, intl } = await getI18n();
-  const { id, lines } = await searchParams;
+  const { id, lines, page: rawPage, undone } = await searchParams;
+  const page = Math.min(10000, Math.max(1, Math.floor(Number(rawPage)) || 1));
   const providers = configuredProviders(user.household);
-  const reports = await listReports(user);
-  const report = id ? reports.find((r) => r.id === id) : reports[0];
+  const reports = await listReports(user, page);
+  const report = id ? await getReport(user, id) : reports[0];
+  const pending = !!report && ["QUEUED", "RUNNING"].includes(report.status);
   const money: Money = (cents) => formatCents(cents, user.household.currency, intl);
   const ctx: Ctx = { money, t, intl };
   const when = new Intl.DateTimeFormat(intl, { dateStyle: "short", timeStyle: "short", timeZone: user.household.timezone });
 
   return (
     <>
+      <ReportRefresh active={pending || reports.some((r) => ["QUEUED", "RUNNING"].includes(r.status))} />
+      {undone && <p role="status" className="alert success">{t("The previous allocation has been restored.")}</p>}
       <PageHeader eyebrow={`Foyra / ${t("AI reports")}`} title={t("AI reports")} subtitle={t("Analyses of your budget: figures computed by Foyra, comments written by the AI.")} />
       {lines && <p role="status" className="alert success mb-4"><Icon name="shield" className="size-5 shrink-0" />{t("Allocation applied: {n} budget line(s) updated.", { n: lines })}</p>}
 
@@ -59,14 +65,17 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
                 <SectionHeader
                   title={t(KINDS[report.kind])}
                   subtitle={<>{dateFmt({ dateStyle: "short" }, intl).format(report.day)} · {t(TRIGGERS[report.trigger])} · {t(PROVIDER_LABELS[report.provider])}{report.model && ` (${report.model})`}</>}
-                  action={report.error ? <Badge dot tone="danger">{t("Error")}</Badge> : <Badge dot tone="success">{t("Ready")}</Badge>}
+                  action={report.error ? <Badge dot tone="danger">{t("Error")}</Badge> : <Badge dot tone="success">{t(report.status)}</Badge>}
                 />
+                {pending && <p role="status" className="text-muted">{t("Your report is saved in the queue. You can leave this page and return later.")}</p>}
+                {(report.inputTokens !== null || report.outputTokens !== null) && <p className="text-label text-muted">{t("Usage: {input} input tokens, {output} output tokens", { input: report.inputTokens ?? 0, output: report.outputTokens ?? 0 })}</p>}
                 {report.error && <p className="alert danger" role="alert"><Icon name="alert" className="size-5 shrink-0" />{t("The report failed: {error}", { error: t(report.error) })}</p>}
+                {report.status === "ERROR" && report.attempts < 3 && <ActionForm action={retryReportAction}><input type="hidden" name="reportId" value={report.id} /><button type="submit" className="secondary">{t("Retry this report")}</button></ActionForm>}
               </Card>
               {report.output && report.kind === "DAILY" && <Daily input={report.input as DailyInput} output={report.output as DailyOutput} {...ctx} />}
               {report.output && report.kind === "MONTHLY" && <Monthly input={report.input as MonthlyInput} output={report.output as MonthlyOutput} {...ctx} />}
               {report.output && report.kind === "PLAN" && (
-                <Plan reportId={report.id} householdId={user.householdId} budgetId={report.budgetId} input={report.input as PlanInput} output={report.output as PlanOutput} {...ctx} />
+                <Plan reportId={report.id} householdId={user.householdId} budgetId={report.budgetId} applied={!!report.appliedAt} appliedAmounts={report.appliedAmounts as Record<string, number> | null} input={report.input as PlanInput} output={report.output as PlanOutput} {...ctx} />
               )}
             </>
           )}
@@ -107,11 +116,15 @@ export default async function ReportsPage({ searchParams }: { searchParams: Prom
                         <b className="block truncate text-heading">{t(KINDS[r.kind])}</b>
                         <small className="block truncate text-label text-faint">{when.format(r.createdAt)} · {t(TRIGGERS[r.trigger])}</small>
                       </span>
-                      {r.error ? <Badge dot tone="danger">{t("Error")}</Badge> : <Badge dot tone="success">{t("Ready")}</Badge>}
+                      {r.error ? <Badge dot tone="danger">{t("Error")}</Badge> : <Badge dot tone="success">{t(r.status)}</Badge>}
                     </Link>
                   </li>
                 ))}
               </ul>
+              <nav className="flex justify-between gap-3" aria-label={t("Report history pages")}>
+                {page > 1 && <Link href={`/reports?page=${page - 1}`}>{t("Previous")}</Link>}
+                {reports.length === 30 && <Link href={`/reports?page=${page + 1}`}>{t("Next")}</Link>}
+              </nav>
             </Card>
           )}
         </div>
@@ -236,7 +249,7 @@ function Monthly({ input, output, money, t, intl }: { input: MonthlyInput; outpu
         <Stat label={t("Savings achieved")} value={money(input.actual.savings)} tone={input.actual.savings < input.planned.savings ? "neg" : "pos"} note={t("planned {amount}", { amount: money(input.planned.savings) })} />
         <Stat label={t("Off budget")} value={money(input.offBudget)} note={t("Expenses without a budget line")} />
       </div>
-      <Points title={t("Mistakes to avoid")} items={output.mistakes} kind="alert" />
+      <Points title={t("Gaps to understand")} items={output.mistakes} kind="alert" />
       <Points title={t("Recommendations for next month")} items={output.advice} kind="advice" />
       <Points title={t("Points kept")} items={output.respected} kind="done" />
 
@@ -276,13 +289,12 @@ function Monthly({ input, output, money, t, intl }: { input: MonthlyInput; outpu
 }
 
 /** Budget preparation: proposed allocation of the remainder over variable expenses, applicable to the (draft) budget. */
-async function Plan({ reportId, householdId, budgetId, input, output, money, t, intl }: {
-  reportId: string; householdId: string; budgetId: string; input: PlanInput; output: PlanOutput;
+async function Plan({ reportId, householdId, budgetId, applied, appliedAmounts, input, output, money, t, intl }: {
+  reportId: string; householdId: string; budgetId: string; applied: boolean; appliedAmounts: Record<string, number> | null; input: PlanInput; output: PlanOutput;
 } & Ctx) {
   const budget = await getBudget(householdId, new Date(`${input.month}-01T00:00:00Z`));
-  const locked = budget?.id !== budgetId ? t("Budget not found.") : budget.status === "VALIDATED" ? t("Switch the budget back to draft to apply.") : null;
-  const proposed = new Map(output.lines.map((l) => [l.budgetItemId, l]));
-  const avg = (h: number[]) => Math.round(h.reduce((s, x) => s + x, 0) / h.length);
+  const locked = applied ? t("This allocation has already been applied.") : !planMatches(input, budget) ? t("The budget changed since this proposal. Generate a new allocation.") : budget?.id !== budgetId ? t("Budget not found.") : budget.status === "VALIDATED" ? t("Switch the budget back to draft to apply.") : null;
+  const shown = applied && appliedAmounts ? { ...output, lines: output.lines.map((l) => ({ ...l, amount: appliedAmounts[l.budgetItemId] ?? l.amount, reason: appliedAmounts[l.budgetItemId] !== l.amount ? t("Adjusted by you") : l.reason })) } : output;
   return (
     <>
       <div className="stat-group">
@@ -291,46 +303,11 @@ async function Plan({ reportId, householdId, budgetId, input, output, money, t, 
         <Stat label={t("Desired savings")} value={money(input.savings)} />
         <Stat label={t("To allocate")} value={money(input.toDistribute)} tone="pos" note={t("Income − fixed − savings")} />
       </div>
-      <Card variant="table">
-        <SectionHeader title={`${t("Proposed allocation")} · ${monthLabel(new Date(`${input.month}-01`), intl)}`} subtitle={t("Average of the last 3 months of actual spending as a reference.")} />
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>{t("Line")}</th>
-                <th className="num hidden md:table-cell">{t("3-month avg.")}</th>
-                <th className="num hidden sm:table-cell">{t("Currently planned")}</th>
-                <th className="num">{t("Proposed")}</th>
-                <th className="hidden lg:table-cell">{t("Why")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {input.lines.map((l) => (
-                <tr key={l.id}>
-                  <td className="break-words">{l.label}<small className="block text-label font-medium text-faint lg:hidden">{proposed.get(l.id)?.reason}</small></td>
-                  <td className="num hidden text-muted md:table-cell">{money(avg(l.history))}</td>
-                  <td className="num hidden text-muted sm:table-cell">{money(l.planned)}</td>
-                  <td className="num font-bold text-heading">{money(proposed.get(l.id)?.amount ?? 0)}</td>
-                  <td className="hidden text-muted lg:table-cell">{proposed.get(l.id)?.reason}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="font-bold text-heading">
-                <td>{t("Total")}</td>
-                <td className="num hidden md:table-cell">{money(input.lines.reduce((s, l) => s + avg(l.history), 0))}</td>
-                <td className="num hidden sm:table-cell">{money(input.lines.reduce((s, l) => s + l.planned, 0))}</td>
-                <td className="num">{money(output.lines.reduce((s, l) => s + l.amount, 0))}</td>
-                <td className="hidden lg:table-cell" />
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-        <ActionForm action={applyPlanAction} className="form px-3 pb-3">
-          <input type="hidden" name="reportId" value={reportId} />
-          <button type="submit" disabled={!!locked} aria-describedby={locked ? "plan-locked" : undefined} className="self-start">{t("Apply to the budget")}</button>
-          {locked && <p id="plan-locked" className="m-0 text-label text-muted">{locked}</p>}
-        </ActionForm>
+      <Card>
+        <SectionHeader title={`${t("Proposed allocation")} · ${monthLabel(new Date(`${input.month}-01`), intl)}`} subtitle={t("Review and adjust each amount before applying. The total must match the available amount.")} />
+        {locked && !applied && <Link href={`/budget?m=${input.month}`}>{t("Generate a new allocation")}</Link>}
+        <AllocationEditor key={`${reportId}:${applied}`} reportId={reportId} input={input} output={shown} locked={locked} />
+        {applied && <ActionForm action={undoPlanAction} confirm={t("Restore the amounts from before this allocation?")}><input type="hidden" name="reportId" value={reportId} /><button type="submit" className="secondary">{t("Undo allocation")}</button></ActionForm>}
       </Card>
       <Points title={t("Recommendation")} items={output.advice ? [output.advice] : []} kind="advice" />
     </>
